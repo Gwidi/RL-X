@@ -63,14 +63,7 @@ class LocomotionEnv:
                 geom.material = ""
 
         if "hfield" in env_config["terrain"]["type"]:
-            xml_handle.asset.insert(
-                "hfield", 
-                0, 
-                name="empty_hfield", 
-                size="4 4 30.0 0.125",
-                nrow="800",
-                ncol="800"
-            )
+            xml_handle.asset.insert("hfield", 0, name="empty_hfield", file="default_hfield_80.png", size="4 4 30.0 0.125")
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
             floor.hfield = "empty_hfield"
