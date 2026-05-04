@@ -34,6 +34,7 @@ class DefaultReward:
         self.foot_slip_coeff = env.env_config["reward"]["foot_slip_coeff"] * env.dt
         self.foot_z_velocity_coeff = env.env_config["reward"]["foot_z_velocity_coeff"] * env.dt
         self.foot_flat_contact_coeff = env.env_config["reward"]["foot_flat_contact_coeff"] * env.dt
+        self.foot_clearance_coeff = env.env_config["reward"]["foot_clearance_coeff"] * env.dt
 
         self.feet_symmetry_pairs = env.feet_symmetry_pairs
 
@@ -171,6 +172,11 @@ class DefaultReward:
         air_time_reward = np.mean(feet_floor_contacts * np.minimum(self.env.internal_state["feet_time_in_air"] - target_foot_air_time, 0.0))
         foot_air_time_reward = curriculum_coeff * self.foot_air_time_coeff * air_time_reward
 
+        # Foot clearance reward
+        feet_z_positions = self.env.internal_state["data"].geom_xpos[self.env.foot_geom_indices, 2]
+        foot_clearance_score = np.mean(feet_z_positions * (~feet_floor_contacts)) 
+        foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score      
+
         # Symmetry reward
         symmetry_air_violations = np.mean(np.where((~feet_floor_contacts[self.feet_symmetry_pairs[:, 0]]) & (~feet_floor_contacts[self.feet_symmetry_pairs[:, 1]]), 1, 0))
         symmetry_air_reward = curriculum_coeff * self.symmetry_air_coeff * -symmetry_air_violations
@@ -197,7 +203,7 @@ class DefaultReward:
         reward_penalty = z_velocity_reward + imu_acceleration_reward + angular_velocity_reward + angular_position_reward + \
                          actuator_joint_nominal_diff_reward +  joint_position_limit_reward + joint_velocity_limit_reward + joint_velocity_reward + \
                          acceleration_reward + torque_reward + power_draw_penalty_reward + action_rate_reward + action_smoothness_reward + \
-                         collision_reward + base_height_reward + foot_air_time_reward + symmetry_air_reward + foot_slip_reward + foot_z_velocity_reward + foot_flat_contact_reward
+                         collision_reward + base_height_reward + foot_air_time_reward + symmetry_air_reward + foot_slip_reward + foot_z_velocity_reward + foot_flat_contact_reward + foot_clearance_reward
         reward = tracking_reward + reward_penalty + alive_clipped_reward
         reward = np.maximum(reward, 0.0) + alive_unclipped_reward
         reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
@@ -227,6 +233,7 @@ class DefaultReward:
         self.env.internal_state["info"][f"reward/foot_slip"] = foot_slip_reward
         self.env.internal_state["info"][f"reward/foot_z_velocity"] = foot_z_velocity_reward
         self.env.internal_state["info"][f"reward/foot_flat_contact"] = foot_flat_contact_reward
+        self.env.internal_state["info"][f"reward/foot_clearance"] = foot_clearance_reward
         self.env.internal_state["info"][f"reward/total"] = reward
         self.env.internal_state["info"][f"env_info/xy_vel_diff_abs"] = np.nan_to_num(np.mean(np.minimum(np.abs(xy_difference), 2*self.env.internal_state["max_command_velocity"])), nan=2*self.env.internal_state["max_command_velocity"], posinf=2*self.env.internal_state["max_command_velocity"], neginf=2*self.env.internal_state["max_command_velocity"])
 
