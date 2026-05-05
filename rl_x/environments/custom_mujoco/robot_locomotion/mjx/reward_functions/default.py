@@ -34,6 +34,7 @@ class DefaultReward:
         self.foot_slip_coeff = env.env_config["reward"]["foot_slip_coeff"] * env.dt
         self.foot_z_velocity_coeff = env.env_config["reward"]["foot_z_velocity_coeff"] * env.dt
         self.foot_flat_contact_coeff = env.env_config["reward"]["foot_flat_contact_coeff"] * env.dt
+        self.foot_clearance_coeff = env.env_config["reward"]["foot_clearance_coeff"] * env.dt
 
         self.feet_symmetry_pairs = env.feet_symmetry_pairs
 
