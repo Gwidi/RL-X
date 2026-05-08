@@ -174,7 +174,7 @@ class DefaultReward:
 
         # Foot clearance reward
         feet_z_positions = self.env.internal_state["data"].geom_xpos[self.env.foot_geom_indices, 2]
-        foot_clearance_score = np.mean(feet_z_positions * (~feet_floor_contacts)) 
+        foot_clearance_score = np.mean(np.square(feet_z_positions) * (~feet_floor_contacts)) 
         foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score      
 
         # Symmetry reward
@@ -236,5 +236,8 @@ class DefaultReward:
         self.env.internal_state["info"][f"reward/foot_clearance"] = foot_clearance_reward
         self.env.internal_state["info"][f"reward/total"] = reward
         self.env.internal_state["info"][f"env_info/xy_vel_diff_abs"] = np.nan_to_num(np.mean(np.minimum(np.abs(xy_difference), 2*self.env.internal_state["max_command_velocity"])), nan=2*self.env.internal_state["max_command_velocity"], posinf=2*self.env.internal_state["max_command_velocity"], neginf=2*self.env.internal_state["max_command_velocity"])
+        
+        mean_foot_height_in_air = np.mean(feet_z_positions[~feet_floor_contacts]) if np.any(~feet_floor_contacts) else 0.0
+        self.env.internal_state["info"][f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air
 
         return reward

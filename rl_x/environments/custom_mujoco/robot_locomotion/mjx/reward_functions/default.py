@@ -174,7 +174,7 @@ class DefaultReward:
 
         # Foot clearance reward
         feet_z_positions = data.geom_xpos[self.env.foot_geom_indices, 2]
-        foot_clearance_score = jnp.mean(feet_z_positions * (~feet_floor_contacts))
+        foot_clearance_score = jnp.mean(jnp.square(feet_z_positions) * (~feet_floor_contacts))
         foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score
 
         # Symmetry reward
@@ -236,5 +236,8 @@ class DefaultReward:
         info[f"reward/foot_clearance"] = foot_clearance_reward
         info[f"reward/total"] = reward
         info[f"env_info/xy_vel_diff_abs"] = jnp.nan_to_num(jnp.mean(jnp.minimum(jnp.abs(xy_difference), 2*internal_state["max_command_velocity"])), nan=2*internal_state["max_command_velocity"], posinf=2*internal_state["max_command_velocity"], neginf=2*internal_state["max_command_velocity"])
+
+        mean_foot_height_in_air = jnp.sum(feet_z_positions * (~feet_floor_contacts)) / jnp.maximum(jnp.sum((~feet_floor_contacts).astype(jnp.float32)), 1e-6)
+        info[f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air
 
         return reward
