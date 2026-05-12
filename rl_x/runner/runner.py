@@ -15,6 +15,7 @@ from absl import logging as absl_logging
 import logging
 import logging.handlers
 from ml_collections import config_dict, config_flags
+import numpy as np
 
 from rl_x.runner.runner_mode import RunnerMode
 from rl_x.runner.default_config import get_config as get_runner_config
@@ -280,6 +281,14 @@ class Runner:
 
         run_path = f"runs/{self._config.runner.project_name}/{self._config.runner.exp_name}/{self._config.runner.run_name}"
         run_path = os.path.abspath(run_path)
+
+        # Ensure run_path is unique when multiple agents/processes start at the same second
+        if os.path.exists(run_path):
+            # append process id and high-resolution time to make the run name unique
+            unique_suffix = f"_{os.getpid()}_{int(time.time() * 1e6)}"
+            self._config.runner.run_name = f"{self._config.runner.run_name}{unique_suffix}"
+            run_path = os.path.abspath(f"runs/{self._config.runner.project_name}/{self._config.runner.exp_name}/{self._config.runner.run_name}")
+
         if self._config.runner.save_model or self._config.runner.track_tb or self._config.runner.track_wandb:
             os.makedirs(run_path, exist_ok=True)
 
