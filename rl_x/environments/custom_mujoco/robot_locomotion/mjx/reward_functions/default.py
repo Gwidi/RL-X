@@ -35,6 +35,7 @@ class DefaultReward:
         self.foot_z_velocity_coeff = env.env_config["reward"]["foot_z_velocity_coeff"] * env.dt
         self.foot_flat_contact_coeff = env.env_config["reward"]["foot_flat_contact_coeff"] * env.dt
         self.foot_clearance_coeff = env.env_config["reward"]["foot_clearance_coeff"] * env.dt
+        self.foot_clearance_max_height_m = env.env_config["reward"].get("foot_clearance_max_height_m", 1.0)
 
         self.feet_symmetry_pairs = env.feet_symmetry_pairs
 
@@ -172,9 +173,10 @@ class DefaultReward:
         air_time_reward = jnp.mean(feet_floor_contacts * jnp.minimum(internal_state["feet_time_in_air"] - target_foot_air_time, 0.0))
         foot_air_time_reward = curriculum_coeff * self.foot_air_time_coeff * air_time_reward
 
-        # Foot clearance reward
+        # Foot clearance reward with upper cap
         feet_z_positions = data.geom_xpos[self.env.foot_geom_indices, 2]
-        foot_clearance_score = jnp.mean(jnp.square(feet_z_positions) * (~feet_floor_contacts))
+        capped_feet_z_positions = jnp.minimum(feet_z_positions, self.foot_clearance_max_height_m)
+        foot_clearance_score = jnp.mean(jnp.square(capped_feet_z_positions) * (~feet_floor_contacts))
         foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score
 
         # Symmetry reward
