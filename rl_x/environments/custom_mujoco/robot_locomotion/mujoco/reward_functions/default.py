@@ -35,6 +35,8 @@ class DefaultReward:
         self.foot_z_velocity_coeff = env.env_config["reward"]["foot_z_velocity_coeff"] * env.dt
         self.foot_flat_contact_coeff = env.env_config["reward"]["foot_flat_contact_coeff"] * env.dt
         self.foot_clearance_coeff = env.env_config["reward"]["foot_clearance_coeff"] * env.dt
+        # new params: cap excessive foot clearance
+        self.foot_clearance_max_height_m = env.env_config["reward"].get("foot_clearance_max_height_m", 1.0)
 
         self.feet_symmetry_pairs = env.feet_symmetry_pairs
 
@@ -172,10 +174,18 @@ class DefaultReward:
         air_time_reward = np.mean(feet_floor_contacts * np.minimum(self.env.internal_state["feet_time_in_air"] - target_foot_air_time, 0.0))
         foot_air_time_reward = curriculum_coeff * self.foot_air_time_coeff * air_time_reward
 
-        # Foot clearance reward
-        feet_z_positions = self.env.internal_state["data"].geom_xpos[self.env.foot_geom_indices, 2]
-        foot_clearance_score = np.mean(np.square(feet_z_positions) * (~feet_floor_contacts)) 
-        foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score      
+        # Foot clearance reward with upper cap
+        feet_positions = self.env.internal_state["data"].geom_xpos[self.env.foot_geom_indices]
+        feet_ground_heights = self.env.terrain_function.ground_height_at(
+            feet_positions[:, 0],
+            feet_positions[:, 1],
+        )
+        feet_clearance = feet_positions[:, 2] - feet_ground_heights
+        in_air_mask = (~feet_floor_contacts)
+        # Score uses capped clearance so reward saturates at target; exceeding is allowed but not additionally rewarded
+        capped_clearance = np.minimum(feet_clearance, self.foot_clearance_max_height_m)
+        foot_clearance_score = np.mean(np.square(capped_clearance) * in_air_mask)
+        foot_clearance_reward = curriculum_coeff * self.foot_clearance_coeff * foot_clearance_score
 
         # Symmetry reward
         symmetry_air_violations = np.mean(np.where((~feet_floor_contacts[self.feet_symmetry_pairs[:, 0]]) & (~feet_floor_contacts[self.feet_symmetry_pairs[:, 1]]), 1, 0))
@@ -237,7 +247,7 @@ class DefaultReward:
         self.env.internal_state["info"][f"reward/total"] = reward
         self.env.internal_state["info"][f"env_info/xy_vel_diff_abs"] = np.nan_to_num(np.mean(np.minimum(np.abs(xy_difference), 2*self.env.internal_state["max_command_velocity"])), nan=2*self.env.internal_state["max_command_velocity"], posinf=2*self.env.internal_state["max_command_velocity"], neginf=2*self.env.internal_state["max_command_velocity"])
         
-        mean_foot_height_in_air = np.mean(feet_z_positions[~feet_floor_contacts]) if np.any(~feet_floor_contacts) else 0.0
+        mean_foot_height_in_air = np.mean(feet_clearance[~feet_floor_contacts]) if np.any(~feet_floor_contacts) else 0.0
         self.env.internal_state["info"][f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air
 
         return reward
