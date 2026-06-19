@@ -198,8 +198,10 @@ class DefaultReward:
 
         # Foot z velocity reward
         feet_global_linear_velocity_z = data.sensordata[self.env.feet_global_linear_velocity_sensor_adrs_start + 2]
-        squared_negative_z_velocity = jnp.mean(jnp.square(jnp.minimum(feet_global_linear_velocity_z, 0.0)))
-        foot_z_velocity_reward = curriculum_coeff * self.foot_z_velocity_coeff * -squared_negative_z_velocity
+        #squared_negative_z_velocity = jnp.mean(jnp.square(jnp.minimum(feet_global_linear_velocity_z, 0.0)))
+        # foot_z_velocity_reward = curriculum_coeff * self.foot_z_velocity_coeff * -squared_negative_z_velocity
+        squared_z_velocity = jnp.mean(jnp.square(feet_global_linear_velocity_z))
+        foot_z_velocity_reward = curriculum_coeff * self.foot_z_velocity_coeff * -squared_z_velocity
 
         # Foot flat contact reward
         missing_lower_feet_contacts = self.env.terrain_function.check_flat_feet_floor_missing_contacts(data, mjx_model, internal_state)
