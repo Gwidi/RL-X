@@ -149,7 +149,8 @@ def get_config(environment_name):
             "foot_air_time_per_robot_size_m": 0.4,
             "symmetry_air_coeff": 1.0,
             "foot_slip_coeff": 0.1,
-            "foot_z_velocity_coeff": 0.2,
+            "foot_z_velocity_coeff": 0.0,
+            "foot_velocity_coeff": 0.2,
             "foot_flat_contact_coeff": 0.01,
         },
         "termination": {
