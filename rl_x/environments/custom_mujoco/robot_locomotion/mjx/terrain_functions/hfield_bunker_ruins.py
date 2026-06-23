@@ -153,7 +153,8 @@ class HFieldBunkerRuinsTerrainGeneration:
         sin_yaw = jnp.sin(yaw)
 
         # Randomize base height and slab inclination (Pitch/Roll)
-        block_base_z = jax.random.uniform(keys[5], shape=(num_blocks, 1, 1), minval=0.1, maxval=max_obstacle_height)
+        min_obstacle_height = 0.2 * max_obstacle_height
+        block_base_z = jax.random.uniform(keys[5], shape=(num_blocks, 1, 1), minval=min_obstacle_height, maxval=max_obstacle_height)
         slope_x = jax.random.uniform(keys[6], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_obstacle_height / self.one_meter_length
         slope_y = jax.random.uniform(keys[7], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_obstacle_height / self.one_meter_length
 
