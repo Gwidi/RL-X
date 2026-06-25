@@ -6,8 +6,10 @@ class HFieldBunkerRuinsTerrainGeneration:
     def __init__(self, env):
         self.env = env
 
-        self.random_height_max_per_m_factor = self.env.env_config["terrain"]["random_height_max_per_m_factor"]
-        self.block_height_max_per_m_factor = self.env.env_config["terrain"]["block_height_max_per_m_factor"]
+        terrain_config = self.env.env_config["terrain"]
+        self.random_height_max_per_m_factor = terrain_config["random_height_max_per_m_factor"]
+        self.block_height_max_per_m_factor = terrain_config["block_height_max_per_m_factor"]
+        self.block_slope_height_max_per_m_factor = terrain_config.get("block_slope_height_max_per_m_factor", self.block_height_max_per_m_factor)
 
         hfield_size = self.env.initial_mjx_model.hfield_size[0]
         if hfield_size[0] != hfield_size[1]:
@@ -85,6 +87,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         key, noise_key, terrain_key = jax.random.split(key, 3)
 
         max_obstacle_height = curriculum_coeff * internal_state["robot_dimensions_mean"] * self.block_height_max_per_m_factor
+        max_slope_height = curriculum_coeff * internal_state["robot_dimensions_mean"] * self.block_slope_height_max_per_m_factor
 
         noise_height = curriculum_coeff * jax.random.uniform(
             noise_key,
@@ -95,6 +98,7 @@ class HFieldBunkerRuinsTerrainGeneration:
 
         isaac_height_field = self.bunker_ruins_terrain(
             max_obstacle_height=max_obstacle_height,
+            max_slope_height=max_slope_height,
             noise_height=noise_height,
             key=terrain_key
         )
@@ -114,7 +118,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         hf /= self.mujoco_height_scaling
         return hf.reshape(-1)
 
-    def bunker_ruins_terrain(self, max_obstacle_height, noise_height, key):
+    def bunker_ruins_terrain(self, max_obstacle_height, max_slope_height, noise_height, key):
         """
         V2: Improved, chaotic version with block rotation and sharp concrete edges.
         """
@@ -122,7 +126,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         num_blocks = int(250 * (self.hfield_half_length_in_meters / 10.0)**2) # Increased density
         min_block_size_px = max(1, int(0.6 * self.one_meter_length))
         max_block_size_px = max(1, int(2.0 * self.one_meter_length))
-        hill_height = max_obstacle_height * 0.4
+        hill_height = max_slope_height * 0.4
         
         keys = jax.random.split(key, 8)
 
@@ -155,8 +159,8 @@ class HFieldBunkerRuinsTerrainGeneration:
         # Randomize base height and slab inclination (Pitch/Roll)
         min_obstacle_height = 0.2 * max_obstacle_height
         block_base_z = jax.random.uniform(keys[5], shape=(num_blocks, 1, 1), minval=min_obstacle_height, maxval=max_obstacle_height)
-        slope_x = jax.random.uniform(keys[6], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_obstacle_height / self.one_meter_length
-        slope_y = jax.random.uniform(keys[7], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_obstacle_height / self.one_meter_length
+        slope_x = jax.random.uniform(keys[6], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_slope_height / self.one_meter_length
+        slope_y = jax.random.uniform(keys[7], shape=(num_blocks, 1, 1), minval=-0.8, maxval=0.8) * max_slope_height / self.one_meter_length
 
         # Distance vectors of each map pixel from the center of each block
         dx = x_idx[None, :, :] - cx

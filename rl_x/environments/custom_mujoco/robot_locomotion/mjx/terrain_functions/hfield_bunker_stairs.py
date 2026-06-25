@@ -7,11 +7,12 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfie
 
 
 class HFieldBunkerStairsTerrainGeneration(HFieldBunkerRuinsTerrainGeneration):
-    def bunker_ruins_terrain(self, max_obstacle_height, noise_height, key):
+    def bunker_ruins_terrain(self, max_obstacle_height, max_slope_height, noise_height, key):
         ruins_key, stairs_key = jax.random.split(key)
 
         terrain = super().bunker_ruins_terrain(
             max_obstacle_height=max_obstacle_height,
+            max_slope_height=max_slope_height,
             noise_height=noise_height,
             key=ruins_key,
         )
@@ -53,8 +54,8 @@ class HFieldBunkerStairsTerrainGeneration(HFieldBunkerRuinsTerrainGeneration):
         step_height = jax.random.uniform(
             keys[5],
             shape=(num_stair_bands, 1, 1),
-            minval=0.35 * max_obstacle_height,
-            maxval=0.75 * max_obstacle_height,
+            minval=0.75 * max_obstacle_height,
+            maxval=2.0 * max_obstacle_height,
         )
         num_steps = jax.random.randint(keys[6], shape=(num_stair_bands, 1, 1), minval=3, maxval=7)
 
