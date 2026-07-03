@@ -63,10 +63,6 @@ class LocomotionEnv:
             if is_floor_geom:
                 geom.material = ""
 
-        for geom in xml_handle.find_all("geom"):
-            if geom.name and "calf" in geom.name:
-                xml_handle.contact.add("pair", geom1=geom.name, geom2="floor")
-
         if "hfield" in env_config["terrain"]["type"]:
             xml_handle.asset.insert(
                 "hfield", 
@@ -503,17 +499,29 @@ class LocomotionEnv:
         return observation
 
 
-    def check_floor_contact(self, data, geom_indices):
-        contact_pairs = jnp.stack([jnp.full_like(geom_indices, self.floor_geom_id), geom_indices], axis=1)
-        contact_pairs_rev = jnp.stack([geom_indices, jnp.full_like(geom_indices, self.floor_geom_id)], axis=1)
-        mask1 = (data._impl.contact.geom[None, :, :] == contact_pairs[:, None, :]).all(axis=2)
-        mask2 = (data._impl.contact.geom[None, :, :] == contact_pairs_rev[:, None, :]).all(axis=2)
-        mask = mask1 | mask2
-        masked_dist = jnp.where(mask, data._impl.contact.dist[None, :], 1e4)
-        indices = masked_dist.argmin(axis=1)
-        dists = data._impl.contact.dist[indices] * mask[jnp.arange(mask.shape[0]), indices]
+    def check_calf_terrain_collision(self, data, mjx_model, internal_state):
+        calf_xpos = data.geom_xpos[self.calf_geom_indices]
+        calf_xmat = data.geom_xmat[self.calf_geom_indices].reshape(-1, 3, 3)
+        calf_sizes = mjx_model.geom_size[self.calf_geom_indices]
+        calf_radii = calf_sizes[:, 0]
+        calf_half_lengths = calf_sizes[:, 1]
+        axis_samples = jnp.array([
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.5],
+            [0.0, 0.0, 1.0],
+        ])
+        local_points = axis_samples[None, :, :] * calf_half_lengths[:, None, None]
+        global_points = jnp.einsum("fij,fpj->fpi", calf_xmat, local_points) + calf_xpos[:, None, :]
+        ground_heights = self.terrain_function.ground_height_at(
+            internal_state,
+            global_points[:, :, 0],
+            global_points[:, :, 1],
+        )
+        sample_penetrations = (global_points[:, :, 2] - calf_radii[:, None]) < ground_heights
 
-        return dists < 0.0
+        return jnp.any(sample_penetrations, axis=1)
     
 
     def handle_domain_randomization(self, internal_state, mjx_model, data, key, is_episode_start=False):

@@ -164,8 +164,8 @@ class DefaultReward:
         collision_reward = curriculum_coeff * self.collision_coeff * -nr_collisions
 
         # Calf obstacle collision reward
-        calf_floor_contacts = self.env.check_floor_contact(data, self.env.calf_geom_indices)
-        nr_calf_collisions = jnp.sum(calf_floor_contacts.astype(jnp.float32))
+        calf_terrain_collisions = self.env.check_calf_terrain_collision(data, mjx_model, internal_state)
+        nr_calf_collisions = jnp.sum(calf_terrain_collisions.astype(jnp.float32))
         calf_collision_reward = curriculum_coeff * self.calf_collision_coeff * -nr_calf_collisions
 
         # Walking height
