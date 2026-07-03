@@ -144,6 +144,7 @@ def get_config(environment_name):
             "action_rate_coeff": 10.0,
             "action_smoothness_coeff": 0.1,
             "collision_coeff": 2.0,
+            "calf_collision_coeff": 2.0,
             "base_height_coeff": 30.0,
             "foot_clearance_coeff": 0.5,
             "foot_clearance_max_height_m": 0.25,

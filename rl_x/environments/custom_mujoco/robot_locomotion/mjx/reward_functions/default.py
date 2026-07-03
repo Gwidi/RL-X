@@ -27,6 +27,7 @@ class DefaultReward:
         self.action_rate_coeff = env.env_config["reward"]["action_rate_coeff"] * env.dt
         self.action_smoothness_coeff = env.env_config["reward"]["action_smoothness_coeff"] * env.dt
         self.collision_coeff = env.env_config["reward"]["collision_coeff"] * env.dt
+        self.calf_collision_coeff = env.env_config["reward"].get("calf_collision_coeff", 0.0) * env.dt
         self.base_height_coeff = env.env_config["reward"]["base_height_coeff"] * env.dt
         self.foot_air_time_coeff = env.env_config["reward"]["foot_air_time_coeff"] * env.dt
         self.foot_air_time_per_robot_size_m = env.env_config["reward"]["foot_air_time_per_robot_size_m"]
@@ -162,6 +163,11 @@ class DefaultReward:
         nr_collisions = jnp.maximum(nr_collisions - internal_state["nr_collisions_in_nominal"], 0)
         collision_reward = curriculum_coeff * self.collision_coeff * -nr_collisions
 
+        # Calf obstacle collision reward
+        calf_floor_contacts = self.env.check_floor_contact(data, self.env.calf_geom_indices)
+        nr_calf_collisions = jnp.sum(calf_floor_contacts.astype(jnp.float32))
+        calf_collision_reward = curriculum_coeff * self.calf_collision_coeff * -nr_calf_collisions
+
         # Walking height
         height_difference_squared = (internal_state["robot_imu_height_over_ground"] - internal_state["robot_nominal_imu_height_over_ground"]) ** 2
         base_height_reward = curriculum_coeff * self.base_height_coeff * -height_difference_squared
@@ -221,7 +227,7 @@ class DefaultReward:
         reward_penalty = z_velocity_reward + imu_acceleration_reward + angular_velocity_reward + angular_position_reward + \
                          actuator_joint_nominal_diff_reward +  joint_position_limit_reward + joint_velocity_limit_reward + joint_velocity_reward + \
                          acceleration_reward + torque_reward + power_draw_penalty_reward + action_rate_reward + action_smoothness_reward + \
-                         collision_reward + base_height_reward + foot_air_time_reward + symmetry_air_reward + foot_slip_reward + foot_z_velocity_reward + foot_velocity_reward + foot_flat_contact_reward + foot_clearance_reward
+                         collision_reward + calf_collision_reward + base_height_reward + foot_air_time_reward + symmetry_air_reward + foot_slip_reward + foot_z_velocity_reward + foot_velocity_reward + foot_flat_contact_reward + foot_clearance_reward
         reward = tracking_reward + reward_penalty + alive_clipped_reward
         reward = jnp.maximum(reward, 0.0) + alive_unclipped_reward
         reward = jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
@@ -245,6 +251,7 @@ class DefaultReward:
         info[f"reward/action_rate"] = action_rate_reward
         info[f"reward/action_smoothness"] = action_smoothness_reward
         info[f"reward/collision"] = collision_reward
+        info[f"reward/calf_collision"] = calf_collision_reward
         info[f"reward/base_height"] = base_height_reward
         info[f"reward/foot_air_time"] = foot_air_time_reward
         info[f"reward/symmetry_air"] = symmetry_air_reward
@@ -255,6 +262,7 @@ class DefaultReward:
         info[f"reward/foot_clearance"] = foot_clearance_reward
         info[f"reward/total"] = reward
         info[f"env_info/xy_vel_diff_abs"] = jnp.nan_to_num(jnp.mean(jnp.minimum(jnp.abs(xy_difference), 2*internal_state["max_command_velocity"])), nan=2*internal_state["max_command_velocity"], posinf=2*internal_state["max_command_velocity"], neginf=2*internal_state["max_command_velocity"])
+        info[f"env_info/nr_calf_collisions"] = nr_calf_collisions
 
         mean_foot_height_in_air = jnp.sum(feet_clearance * (~feet_floor_contacts)) / jnp.maximum(jnp.sum((~feet_floor_contacts).astype(jnp.float32)), 1e-6)
         info[f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air

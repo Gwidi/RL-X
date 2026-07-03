@@ -55,12 +55,17 @@ class LocomotionEnv:
             mesh.remove()
         for geom in xml_handle.find_all("geom"):
             is_foot_geom = geom.name and "foot" in geom.name
+            is_calf_geom = geom.name and "calf" in geom.name
             is_floor_geom = geom.name == "floor"
             is_reward_collision_sphere_geom = geom.dclass and geom.dclass.dclass == "reward_collision_sphere"
-            if not is_foot_geom and not is_floor_geom and not is_reward_collision_sphere_geom:
+            if not is_foot_geom and not is_calf_geom and not is_floor_geom and not is_reward_collision_sphere_geom:
                 geom.remove()
             if is_floor_geom:
                 geom.material = ""
+
+        for geom in xml_handle.find_all("geom"):
+            if geom.name and "calf" in geom.name:
+                xml_handle.contact.add("pair", geom1=geom.name, geom2="floor")
 
         if "hfield" in env_config["terrain"]["type"]:
             xml_handle.asset.insert(
@@ -117,6 +122,8 @@ class LocomotionEnv:
         self.feet_names = [geom_name for geom_name in geom_names if geom_name and "foot" in geom_name]
         self.foot_geom_indices = jnp.array([mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, foot_name) for foot_name in self.feet_names])
         self.nr_feet = len(self.feet_names)
+        self.calf_names = [geom_name for geom_name in geom_names if geom_name and "calf" in geom_name]
+        self.calf_geom_indices = jnp.array([mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, calf_name) for calf_name in self.calf_names])
 
         feet_xpos = self.c_data.geom_xpos[self.foot_geom_indices]
         x_pos, y_pos, z_pos = feet_xpos[:, 0], feet_xpos[:, 1], feet_xpos[:, 2]
@@ -494,6 +501,19 @@ class LocomotionEnv:
         observation = jnp.clip(observation, -10.0, 10.0)
 
         return observation
+
+
+    def check_floor_contact(self, data, geom_indices):
+        contact_pairs = jnp.stack([jnp.full_like(geom_indices, self.floor_geom_id), geom_indices], axis=1)
+        contact_pairs_rev = jnp.stack([geom_indices, jnp.full_like(geom_indices, self.floor_geom_id)], axis=1)
+        mask1 = (data._impl.contact.geom[None, :, :] == contact_pairs[:, None, :]).all(axis=2)
+        mask2 = (data._impl.contact.geom[None, :, :] == contact_pairs_rev[:, None, :]).all(axis=2)
+        mask = mask1 | mask2
+        masked_dist = jnp.where(mask, data._impl.contact.dist[None, :], 1e4)
+        indices = masked_dist.argmin(axis=1)
+        dists = data._impl.contact.dist[indices] * mask[jnp.arange(mask.shape[0]), indices]
+
+        return dists < 0.0
     
 
     def handle_domain_randomization(self, internal_state, mjx_model, data, key, is_episode_start=False):
