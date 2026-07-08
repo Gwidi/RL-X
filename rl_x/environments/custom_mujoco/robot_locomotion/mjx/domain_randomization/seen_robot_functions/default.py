@@ -182,6 +182,8 @@ class DefaultDRSeenRobotFunction:
         actuator_joint_max_velocities = default_actuator_joint_max_velocities * (1 + env_curriculum_coeff * jax.random.uniform(keys[16], minval=-self.joint_velocity_max_factor, maxval=self.joint_velocity_max_factor, shape=self.default_actuator_joint_max_velocities.shape))
 
         joint_ranges = self.default_joint_ranges + env_curriculum_coeff * jax.random.uniform(keys[17], minval=-self.add_joint_range, maxval=self.add_joint_range, shape=self.default_joint_ranges.shape)
+        if self.env.spine_locked:
+            joint_ranges = joint_ranges.at[self.env.spine_joint_range_index].set(self.default_joint_ranges[self.env.spine_joint_range_index])
         jnt_range = mjx_model.jnt_range.at[1:].set(joint_ranges)
 
         seen_joint_dampings = default_joint_dampings * (1 + env_curriculum_coeff * jax.random.uniform(keys[18], minval=-self.joint_damping_factor, maxval=self.joint_damping_factor, shape=self.default_joint_dampings.shape))

@@ -167,7 +167,7 @@ def get_config(environment_name):
             "random_height_max_per_m_factor": 0.04,
             "block_probability": 0.5,
             "block_length_in_meters": 0.5,
-            "block_height_max_per_m_factor": 0.5,
+            "block_height_max_per_m_factor": 0.2,
             "block_slope_height_max_per_m_factor": 0.2,
         },
         "add_goal_arrow": False,

@@ -1,5 +1,6 @@
 robot_config = {
     "short_name": "sbg",
+    "spine_locked": True,
 
     "actuator_joint_max_velocities": [
         3.15,
