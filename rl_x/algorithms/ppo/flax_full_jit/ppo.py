@@ -36,13 +36,16 @@ class PPO:
         self.seed = config.environment.seed
         self.nr_parallel_seeds = config.algorithm.nr_parallel_seeds
         self.total_timesteps = config.algorithm.total_timesteps
+        self.nr_devices = jax.local_device_count()
         self.nr_envs = config.environment.nr_envs
+        self.nr_envs_per_device = self.nr_envs // self.nr_devices
         self.render = config.environment.render
         self.learning_rate = config.algorithm.learning_rate
         self.anneal_learning_rate = config.algorithm.anneal_learning_rate
         self.nr_steps = config.algorithm.nr_steps
         self.nr_epochs = config.algorithm.nr_epochs
         self.minibatch_size = config.algorithm.minibatch_size
+        self.minibatch_size_per_device = self.minibatch_size // self.nr_devices
         self.gamma = config.algorithm.gamma
         self.gae_lambda = config.algorithm.gae_lambda
         self.clip_range = config.algorithm.clip_range
@@ -53,6 +56,7 @@ class PPO:
         self.evaluation_and_save_frequency = config.algorithm.evaluation_and_save_frequency
         self.evaluation_active = config.algorithm.evaluation_active
         self.batch_size = config.environment.nr_envs * config.algorithm.nr_steps
+        self.batch_size_per_device = self.nr_envs_per_device * config.algorithm.nr_steps
         self.nr_updates = config.algorithm.total_timesteps // self.batch_size
         self.nr_minibatches = self.batch_size // self.minibatch_size
         if config.algorithm.evaluation_and_save_frequency == -1:
@@ -63,13 +67,26 @@ class PPO:
         self.as_shape = self.train_env.single_action_space.shape
         self.horizon = self.train_env.horizon
 
+        if self.nr_envs % self.nr_devices != 0:
+            raise ValueError("Number of environments must be divisible by the number of local JAX devices")
+        
+        if self.minibatch_size % self.nr_devices != 0:
+            raise ValueError("Minibatch size must be divisible by the number of local JAX devices")
+        
+        if self.batch_size % self.minibatch_size != 0:
+            raise ValueError("Batch size must be divisible by minibatch size")
+        
         if self.evaluation_and_save_frequency % self.batch_size != 0:
             raise ValueError("Evaluation and save frequency must be a multiple of batch size")
         
         if self.nr_parallel_seeds > 1:
             raise ValueError("Parallel seeds are not supported yet. This is mainly limited by not being able to log mutliple wandb runs at the same time.")
+        
+        if self.render and self.nr_devices > 1:
+            raise ValueError("Rendering is not supported with multi-device pmap training")
 
         rlx_logger.info(f"Using device: {jax.default_backend()}")
+        rlx_logger.info(f"Using {self.nr_devices} local JAX device(s) with pmap")
 
         self.key = jax.random.PRNGKey(self.seed)
         self.key, policy_key, critic_key, reset_key = jax.random.split(self.key, 4)
@@ -111,13 +128,12 @@ class PPO:
 
  
     def train(self):
-        def jitable_train_function(key, parallel_seed_id):
-            key, reset_key = jax.random.split(key, 2)
-            reset_keys = jax.random.split(reset_key, self.nr_envs)
-            env_state = self.train_env.reset(reset_keys, False)
+        def jitable_train_function(key, policy_state, critic_state):
+            device_id = jax.lax.axis_index("devices")
 
-            policy_state = self.policy_state
-            critic_state = self.critic_state
+            key, reset_key = jax.random.split(key, 2)
+            reset_keys = jax.random.split(reset_key, self.nr_envs_per_device)
+            env_state = self.train_env.reset(reset_keys, False)
 
             def multi_learning_and_eval_save_iteration(multi_learning_and_eval_save_iteration_carry, multi_learning_iteration_step):
                 policy_state, critic_state, env_state, key = multi_learning_and_eval_save_iteration_carry
@@ -223,15 +239,17 @@ class PPO:
                     grad_loss_fn = jax.value_and_grad(mean_vmapped_loss_fn, argnums=(0, 1), has_aux=True)
 
                     key, subkey = jax.random.split(key)
-                    batch_indices = jnp.tile(jnp.arange(self.batch_size), (self.nr_epochs, 1))
+                    batch_indices = jnp.tile(jnp.arange(self.batch_size_per_device), (self.nr_epochs, 1))
                     batch_indices = jax.random.permutation(subkey, batch_indices, axis=1, independent=True)
-                    batch_indices = batch_indices.reshape((self.nr_epochs * self.nr_minibatches, self.minibatch_size))
+                    batch_indices = batch_indices.reshape((self.nr_epochs * self.nr_minibatches, self.minibatch_size_per_device))
 
                     def minibatch_update(carry, minibatch_indices):
                         policy_state, critic_state = carry
 
                         minibatch_advantages = batch_advantages[minibatch_indices]
-                        minibatch_advantages = (minibatch_advantages - jnp.mean(minibatch_advantages)) / (jnp.std(minibatch_advantages) + 1e-8)
+                        advantage_mean = jax.lax.pmean(jnp.mean(minibatch_advantages), axis_name="devices")
+                        advantage_variance = jax.lax.pmean(jnp.mean((minibatch_advantages - advantage_mean) ** 2), axis_name="devices")
+                        minibatch_advantages = (minibatch_advantages - advantage_mean) / (jnp.sqrt(advantage_variance) + 1e-8)
 
                         (loss, (metrics)), (policy_gradients, critic_gradients) = grad_loss_fn(
                             policy_state.params,
@@ -242,6 +260,10 @@ class PPO:
                             batch_returns[minibatch_indices],
                             minibatch_advantages
                         )
+
+                        policy_gradients = jax.lax.pmean(policy_gradients, axis_name="devices")
+                        critic_gradients = jax.lax.pmean(critic_gradients, axis_name="devices")
+                        metrics = jax.lax.pmean(metrics, axis_name="devices")
 
                         policy_state = policy_state.apply_gradients(grads=policy_gradients)
                         critic_state = critic_state.apply_gradients(grads=critic_gradients)
@@ -265,12 +287,15 @@ class PPO:
                     # Logging
                     combined_metrics = {**infos, **optimization_metrics}
                     combined_metrics = tree.map_structure(lambda x: jnp.mean(x), combined_metrics)
+                    combined_metrics = jax.lax.pmean(combined_metrics, axis_name="devices")
 
                     def callback(carry):
-                        metrics, learning_iteration_step, combined_learning_iteration_step, parallel_seed_id = carry
+                        metrics, learning_iteration_step, combined_learning_iteration_step = carry
+                        learning_iteration_step = int(learning_iteration_step)
+                        combined_learning_iteration_step = int(combined_learning_iteration_step)
                         current_time = time.time()
-                        metrics["time/sps"] = int((self.nr_steps * self.nr_envs) / (current_time - self.last_time[parallel_seed_id]))
-                        self.last_time[parallel_seed_id] = current_time
+                        metrics["time/sps"] = int((self.nr_steps * self.nr_envs) / (current_time - self.last_time[0]))
+                        self.last_time[0] = current_time
                         global_step = combined_learning_iteration_step * self.nr_steps * self.nr_envs
                         metrics["steps/nr_env_steps"] = global_step
                         metrics["steps/nr_updates"] = combined_learning_iteration_step * self.nr_epochs * self.nr_minibatches
@@ -281,7 +306,17 @@ class PPO:
                         self.end_logging(wandb_commit=not is_last_train_update_before_eval)
 
                     combined_learning_iteration_step = (multi_learning_iteration_step * self.nr_updates_per_multi_learning_iteration) + learning_iteration_step + 1
-                    jax.debug.callback(callback, (combined_metrics, learning_iteration_step, combined_learning_iteration_step, parallel_seed_id))
+                    def log_on_primary_device(carry):
+                        jax.debug.callback(callback, carry)
+                        return jnp.array(0, dtype=jnp.int32)
+                    def skip_logging(carry):
+                        return jnp.array(0, dtype=jnp.int32)
+                    jax.lax.cond(
+                        device_id == 0,
+                        log_on_primary_device,
+                        skip_logging,
+                        (combined_metrics, learning_iteration_step, combined_learning_iteration_step)
+                    )
                     
                     return (policy_state, critic_state, env_state, key), None
                     
@@ -303,7 +338,7 @@ class PPO:
                         return (policy_state, eval_env_state), None
 
                     key, reset_key = jax.random.split(key)
-                    reset_keys = jax.random.split(reset_key, self.nr_envs)
+                    reset_keys = jax.random.split(reset_key, self.nr_envs_per_device)
                     eval_env_state = self.eval_env.reset(reset_keys, True)
                     single_eval_rollout_carry, _ = jax.lax.scan(single_eval_rollout, (policy_state, eval_env_state), jnp.arange(self.horizon))
                     _, eval_env_state = single_eval_rollout_carry
@@ -312,9 +347,11 @@ class PPO:
                         "eval/episode_return": jnp.mean(eval_env_state.info["rollout/episode_return"]),
                         "eval/episode_length": jnp.mean(eval_env_state.info["rollout/episode_length"]),
                     }
+                    eval_metrics = jax.lax.pmean(eval_metrics, axis_name="devices")
 
                     def callback(metrics_and_global_step):
                         metrics, combined_learning_iteration_step = metrics_and_global_step
+                        combined_learning_iteration_step = int(combined_learning_iteration_step)
                         global_step = combined_learning_iteration_step * self.nr_steps * self.nr_envs
                         self.start_logging(global_step)
                         for key, value in metrics.items():
@@ -322,27 +359,55 @@ class PPO:
                         self.end_logging()
 
                     combined_learning_iteration_step = (multi_learning_iteration_step + 1) * self.nr_updates_per_multi_learning_iteration
-                    jax.debug.callback(callback, (eval_metrics, combined_learning_iteration_step))
+                    def log_eval_on_primary_device(carry):
+                        jax.debug.callback(callback, carry)
+                        return jnp.array(0, dtype=jnp.int32)
+                    def skip_eval_logging(carry):
+                        return jnp.array(0, dtype=jnp.int32)
+                    jax.lax.cond(
+                        device_id == 0,
+                        log_eval_on_primary_device,
+                        skip_eval_logging,
+                        (eval_metrics, combined_learning_iteration_step)
+                    )
                 
 
                 # Saving
                 if self.save_model:
                     def save_with_check(policy_state, critic_state):
                         self.save(policy_state, critic_state)
-                    jax.debug.callback(save_with_check, policy_state, critic_state)
+                    def save_on_primary_device(carry):
+                        policy_state, critic_state = carry
+                        jax.debug.callback(save_with_check, policy_state, critic_state)
+                        return jnp.array(0, dtype=jnp.int32)
+                    def skip_saving(carry):
+                        return jnp.array(0, dtype=jnp.int32)
+                    jax.lax.cond(
+                        device_id == 0,
+                        save_on_primary_device,
+                        skip_saving,
+                        (policy_state, critic_state)
+                    )
 
                 
                 return (policy_state, critic_state, env_state, key), None
 
-            jax.lax.scan(multi_learning_and_eval_save_iteration, (policy_state, critic_state, env_state, key), jnp.arange(self.nr_multi_learning_and_eval_save_iterations))
+            final_carry, _ = jax.lax.scan(multi_learning_and_eval_save_iteration, (policy_state, critic_state, env_state, key), jnp.arange(self.nr_multi_learning_and_eval_save_iterations))
+            policy_state, critic_state, env_state, key = final_carry
+            return policy_state, critic_state
             
 
         self.key, subkey = jax.random.split(self.key)
-        seed_keys = jax.random.split(subkey, self.nr_parallel_seeds)
-        train_function = jax.jit(jax.vmap(jitable_train_function))
-        self.last_time = [time.time() for _ in range(self.nr_parallel_seeds)]
+        device_keys = jax.random.split(subkey, self.nr_devices)
+        devices = jax.local_devices()
+        policy_state = jax.device_put_replicated(self.policy_state, devices)
+        critic_state = jax.device_put_replicated(self.critic_state, devices)
+        train_function = jax.pmap(jitable_train_function, axis_name="devices")
+        self.last_time = [time.time()]
         self.start_time = deepcopy(self.last_time)
-        jax.block_until_ready(train_function(seed_keys, jnp.arange(self.nr_parallel_seeds)))
+        policy_state, critic_state = jax.block_until_ready(train_function(device_keys, policy_state, critic_state))
+        self.policy_state = jax.tree_util.tree_map(lambda x: jax.device_get(x[0]), policy_state)
+        self.critic_state = jax.tree_util.tree_map(lambda x: jax.device_get(x[0]), critic_state)
         rlx_logger.info(f"Average time: {max([time.time() - t for t in self.start_time]):.2f} s")
     
 
