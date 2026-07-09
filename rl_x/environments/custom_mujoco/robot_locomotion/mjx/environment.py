@@ -69,8 +69,8 @@ class LocomotionEnv:
             #     0, 
             #     name="empty_hfield", 
             #     size="4 4 30.0 0.125",
-            #     nrow="800",
-            #     ncol="800"
+            #     nrow="320",
+            #     ncol="320"
             # )
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
@@ -85,6 +85,16 @@ class LocomotionEnv:
         
         self.initial_mj_model = mujoco.MjModel.from_xml_string(xml=xml_handle.to_xml_string(), assets=xml_handle.get_assets())
         self.initial_mj_model.opt.timestep = env_config["timestep"]
+        self.spine_locked = robot_config.get("spine_locked", False)
+        spine_actuator_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, "spine")
+        if self.spine_locked and spine_actuator_id == -1:
+            raise ValueError("spine_locked=True requires an actuator named 'spine'.")
+        self.spine_joint_id = self.initial_mj_model.actuator_trnid[spine_actuator_id, 0] if spine_actuator_id != -1 else -1
+        self.spine_joint_range_index = self.spine_joint_id - 1
+        if self.spine_locked:
+            self.initial_mj_model.jnt_range[self.spine_joint_id] = np.array([-0.0001, 0.0001])
+        else:
+            self.spine_joint_limit = 1.5
         self.data = mujoco.MjData(self.initial_mj_model)
         self.initial_mjx_model = mjx.put_model(self.initial_mj_model)
         self.mjx_data = mjx.make_data(self.initial_mjx_model)

@@ -170,6 +170,8 @@ class DefaultDRSeenRobotFunction:
         actuator_joint_max_velocities = default_actuator_joint_max_velocities * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.joint_velocity_max_factor, high=self.joint_velocity_max_factor, size=self.default_actuator_joint_max_velocities.shape))
 
         joint_ranges = self.default_joint_ranges + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.add_joint_range, high=self.add_joint_range, size=self.default_joint_ranges.shape)
+        if self.env.spine_locked:
+            joint_ranges[self.env.spine_joint_range_index] = self.default_joint_ranges[self.env.spine_joint_range_index]
 
         seen_joint_dampings = default_joint_dampings * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.joint_damping_factor, high=self.joint_damping_factor, size=self.default_joint_dampings.shape))
         seen_joint_dampings += env_curriculum_coeff * self.env.np_rng.uniform(low=-self.add_joint_damping, high=self.add_joint_damping, size=self.default_joint_dampings.shape)
