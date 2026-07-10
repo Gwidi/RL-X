@@ -37,6 +37,7 @@ rlx_logger = logging.getLogger("rl_x")
 class Runner:
     def __init__(self, implementation_package_names=["rl_x"]):
         algorithm_name, environment_name, self._mode = self.parse_arguments()
+        self._environment_name = environment_name
 
         # Early importing of environment to start Isaac if needed
         self.import_environment(environment_name, implementation_package_names)
@@ -269,6 +270,23 @@ class Runner:
         self._config.runner = self._runner_config_flag.value
         self._config.algorithm = self._algorithm_config_flag.value
         self._config.environment = self._environment_config_flag.value
+        self._add_robot_locomotion_config_to_environment_config()
+
+
+    def _add_robot_locomotion_config_to_environment_config(self):
+        if not self._environment_name.startswith("custom_mujoco.robot_locomotion."):
+            return
+
+        train_robot = getattr(self._config.environment, "train_robot", None)
+        if train_robot is None:
+            return
+
+        robot_config = importlib.import_module(
+            f"rl_x.environments.custom_mujoco.robot_locomotion.robots.{train_robot}.robot_config"
+        ).robot_config
+
+        with self._config.environment.unlocked():
+            self._config.environment.spine_locked = bool(robot_config.get("spine_locked", False))
 
 
     def _show_config(self, _):
