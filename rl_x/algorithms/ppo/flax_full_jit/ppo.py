@@ -413,9 +413,10 @@ class PPO:
         restore_args = orbax_utils.restore_args_from_target(target)
         checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
-
-        model.policy_state = checkpoint["policy"]
-        model.critic_state = checkpoint["critic"]
+        
+        model.policy_state = model.policy_state.replace(params=checkpoint["policy"].params)
+        model.critic_state = model.critic_state.replace(params=checkpoint["critic"].params)
+        rlx_logger.info("Loaded model parameters and reinitialized optimizer state for fine-tuning")
 
         shutil.rmtree(checkpoint_dir)
 
