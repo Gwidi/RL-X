@@ -300,6 +300,10 @@ class LocomotionEnv:
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": jnp.where(eval_mode, 1.0, 0.0),
             "env_curriculum_levels_in_a_row": 0.0,
+            "env_curriculum_completed_episodes": 0.0,
+            "env_curriculum_successful_episodes": 0.0,
+            "env_curriculum_success_rate": 0.0,
+            "env_curriculum_last_episode_success": 0.0,
             "actuator_joint_nominal_positions": self.initial_qpos[self.actuator_joint_mask_qpos],
             "actuator_joint_max_velocities": self.actuator_joint_max_velocities,
             "goal_velocities": jnp.array([0.0, 0.0, 0.0]),
@@ -327,6 +331,8 @@ class LocomotionEnv:
         info["rollout/episode_return"] = reward
         info["rollout/episode_length"] = 0
         info["env_curriculum/coefficient"] = internal_state["env_curriculum_coeff"]
+        info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
+        info["env_curriculum/last_episode_success"] = internal_state["env_curriculum_last_episode_success"]
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
@@ -366,6 +372,20 @@ class LocomotionEnv:
                 (new_state.info_episode_store["episode_step"] >= self.horizon)
                 & ~new_state.terminated
             )
+        episode_completed = new_state.info_episode_store["episode_step"] > 0
+        new_state.internal_state["env_curriculum_completed_episodes"] += episode_completed.astype(jnp.float32)
+        new_state.internal_state["env_curriculum_successful_episodes"] += (
+            episode_completed & episode_success
+        ).astype(jnp.float32)
+        new_state.internal_state["env_curriculum_success_rate"] = (
+            new_state.internal_state["env_curriculum_successful_episodes"]
+            / jnp.maximum(new_state.internal_state["env_curriculum_completed_episodes"], 1.0)
+        )
+        new_state.internal_state["env_curriculum_last_episode_success"] = jnp.where(
+            episode_completed,
+            episode_success.astype(jnp.float32),
+            new_state.internal_state["env_curriculum_last_episode_success"],
+        )
         new_state.internal_state["env_curriculum_levels_in_a_row"] = jnp.where(episode_success,
             jnp.where(new_state.internal_state["env_curriculum_levels_in_a_row"] >= 0,
                 new_state.internal_state["env_curriculum_levels_in_a_row"] + 1,
@@ -410,6 +430,8 @@ class LocomotionEnv:
             terminated=terminated, truncated=truncated,
             info_episode_store=info_episode_store
         )
+        new_state.info["env_curriculum/success_rate"] = new_state.internal_state["env_curriculum_success_rate"]
+        new_state.info["env_curriculum/last_episode_success"] = new_state.internal_state["env_curriculum_last_episode_success"]
 
         return new_state
 
@@ -471,11 +493,14 @@ class LocomotionEnv:
         state.info["rollout/episode_return"] = jnp.where(done, state.info_episode_store["episode_return"], state.info["rollout/episode_return"])
         state.info["rollout/episode_length"] = jnp.where(done, state.info_episode_store["episode_step"], state.info["rollout/episode_length"])
         state.info["env_curriculum/coefficient"] = state.internal_state["env_curriculum_coeff"]
+        state.info["env_curriculum/success_rate"] = state.internal_state["env_curriculum_success_rate"]
+        state.info["env_curriculum/last_episode_success"] = state.internal_state["env_curriculum_last_episode_success"]
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info(state.internal_state, state.info)
 
         def when_done(_):
-            start_state = self._reset(state)
+            terminal_state = state.replace(terminated=terminated, truncated=truncated)
+            start_state = self._reset(terminal_state)
             start_state = start_state.replace(actual_next_observation=next_observation, reward=reward, terminated=terminated, truncated=truncated)
             return start_state
         def when_not_done(_):

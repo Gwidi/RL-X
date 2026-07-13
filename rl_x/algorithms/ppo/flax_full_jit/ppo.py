@@ -313,6 +313,10 @@ class PPO:
                         "eval/episode_return": jnp.mean(eval_env_state.info["rollout/episode_return"]),
                         "eval/episode_length": jnp.mean(eval_env_state.info["rollout/episode_length"]),
                     }
+                    if "env_curriculum/success_rate" in eval_env_state.info:
+                        eval_metrics["eval/success_rate"] = jnp.mean(
+                            eval_env_state.info["env_curriculum/success_rate"]
+                        )
 
                     def callback(metrics_and_global_step):
                         metrics, combined_learning_iteration_step = metrics_and_global_step
