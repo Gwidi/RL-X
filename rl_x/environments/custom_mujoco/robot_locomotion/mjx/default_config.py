@@ -24,6 +24,7 @@ def get_config(environment_name):
         },
         "env_curriculum_nr_levels": 100,
         "env_curriculum_level_success_episode_return": 8.0,
+        "env_curriculum_require_full_episode": False,
         "domain_randomization": {
             "sampling_type": "step_probability_and_reset",
             "action_delay": {
@@ -171,6 +172,11 @@ def get_config(environment_name):
             "block_length_in_meters": 0.5,
             "block_height_max_per_m_factor": 0.2,
             "block_slope_height_max_per_m_factor": 0.2,
+            # Used by hfield_bunker_ruins_unbounded. Difficulty 1.0 matches
+            # hfield_bunker_ruins at env_curriculum_coeff == 1.0.
+            "curriculum_initial_difficulty": 0.0,
+            "curriculum_eval_difficulty": 1.0,
+            "curriculum_step_scale": 1.0,
         },
         "add_goal_arrow": False,
         "timestep": 0.005,

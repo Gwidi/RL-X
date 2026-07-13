@@ -162,6 +162,7 @@ class LocomotionEnv:
 
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
+        self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -326,6 +327,8 @@ class LocomotionEnv:
         info["rollout/episode_return"] = reward
         info["rollout/episode_length"] = 0
         info["env_curriculum/coefficient"] = internal_state["env_curriculum_coeff"]
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
             "episode_return": reward,
             "episode_step": 0,
@@ -358,6 +361,11 @@ class LocomotionEnv:
         new_state = state
 
         episode_success = new_state.info_episode_store["episode_return"] >= self.env_curriculum_level_success_episode_return
+        if self.env_curriculum_require_full_episode:
+            episode_success &= (
+                (new_state.info_episode_store["episode_step"] >= self.horizon)
+                & ~new_state.terminated
+            )
         new_state.internal_state["env_curriculum_levels_in_a_row"] = jnp.where(episode_success,
             jnp.where(new_state.internal_state["env_curriculum_levels_in_a_row"] >= 0,
                 new_state.internal_state["env_curriculum_levels_in_a_row"] + 1,
@@ -370,6 +378,9 @@ class LocomotionEnv:
         )
         new_state.internal_state["env_curriculum_coeff"] =  jnp.clip(new_state.internal_state["env_curriculum_coeff"] + new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            curriculum_delta = new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels
+            self.terrain_function.update_curriculum(new_state.internal_state, curriculum_delta)
 
         new_state.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(data.site_xmat[self.imu_site_id].reshape(3, 3))
         new_state.internal_state["imu_orientation_rotation_inverse"] = new_state.internal_state["imu_orientation_rotation"].inv()
@@ -460,6 +471,8 @@ class LocomotionEnv:
         state.info["rollout/episode_return"] = jnp.where(done, state.info_episode_store["episode_return"], state.info["rollout/episode_return"])
         state.info["rollout/episode_length"] = jnp.where(done, state.info_episode_store["episode_step"], state.info["rollout/episode_length"])
         state.info["env_curriculum/coefficient"] = state.internal_state["env_curriculum_coeff"]
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            self.terrain_function.add_curriculum_info(state.internal_state, state.info)
 
         def when_done(_):
             start_state = self._reset(state)
