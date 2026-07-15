@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 import json
 from copy import deepcopy
 import logging
@@ -395,30 +396,36 @@ class PPO:
 
     def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
         splitted_path = config.runner.load_model.split("/")
-        checkpoint_dir = os.path.abspath("/".join(splitted_path[:-1]))
+        checkpoint_parent_dir = os.path.abspath("/".join(splitted_path[:-1]))
         checkpoint_file_name = splitted_path[-1]
-        shutil.unpack_archive(f"{checkpoint_dir}/{checkpoint_file_name}", f"{checkpoint_dir}/tmp", "zip")
-        checkpoint_dir = f"{checkpoint_dir}/tmp"
-        
-        loaded_algorithm_config = json.load(open(f"{checkpoint_dir}/config_algorithm.json", "r"))
-        for key, value in loaded_algorithm_config.items():
-            if f"algorithm.{key}" not in explicitly_set_algorithm_params and key in config.algorithm:
-                config.algorithm[key] = value
-        model = PPO(config, train_env, eval_env, run_path, writer)
+        checkpoint_path = os.path.join(checkpoint_parent_dir, checkpoint_file_name)
 
-        target = {
-            "policy": model.policy_state,
-            "critic": model.critic_state
-        }
-        restore_args = orbax_utils.restore_args_from_target(target)
-        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-        checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
-        
-        model.policy_state = model.policy_state.replace(params=checkpoint["policy"].params)
-        model.critic_state = model.critic_state.replace(params=checkpoint["critic"].params)
-        rlx_logger.info("Loaded model parameters and reinitialized optimizer state for fine-tuning")
+        # Each run must unpack into its own directory. Using a shared directory next
+        # to the source model causes Slurm array tasks to overwrite/delete each
+        # other's checkpoint while restoring it.
+        os.makedirs(run_path, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="load_checkpoint_", dir=run_path) as temp_dir:
+            checkpoint_dir = os.path.join(temp_dir, "checkpoint")
+            shutil.unpack_archive(checkpoint_path, checkpoint_dir, "zip")
 
-        shutil.rmtree(checkpoint_dir)
+            with open(os.path.join(checkpoint_dir, "config_algorithm.json"), "r") as config_file:
+                loaded_algorithm_config = json.load(config_file)
+            for key, value in loaded_algorithm_config.items():
+                if f"algorithm.{key}" not in explicitly_set_algorithm_params and key in config.algorithm:
+                    config.algorithm[key] = value
+            model = PPO(config, train_env, eval_env, run_path, writer)
+
+            target = {
+                "policy": model.policy_state,
+                "critic": model.critic_state
+            }
+            restore_args = orbax_utils.restore_args_from_target(target)
+            checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+            checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
+
+            model.policy_state = model.policy_state.replace(params=checkpoint["policy"].params)
+            model.critic_state = model.critic_state.replace(params=checkpoint["critic"].params)
+            rlx_logger.info("Loaded model parameters and reinitialized optimizer state for fine-tuning")
 
         return model
 
