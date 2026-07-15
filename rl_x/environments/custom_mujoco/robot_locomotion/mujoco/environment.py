@@ -144,8 +144,11 @@ class LocomotionEnv(gym.Env):
 
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
+        self.env_curriculum_initial_coeff = env_config.get("env_curriculum_initial_coeff", 0.0)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
+        if not 0.0 <= self.env_curriculum_initial_coeff <= 1.0:
+            raise ValueError("env_curriculum_initial_coeff must be between 0.0 and 1.0.")
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -188,7 +191,11 @@ class LocomotionEnv(gym.Env):
             "mj_model": deepcopy(self.initial_mj_model),
             "data": mujoco.MjData(self.initial_mj_model),
             "in_eval_mode": eval_mode,
-            "env_curriculum_coeff": np.where(eval_mode, 1.0, 0.0),
+            "env_curriculum_coeff": np.where(
+                eval_mode,
+                1.0,
+                self.env_curriculum_initial_coeff,
+            ),
             "env_curriculum_levels_in_a_row": 0.0,
             "actuator_joint_nominal_positions": self.initial_qpos[self.actuator_joint_mask_qpos],
             "actuator_joint_max_velocities": self.actuator_joint_max_velocities,
@@ -295,18 +302,26 @@ class LocomotionEnv(gym.Env):
         self.internal_state["data"].ctrl = np.zeros(self.nr_actuator_joints)
         mujoco.mj_forward(self.internal_state["mj_model"], self.internal_state["data"])
 
-        episode_success = self.internal_state["info_episode_store"]["episode_return"] >= self.env_curriculum_level_success_episode_return
-        self.internal_state["env_curriculum_levels_in_a_row"] = np.where(episode_success,
-            np.where(self.internal_state["env_curriculum_levels_in_a_row"] >= 0,
-                self.internal_state["env_curriculum_levels_in_a_row"] + 1,
-                1
-            ),
-            np.where(self.internal_state["env_curriculum_levels_in_a_row"] < 0,
-                self.internal_state["env_curriculum_levels_in_a_row"] - 1,
-                -1
+        episode_completed = self.internal_state["info_episode_store"]["episode_step"] > 0
+        if episode_completed:
+            episode_success = self.internal_state["info_episode_store"]["episode_return"] >= self.env_curriculum_level_success_episode_return
+            self.internal_state["env_curriculum_levels_in_a_row"] = np.where(episode_success,
+                np.where(self.internal_state["env_curriculum_levels_in_a_row"] >= 0,
+                    self.internal_state["env_curriculum_levels_in_a_row"] + 1,
+                    1
+                ),
+                np.where(self.internal_state["env_curriculum_levels_in_a_row"] < 0,
+                    self.internal_state["env_curriculum_levels_in_a_row"] - 1,
+                    -1
+                )
             )
-        )
-        self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
+            self.internal_state["env_curriculum_coeff"] = np.clip(
+                self.internal_state["env_curriculum_coeff"]
+                + self.internal_state["env_curriculum_levels_in_a_row"]
+                / self.env_curriculum_nr_levels,
+                0.0,
+                1.0,
+            )
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.update_curriculum(

@@ -160,9 +160,12 @@ class LocomotionEnv:
 
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
+        self.env_curriculum_initial_coeff = env_config.get("env_curriculum_initial_coeff", 0.0)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
+        if not 0.0 <= self.env_curriculum_initial_coeff <= 1.0:
+            raise ValueError("env_curriculum_initial_coeff must be between 0.0 and 1.0.")
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -298,7 +301,11 @@ class LocomotionEnv:
         max_command_velocities = max_command_velocity * jnp.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
         internal_state = {
             "in_eval_mode": eval_mode,
-            "env_curriculum_coeff": jnp.where(eval_mode, 1.0, 0.0),
+            "env_curriculum_coeff": jnp.where(
+                eval_mode,
+                1.0,
+                self.env_curriculum_initial_coeff,
+            ),
             "env_curriculum_levels_in_a_row": 0.0,
             "env_curriculum_completed_episodes": 0.0,
             "env_curriculum_successful_episodes": 0.0,
@@ -386,7 +393,8 @@ class LocomotionEnv:
             episode_success.astype(jnp.float32),
             new_state.internal_state["env_curriculum_last_episode_success"],
         )
-        new_state.internal_state["env_curriculum_levels_in_a_row"] = jnp.where(episode_success,
+        levels_in_a_row = new_state.internal_state["env_curriculum_levels_in_a_row"]
+        next_levels_in_a_row = jnp.where(episode_success,
             jnp.where(new_state.internal_state["env_curriculum_levels_in_a_row"] >= 0,
                 new_state.internal_state["env_curriculum_levels_in_a_row"] + 1,
                 1
@@ -396,7 +404,22 @@ class LocomotionEnv:
                 -1
             )
         )
-        new_state.internal_state["env_curriculum_coeff"] =  jnp.clip(new_state.internal_state["env_curriculum_coeff"] + new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
+        new_state.internal_state["env_curriculum_levels_in_a_row"] = jnp.where(
+            episode_completed,
+            next_levels_in_a_row,
+            levels_in_a_row,
+        )
+        next_curriculum_coeff = jnp.clip(
+            new_state.internal_state["env_curriculum_coeff"]
+            + next_levels_in_a_row / self.env_curriculum_nr_levels,
+            0.0,
+            1.0,
+        )
+        new_state.internal_state["env_curriculum_coeff"] = jnp.where(
+            episode_completed,
+            next_curriculum_coeff,
+            new_state.internal_state["env_curriculum_coeff"],
+        )
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.update_curriculum(

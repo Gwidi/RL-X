@@ -22,6 +22,7 @@ def get_config(environment_name):
             "all_zero_chance": 0.04,
             "single_zero_chance": 0.005,
         },
+        "env_curriculum_initial_coeff": 0.0,
         "env_curriculum_nr_levels": 100,
         "env_curriculum_level_success_episode_return": 8.0,
         "env_curriculum_require_full_episode": False,
