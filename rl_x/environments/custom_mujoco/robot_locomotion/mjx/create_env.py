@@ -8,6 +8,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mjx.general_properties imp
 def create_train_and_eval_env(config):
     robot_config = importlib.import_module(f"rl_x.environments.custom_mujoco.robot_locomotion.robots.{config.environment.train_robot}.robot_config").robot_config
     robot_config["directory_path"] = Path(__file__).parent.parent / "robots" / config.environment.train_robot
+    robot_config["spine_locked"] = config.environment.spine_locked
 
     train_env = LocomotionEnv(
         robot_config=robot_config,

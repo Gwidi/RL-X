@@ -10,6 +10,7 @@ def get_config(environment_name):
         "device": "gpu",
         "copy_train_env_for_eval": True,
         "train_robot": "unitree_go2",
+        "spine_locked": False,
         "control_type": "pd",
         "command": {
             "type": "random",
