@@ -309,8 +309,11 @@ class LocomotionEnv(gym.Env):
         self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
-            curriculum_delta = self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels
-            self.terrain_function.update_curriculum(curriculum_delta)
+            self.terrain_function.update_curriculum(
+                episode_return=self.internal_state["info_episode_store"]["episode_return"],
+                episode_completed=self.internal_state["info_episode_store"]["episode_step"] > 0,
+            )
+            self.terrain_function.add_curriculum_info()
         
         self.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(self.internal_state["data"].site_xmat[self.imu_site_id].reshape(3, 3))
         self.internal_state["imu_orientation_rotation_inverse"] = self.internal_state["imu_orientation_rotation"].inv()

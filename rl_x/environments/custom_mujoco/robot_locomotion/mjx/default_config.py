@@ -177,6 +177,8 @@ def get_config(environment_name):
             "curriculum_initial_difficulty": 0.0,
             "curriculum_eval_difficulty": 1.0,
             "curriculum_step_scale": 1.0,
+            "curriculum_nr_levels": 100,
+            "curriculum_level_success_episode_return": 8.0,
         },
         "add_goal_arrow": False,
         "timestep": 0.005,
