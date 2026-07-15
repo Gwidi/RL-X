@@ -254,7 +254,8 @@ class DefaultReward:
         info[f"reward/foot_flat_contact"] = foot_flat_contact_reward
         info[f"reward/foot_clearance"] = foot_clearance_reward
         info[f"reward/total"] = reward
-        info[f"env_info/xy_vel_diff_abs"] = jnp.nan_to_num(jnp.mean(jnp.minimum(jnp.abs(xy_difference), 2*internal_state["max_command_velocity"])), nan=2*internal_state["max_command_velocity"], posinf=2*internal_state["max_command_velocity"], neginf=2*internal_state["max_command_velocity"])
+        max_xy_velocity_diff_abs = jnp.mean(2 * internal_state["max_command_velocities"][:2])
+        info[f"env_info/xy_vel_diff_abs"] = jnp.nan_to_num(jnp.mean(jnp.minimum(jnp.abs(xy_difference), 2 * internal_state["max_command_velocities"][:2])), nan=max_xy_velocity_diff_abs, posinf=max_xy_velocity_diff_abs, neginf=max_xy_velocity_diff_abs)
 
         mean_foot_height_in_air = jnp.sum(feet_clearance * (~feet_floor_contacts)) / jnp.maximum(jnp.sum((~feet_floor_contacts).astype(jnp.float32)), 1e-6)
         info[f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air

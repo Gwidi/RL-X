@@ -16,6 +16,7 @@ def get_config(environment_name):
             "sampling_type": "step_probability",
             "max_velocity_per_m_factor": 2.0,
             "clip_max_velocity": 1.0,
+            "x_velocity_multiplier": 1.0,
             "zero_clip_threshold_percentage": 0.1,
             "all_zero_chance": 0.04,
             "single_zero_chance": 0.005,

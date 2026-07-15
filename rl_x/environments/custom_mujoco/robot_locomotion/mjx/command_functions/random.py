@@ -24,8 +24,8 @@ class RandomCommands:
     def get_next_command(self, internal_state, should_sample_commands, subkey):
         velocity_sampling_key, all_zeroing_key, single_zeroing_key = jax.random.split(subkey, 3)
 
-        goal_velocities = jax.random.uniform(velocity_sampling_key, (3,), minval=-internal_state["max_command_velocity"], maxval=internal_state["max_command_velocity"])
-        goal_velocities = jnp.where(jnp.abs(goal_velocities) < (self.zero_clip_threshold_percentage * internal_state["max_command_velocity"]), 0.0, goal_velocities)
+        goal_velocities = jax.random.uniform(velocity_sampling_key, (3,), minval=-internal_state["max_command_velocities"], maxval=internal_state["max_command_velocities"])
+        goal_velocities = jnp.where(jnp.abs(goal_velocities) < (self.zero_clip_threshold_percentage * internal_state["max_command_velocities"]), 0.0, goal_velocities)
         goal_velocities = jnp.where(jax.random.bernoulli(all_zeroing_key, self.all_zero_chance), jnp.zeros(3), goal_velocities)
         goal_velocities = jnp.where(jax.random.uniform(single_zeroing_key, (3,)) < self.single_zero_chance, 0.0, goal_velocities)
 

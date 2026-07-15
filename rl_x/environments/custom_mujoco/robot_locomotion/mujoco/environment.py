@@ -182,6 +182,8 @@ class LocomotionEnv(gym.Env):
         self.observation_noise_function.init_attributes()
 
         eval_mode = False
+        max_command_velocity = np.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity)
+        max_command_velocities = max_command_velocity * np.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
         self.internal_state = {
             "mj_model": deepcopy(self.initial_mj_model),
             "data": mujoco.MjData(self.initial_mj_model),
@@ -198,7 +200,8 @@ class LocomotionEnv(gym.Env):
             "second_last_action": np.zeros(self.nr_actuator_joints),
             "joint_dropout_mask": np.ones(self.nr_actuator_joints, dtype=bool),
             "robot_dimensions_mean": self.robot_dimensions_mean,
-            "max_command_velocity": np.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity),
+            "max_command_velocity": max_command_velocity,
+            "max_command_velocities": max_command_velocities,
             "nr_collisions_in_nominal": 0,
             "info": {
                 "rollout/episode_return": 0.0,
@@ -260,8 +263,8 @@ class LocomotionEnv(gym.Env):
                     explicit_velocity_commands = True
             if explicit_velocity_commands:
                 goal_velocities = np.array([goal_x_velocity, goal_y_velocity, goal_yaw_velocity])
-                goal_velocities = np.where(np.abs(goal_velocities) < (self.command_function.zero_clip_threshold_percentage * self.internal_state["max_command_velocity"]), 0.0, goal_velocities)
-                self.internal_state["goal_velocities"] = np.clip(goal_velocities, -self.internal_state["max_command_velocity"], self.internal_state["max_command_velocity"])
+                goal_velocities = np.where(np.abs(goal_velocities) < (self.command_function.zero_clip_threshold_percentage * self.internal_state["max_command_velocities"]), 0.0, goal_velocities)
+                self.internal_state["goal_velocities"] = np.clip(goal_velocities, -self.internal_state["max_command_velocities"], self.internal_state["max_command_velocities"])
                 actuator_keep_nominal_commands = np.where(np.all(goal_velocities == 0.0), np.ones(self.nr_actuator_joints, dtype=bool), self.command_function.default_actuator_joint_keep_nominal)
                 self.internal_state["actuator_joint_keep_nominal"] = actuator_keep_nominal_commands
 

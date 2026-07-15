@@ -257,8 +257,9 @@ class LocomotionEnv:
                     explicit_velocity_commands = True
             if explicit_velocity_commands:
                 goal_velocities = jnp.array([goal_x_velocity, goal_y_velocity, goal_yaw_velocity])
-                goal_velocities = jnp.where(jnp.abs(goal_velocities) < (self.command_function.zero_clip_threshold_percentage * state.internal_state["max_command_velocity"]), 0.0, goal_velocities)
-                goal_velocities = jnp.clip(goal_velocities, -state.internal_state["max_command_velocity"], state.internal_state["max_command_velocity"])
+                max_command_velocities = state.internal_state["max_command_velocities"][env_id]
+                goal_velocities = jnp.where(jnp.abs(goal_velocities) < (self.command_function.zero_clip_threshold_percentage * max_command_velocities), 0.0, goal_velocities)
+                goal_velocities = jnp.clip(goal_velocities, -max_command_velocities, max_command_velocities)
                 state.internal_state["goal_velocities"] = jnp.tile(goal_velocities, (self.nr_envs, 1))
                 actuator_joint_keep_nominal = jnp.where(jnp.all(goal_velocities == 0.0), jnp.ones(self.nr_actuator_joints, dtype=bool), self.command_function.default_actuator_joint_keep_nominal)
                 state.internal_state["actuator_joint_keep_nominal"] = jnp.tile(actuator_joint_keep_nominal, (self.nr_envs, 1))
@@ -292,6 +293,8 @@ class LocomotionEnv:
         truncated = False
 
 
+        max_command_velocity = jnp.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity)
+        max_command_velocities = max_command_velocity * jnp.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
         internal_state = {
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": jnp.where(eval_mode, 1.0, 0.0),
@@ -306,7 +309,8 @@ class LocomotionEnv:
             "second_last_action": jnp.zeros(self.nr_actuator_joints),
             "joint_dropout_mask": jnp.ones(self.nr_actuator_joints, dtype=bool),
             "robot_dimensions_mean": self.robot_dimensions_mean,
-            "max_command_velocity": jnp.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity),
+            "max_command_velocity": max_command_velocity,
+            "max_command_velocities": max_command_velocities,
             "nr_collisions_in_nominal": 0,
         }
         self.command_function.init(internal_state)

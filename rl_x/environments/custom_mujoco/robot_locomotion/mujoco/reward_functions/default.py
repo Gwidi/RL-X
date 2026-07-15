@@ -248,7 +248,8 @@ class DefaultReward:
         self.env.internal_state["info"][f"reward/foot_flat_contact"] = foot_flat_contact_reward
         self.env.internal_state["info"][f"reward/foot_clearance"] = foot_clearance_reward
         self.env.internal_state["info"][f"reward/total"] = reward
-        self.env.internal_state["info"][f"env_info/xy_vel_diff_abs"] = np.nan_to_num(np.mean(np.minimum(np.abs(xy_difference), 2*self.env.internal_state["max_command_velocity"])), nan=2*self.env.internal_state["max_command_velocity"], posinf=2*self.env.internal_state["max_command_velocity"], neginf=2*self.env.internal_state["max_command_velocity"])
+        max_xy_velocity_diff_abs = np.mean(2 * self.env.internal_state["max_command_velocities"][:2])
+        self.env.internal_state["info"][f"env_info/xy_vel_diff_abs"] = np.nan_to_num(np.mean(np.minimum(np.abs(xy_difference), 2 * self.env.internal_state["max_command_velocities"][:2])), nan=max_xy_velocity_diff_abs, posinf=max_xy_velocity_diff_abs, neginf=max_xy_velocity_diff_abs)
         
         mean_foot_height_in_air = np.mean(feet_clearance[~feet_floor_contacts]) if np.any(~feet_floor_contacts) else 0.0
         self.env.internal_state["info"][f"env_info/mean_foot_height_in_air"] = mean_foot_height_in_air
