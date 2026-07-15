@@ -222,6 +222,8 @@ class LocomotionEnv(gym.Env):
         self.domain_randomization_seen_robot_function.init()
         self.domain_randomization_unseen_robot_function.init()
         self.reward_function.reward_and_info(np.zeros(self.nr_actuator_joints))
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            self.terrain_function.add_curriculum_info()
 
         if self.should_render:
             self.viewer = MujocoViewer(self.initial_mj_model, self.dt)
@@ -293,7 +295,7 @@ class LocomotionEnv(gym.Env):
         self.internal_state["data"].ctrl = np.zeros(self.nr_actuator_joints)
         mujoco.mj_forward(self.internal_state["mj_model"], self.internal_state["data"])
 
-        episode_success = self.internal_state["info_episode_store"]["episode_return"] >= 10.0
+        episode_success = self.internal_state["info_episode_store"]["episode_return"] >= self.env_curriculum_level_success_episode_return
         self.internal_state["env_curriculum_levels_in_a_row"] = np.where(episode_success,
             np.where(self.internal_state["env_curriculum_levels_in_a_row"] >= 0,
                 self.internal_state["env_curriculum_levels_in_a_row"] + 1,
@@ -306,6 +308,9 @@ class LocomotionEnv(gym.Env):
         )
         self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            curriculum_delta = self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels
+            self.terrain_function.update_curriculum(curriculum_delta)
         
         self.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(self.internal_state["data"].site_xmat[self.imu_site_id].reshape(3, 3))
         self.internal_state["imu_orientation_rotation_inverse"] = self.internal_state["imu_orientation_rotation"].inv()
@@ -368,6 +373,8 @@ class LocomotionEnv(gym.Env):
         self.internal_state["info"]["rollout/episode_return"] = np.where(done, self.internal_state["info_episode_store"]["episode_return"], self.internal_state["info"]["rollout/episode_return"])
         self.internal_state["info"]["rollout/episode_length"] = np.where(done, self.internal_state["info_episode_store"]["episode_step"], self.internal_state["info"]["rollout/episode_length"])
         self.internal_state["info"]["env_curriculum/coefficient"] = self.internal_state["env_curriculum_coeff"]
+        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+            self.terrain_function.add_curriculum_info()
 
         if self.should_render:
             self.render()

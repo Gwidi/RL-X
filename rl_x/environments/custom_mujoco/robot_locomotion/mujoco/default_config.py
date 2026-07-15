@@ -170,18 +170,11 @@ def get_config(environment_name):
             "block_length_in_meters": 0.5,
             "block_height_max_per_m_factor": 0.3,
             "block_slope_height_max_per_m_factor": 0.2,
-            "hfield_resolution": 0,
-            "curb_height_min_m": 0.04,
-            "curb_height_max_m": 0.18,
-            "curb_spacing_min_m": 0.9,
-            "curb_spacing_max_m": 1.5,
-            "first_curb_distance_m": 1.0,
-            "edge_smoothing_m": 0.00,
-            "roughness_height_m": 0.0,
-            "safe_spawn_radius_m": 0.8,
-            "include_down_curbs": True,
-            "randomize_heights": True,
-            "use_curriculum": False,
+            # Used by hfield_bunker_ruins_unbounded. Difficulty 1.0 matches
+            # hfield_bunker_ruins at env_curriculum_coeff == 1.0.
+            "curriculum_initial_difficulty": 2.0,
+            "curriculum_eval_difficulty": 1.0,
+            "curriculum_step_scale": 1.0
         },
         "add_goal_arrow": False,
         "timestep": 0.005,
