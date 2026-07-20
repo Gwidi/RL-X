@@ -161,9 +161,12 @@ class LocomotionEnv:
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
         self.env_curriculum_enabled = env_config.get("env_curriculum_enabled", True)
+        self.env_curriculum_disabled_coeff = env_config.get("env_curriculum_disabled_coeff", 0.99)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
+        if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
+            raise ValueError("env_curriculum_disabled_coeff must be between 0.0 and 1.0.")
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -297,12 +300,17 @@ class LocomotionEnv:
 
         max_command_velocity = jnp.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity)
         max_command_velocities = max_command_velocity * jnp.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
+        initial_curriculum_coeff = (
+            0.0
+            if self.env_curriculum_enabled
+            else self.env_curriculum_disabled_coeff
+        )
         internal_state = {
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": jnp.where(
-                jnp.logical_or(eval_mode, not self.env_curriculum_enabled),
+                eval_mode,
                 1.0,
-                0.0,
+                initial_curriculum_coeff,
             ),
             "env_curriculum_levels_in_a_row": 0.0,
             "env_curriculum_completed_episodes": 0.0,
