@@ -160,6 +160,7 @@ class LocomotionEnv:
 
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
+        self.env_curriculum_enabled = env_config.get("env_curriculum_enabled", True)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
@@ -298,7 +299,11 @@ class LocomotionEnv:
         max_command_velocities = max_command_velocity * jnp.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
         internal_state = {
             "in_eval_mode": eval_mode,
-            "env_curriculum_coeff": jnp.where(eval_mode, 1.0, 0.0),
+            "env_curriculum_coeff": jnp.where(
+                jnp.logical_or(eval_mode, not self.env_curriculum_enabled),
+                1.0,
+                0.0,
+            ),
             "env_curriculum_levels_in_a_row": 0.0,
             "env_curriculum_completed_episodes": 0.0,
             "env_curriculum_successful_episodes": 0.0,
@@ -396,7 +401,8 @@ class LocomotionEnv:
                 -1
             )
         )
-        new_state.internal_state["env_curriculum_coeff"] =  jnp.clip(new_state.internal_state["env_curriculum_coeff"] + new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
+        if self.env_curriculum_enabled:
+            new_state.internal_state["env_curriculum_coeff"] =  jnp.clip(new_state.internal_state["env_curriculum_coeff"] + new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.update_curriculum(

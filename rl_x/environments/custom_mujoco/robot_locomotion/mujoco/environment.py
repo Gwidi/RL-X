@@ -144,6 +144,7 @@ class LocomotionEnv(gym.Env):
 
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
+        self.env_curriculum_enabled = env_config.get("env_curriculum_enabled", True)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
 
@@ -184,11 +185,12 @@ class LocomotionEnv(gym.Env):
         eval_mode = False
         max_command_velocity = np.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity)
         max_command_velocities = max_command_velocity * np.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
+        env_curriculum_coeff = np.where(eval_mode or not self.env_curriculum_enabled, 1.0, 0.0)
         self.internal_state = {
             "mj_model": deepcopy(self.initial_mj_model),
             "data": mujoco.MjData(self.initial_mj_model),
             "in_eval_mode": eval_mode,
-            "env_curriculum_coeff": np.where(eval_mode, 1.0, 0.0),
+            "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
             "actuator_joint_nominal_positions": self.initial_qpos[self.actuator_joint_mask_qpos],
             "actuator_joint_max_velocities": self.actuator_joint_max_velocities,
@@ -206,7 +208,7 @@ class LocomotionEnv(gym.Env):
             "info": {
                 "rollout/episode_return": 0.0,
                 "rollout/episode_length": 0,
-                "env_curriculum/coefficient": np.where(eval_mode, 1.0, 0.0),
+                "env_curriculum/coefficient": env_curriculum_coeff,
             },
             "info_episode_store": {
                 "episode_return": 0.0,
@@ -306,7 +308,8 @@ class LocomotionEnv(gym.Env):
                 -1
             )
         )
-        self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
+        if self.env_curriculum_enabled:
+            self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.update_curriculum(
