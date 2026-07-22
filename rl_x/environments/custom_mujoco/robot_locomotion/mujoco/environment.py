@@ -64,8 +64,8 @@ class LocomotionEnv(gym.Env):
             trunk = xml_handle.find("body", "trunk")
             trunk.add("body", name="dir_arrow", pos="0 0 0.15")
             dir_vec = xml_handle.find("body", "dir_arrow")
-            dir_vec.add("site", name="dir_arrow_ball", type="sphere", size=".02", pos="-.1 0 0")
-            dir_vec.add("site", name="dir_arrow", type="cylinder", size=".01", fromto="0 0 -.1 0 0 .1")
+            dir_vec.add("site", name="dir_arrow_ball", type="sphere", size=".02", pos="-.1 0 0", group="0", rgba="0 1 0 1")
+            dir_vec.add("site", name="dir_arrow", type="cylinder", size=".01", fromto="0 0 -.1 0 0 .1", group="0", rgba="0 1 0 1")
         
         self.initial_mj_model = mujoco.MjModel.from_xml_string(xml=xml_handle.to_xml_string(), assets=xml_handle.get_assets())
         self.initial_mj_model.opt.timestep = env_config["timestep"]

@@ -115,7 +115,9 @@ class DefaultDRSeenRobotFunction:
         default_scaling_factor = self.default_scaling_factor * avg_body_size_factor
 
         coupled_masses = default_masses * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.coupled_mass_inertia_factor, high=self.coupled_mass_inertia_factor, size=self.default_masses.shape))
-        coupled_inertias = default_inertias * (np.reshape(coupled_masses / default_masses, (-1, 1)))
+        mass_ratios = np.ones_like(default_masses)
+        np.divide(coupled_masses, default_masses, out=mass_ratios, where=default_masses != 0.0)
+        coupled_inertias = default_inertias * mass_ratios.reshape(-1, 1)
         seen_body_masses = coupled_masses * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.decoupled_mass_inertia_factor, high=self.decoupled_mass_inertia_factor, size=coupled_masses.shape))
         seen_inertias = coupled_inertias * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.decoupled_mass_inertia_factor, high=self.decoupled_mass_inertia_factor, size=coupled_inertias.shape))
         masses = seen_body_masses * self.env.internal_state["mass_inertia_noise_factors"]
