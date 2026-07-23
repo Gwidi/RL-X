@@ -21,14 +21,6 @@ class HFieldBunkerRuinsUnboundedTerrainGeneration(HFieldBunkerRuinsTerrainGenera
         self.initial_difficulty = terrain_config.get("curriculum_initial_difficulty", 0.0)
         self.eval_difficulty = terrain_config.get("curriculum_eval_difficulty", 1.0)
         self.curriculum_step_scale = terrain_config.get("curriculum_step_scale", 1.0)
-        self.curriculum_nr_levels = terrain_config.get(
-            "curriculum_nr_levels",
-            self.env.env_curriculum_nr_levels,
-        )
-        self.curriculum_level_success_episode_return = terrain_config.get(
-            "curriculum_level_success_episode_return",
-            self.env.env_curriculum_level_success_episode_return,
-        )
 
         if self.initial_difficulty < 0.0:
             raise ValueError("terrain.curriculum_initial_difficulty must be non-negative.")
@@ -36,57 +28,31 @@ class HFieldBunkerRuinsUnboundedTerrainGeneration(HFieldBunkerRuinsTerrainGenera
             raise ValueError("terrain.curriculum_eval_difficulty must be non-negative.")
         if self.curriculum_step_scale <= 0.0:
             raise ValueError("terrain.curriculum_step_scale must be positive.")
-        if self.curriculum_nr_levels <= 0:
-            raise ValueError("terrain.curriculum_nr_levels must be positive.")
 
     def init(self):
         super().init()
 
-        self.env.internal_state["terrain_curriculum_coeff"] = self.initial_difficulty
-        self.env.internal_state["terrain_curriculum_applied_coeff"] = self.get_difficulty()
-        self.env.internal_state["terrain_curriculum_levels_in_a_row"] = 0.0
-        self.env.internal_state["terrain_curriculum_completed_episodes"] = 0.0
-        self.env.internal_state["terrain_curriculum_successful_episodes"] = 0.0
-        self.env.internal_state["terrain_curriculum_success_rate"] = 0.0
-        self.env.internal_state["terrain_curriculum_last_episode_success"] = 0.0
+        difficulty = (
+            self.eval_difficulty
+            if self.env.internal_state["in_eval_mode"]
+            else self.initial_difficulty
+        )
+        self.env.internal_state["terrain_curriculum_coeff"] = difficulty
+        self.env.internal_state["terrain_curriculum_applied_coeff"] = difficulty
         self.env.internal_state["terrain_max_obstacle_height"] = 0.0
         self.env.internal_state["terrain_max_slope_height"] = 0.0
         self.env.internal_state["terrain_roughness_height"] = 0.0
 
-    def get_difficulty(self):
-        if self.env.internal_state["in_eval_mode"]:
-            return self.eval_difficulty
-        return self.env.internal_state["terrain_curriculum_coeff"]
-
-    def update_curriculum(self, episode_return, episode_completed):
-        if self.env.internal_state["in_eval_mode"] or not episode_completed:
-            return
-
-        episode_success = episode_return >= self.curriculum_level_success_episode_return
-        levels_in_a_row = self.env.internal_state["terrain_curriculum_levels_in_a_row"]
-        if episode_success:
-            levels_in_a_row = levels_in_a_row + 1 if levels_in_a_row >= 0 else 1
-        else:
-            levels_in_a_row = levels_in_a_row - 1 if levels_in_a_row < 0 else -1
-
-        self.env.internal_state["terrain_curriculum_levels_in_a_row"] = levels_in_a_row
-        self.env.internal_state["terrain_curriculum_coeff"] = max(
+    def update_curriculum(self, curriculum_delta):
+        next_difficulty = max(
             self.env.internal_state["terrain_curriculum_coeff"]
-            + self.curriculum_step_scale
-            * levels_in_a_row
-            / self.curriculum_nr_levels,
+            + self.curriculum_step_scale * curriculum_delta,
             0.0,
         )
-        self.env.internal_state["terrain_curriculum_completed_episodes"] += 1.0
-        self.env.internal_state["terrain_curriculum_successful_episodes"] += float(
-            episode_success
-        )
-        self.env.internal_state["terrain_curriculum_success_rate"] = (
-            self.env.internal_state["terrain_curriculum_successful_episodes"]
-            / self.env.internal_state["terrain_curriculum_completed_episodes"]
-        )
-        self.env.internal_state["terrain_curriculum_last_episode_success"] = float(
-            episode_success
+        self.env.internal_state["terrain_curriculum_coeff"] = (
+            self.eval_difficulty
+            if self.env.internal_state["in_eval_mode"]
+            else next_difficulty
         )
 
     def add_curriculum_info(self):
@@ -94,19 +60,9 @@ class HFieldBunkerRuinsUnboundedTerrainGeneration(HFieldBunkerRuinsTerrainGenera
         info["terrain_curriculum/applied_difficulty"] = self.env.internal_state[
             "terrain_curriculum_applied_coeff"
         ]
-        info["terrain_curriculum/next_difficulty"] = self.get_difficulty()
-        info["terrain_curriculum/levels_in_a_row"] = self.env.internal_state[
-            "terrain_curriculum_levels_in_a_row"
+        info["terrain_curriculum/next_difficulty"] = self.env.internal_state[
+            "terrain_curriculum_coeff"
         ]
-        info["terrain_curriculum/success_rate"] = self.env.internal_state[
-            "terrain_curriculum_success_rate"
-        ]
-        info["terrain_curriculum/last_episode_success"] = self.env.internal_state[
-            "terrain_curriculum_last_episode_success"
-        ]
-        info["terrain_curriculum/success_episode_return"] = (
-            self.curriculum_level_success_episode_return
-        )
         info["terrain_curriculum/max_obstacle_height"] = self.env.internal_state[
             "terrain_max_obstacle_height"
         ]
@@ -118,7 +74,7 @@ class HFieldBunkerRuinsUnboundedTerrainGeneration(HFieldBunkerRuinsTerrainGenera
         ]
 
     def sample(self):
-        difficulty = max(self.get_difficulty(), 0.0)
+        difficulty = max(self.env.internal_state["terrain_curriculum_coeff"], 0.0)
         self.env.internal_state["terrain_curriculum_applied_coeff"] = difficulty
 
         max_obstacle_height = (

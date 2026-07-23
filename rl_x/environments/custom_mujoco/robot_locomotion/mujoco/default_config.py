@@ -176,9 +176,7 @@ def get_config(environment_name):
             # hfield_bunker_ruins at env_curriculum_coeff == 1.0.
             "curriculum_initial_difficulty": 2.0,
             "curriculum_eval_difficulty": 1.0,
-            "curriculum_step_scale": 1.0,
-            "curriculum_nr_levels": 100,
-            "curriculum_level_success_episode_return": 8.0
+            "curriculum_step_scale": 1.0
         },
         "add_goal_arrow": False,
         "timestep": 0.005,

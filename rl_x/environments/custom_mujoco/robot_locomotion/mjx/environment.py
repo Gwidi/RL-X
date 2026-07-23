@@ -413,15 +413,8 @@ class LocomotionEnv:
             new_state.internal_state["env_curriculum_coeff"] =  jnp.clip(new_state.internal_state["env_curriculum_coeff"] + new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
-            self.terrain_function.update_curriculum(
-                new_state.internal_state,
-                episode_return=new_state.info_episode_store["episode_return"],
-                episode_completed=episode_completed,
-            )
-            self.terrain_function.add_curriculum_info(
-                new_state.internal_state,
-                new_state.info,
-            )
+            curriculum_delta = new_state.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels
+            self.terrain_function.update_curriculum(new_state.internal_state, curriculum_delta)
 
         new_state.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(data.site_xmat[self.imu_site_id].reshape(3, 3))
         new_state.internal_state["imu_orientation_rotation_inverse"] = new_state.internal_state["imu_orientation_rotation"].inv()
