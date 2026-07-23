@@ -148,8 +148,14 @@ class LocomotionEnv(gym.Env):
         self.env_curriculum_disabled_coeff = env_config.get("env_curriculum_disabled_coeff", 0.99)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
+        self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
+        self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
             raise ValueError("env_curriculum_disabled_coeff must be between 0.0 and 1.0.")
+        if self.env_curriculum_successes_per_level < 1:
+            raise ValueError("env_curriculum_successes_per_level must be at least 1.")
+        if self.env_curriculum_failures_per_level < 1:
+            raise ValueError("env_curriculum_failures_per_level must be at least 1.")
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -196,6 +202,8 @@ class LocomotionEnv(gym.Env):
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
+            "env_curriculum_successes_at_level": 0.0,
+            "env_curriculum_failures_at_level": 0.0,
             "actuator_joint_nominal_positions": self.initial_qpos[self.actuator_joint_mask_qpos],
             "actuator_joint_max_velocities": self.actuator_joint_max_velocities,
             "goal_velocities": np.array([0.0, 0.0, 0.0]),
@@ -301,22 +309,51 @@ class LocomotionEnv(gym.Env):
         self.internal_state["data"].ctrl = np.zeros(self.nr_actuator_joints)
         mujoco.mj_forward(self.internal_state["mj_model"], self.internal_state["data"])
 
+        episode_completed = self.internal_state["info_episode_store"]["episode_step"] > 0
         episode_success = self.internal_state["info_episode_store"]["episode_return"] >= self.env_curriculum_level_success_episode_return
-        self.internal_state["env_curriculum_levels_in_a_row"] = np.where(episode_success,
-            np.where(self.internal_state["env_curriculum_levels_in_a_row"] >= 0,
-                self.internal_state["env_curriculum_levels_in_a_row"] + 1,
-                1
+        successes_at_level = np.where(
+            episode_completed and episode_success,
+            self.internal_state["env_curriculum_successes_at_level"] + 1,
+            np.where(
+                episode_completed,
+                0,
+                self.internal_state["env_curriculum_successes_at_level"],
             ),
-            np.where(self.internal_state["env_curriculum_levels_in_a_row"] < 0,
-                self.internal_state["env_curriculum_levels_in_a_row"] - 1,
-                -1
-            )
         )
+        level_success = successes_at_level >= self.env_curriculum_successes_per_level
+        failures_at_level = np.where(
+            episode_completed and not episode_success,
+            self.internal_state["env_curriculum_failures_at_level"] + 1,
+            np.where(
+                episode_completed,
+                0,
+                self.internal_state["env_curriculum_failures_at_level"],
+            ),
+        )
+        level_failure = failures_at_level >= self.env_curriculum_failures_per_level
+        previous_levels_in_a_row = self.internal_state["env_curriculum_levels_in_a_row"]
+        levels_in_a_row = np.where(
+            level_success,
+            np.where(previous_levels_in_a_row >= 0, previous_levels_in_a_row + 1, 1),
+            np.where(
+                level_failure,
+                np.where(previous_levels_in_a_row < 0, previous_levels_in_a_row - 1, -1),
+                previous_levels_in_a_row,
+            ),
+        )
+        curriculum_level_delta = np.where(
+            level_success or level_failure,
+            levels_in_a_row,
+            0,
+        )
+        self.internal_state["env_curriculum_successes_at_level"] = np.where(level_success, 0, successes_at_level)
+        self.internal_state["env_curriculum_failures_at_level"] = np.where(level_failure, 0, failures_at_level)
+        self.internal_state["env_curriculum_levels_in_a_row"] = levels_in_a_row
         if self.env_curriculum_enabled:
-            self.internal_state["env_curriculum_coeff"] =  np.clip(self.internal_state["env_curriculum_coeff"] + self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels, 0.0, 1.0)
+            self.internal_state["env_curriculum_coeff"] = np.clip(self.internal_state["env_curriculum_coeff"] + curriculum_level_delta / self.env_curriculum_nr_levels, 0.0, 1.0)
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
-            curriculum_delta = self.internal_state["env_curriculum_levels_in_a_row"] / self.env_curriculum_nr_levels
+            curriculum_delta = curriculum_level_delta / self.env_curriculum_nr_levels
             self.terrain_function.update_curriculum(curriculum_delta)
         
         self.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(self.internal_state["data"].site_xmat[self.imu_site_id].reshape(3, 3))
