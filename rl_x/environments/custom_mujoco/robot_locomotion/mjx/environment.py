@@ -164,6 +164,7 @@ class LocomotionEnv:
         self.env_curriculum_disabled_coeff = env_config.get("env_curriculum_disabled_coeff", 0.99)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
+        self.env_curriculum_level_failure_episode_return = env_config.get("env_curriculum_level_failure_episode_return", 10.0)
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
@@ -387,13 +388,19 @@ class LocomotionEnv:
 
         new_state = state
 
-        episode_success = new_state.info_episode_store["episode_return"] >= self.env_curriculum_level_success_episode_return
+        episode_return = new_state.info_episode_store["episode_return"]
+        episode_success = episode_return >= self.env_curriculum_level_success_episode_return
         if self.env_curriculum_require_full_episode:
             episode_success &= (
                 (new_state.info_episode_store["episode_step"] >= self.horizon)
                 & ~new_state.terminated
             )
         episode_completed = new_state.info_episode_store["episode_step"] > 0
+        episode_failure = (
+            episode_completed
+            & ~episode_success
+            & (episode_return < self.env_curriculum_level_failure_episode_return)
+        )
         new_state.internal_state["env_curriculum_completed_episodes"] += episode_completed.astype(jnp.float32)
         new_state.internal_state["env_curriculum_successful_episodes"] += (
             episode_completed & episode_success
@@ -418,7 +425,7 @@ class LocomotionEnv:
         )
         level_success = successes_at_level >= self.env_curriculum_successes_per_level
         failures_at_level = jnp.where(
-            episode_completed & ~episode_success,
+            episode_failure,
             new_state.internal_state["env_curriculum_failures_at_level"] + 1,
             jnp.where(
                 episode_completed,

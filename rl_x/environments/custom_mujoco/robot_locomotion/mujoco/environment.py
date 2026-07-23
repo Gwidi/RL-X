@@ -148,6 +148,7 @@ class LocomotionEnv(gym.Env):
         self.env_curriculum_disabled_coeff = env_config.get("env_curriculum_disabled_coeff", 0.99)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
+        self.env_curriculum_level_failure_episode_return = env_config.get("env_curriculum_level_failure_episode_return", 10.0)
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
@@ -310,7 +311,13 @@ class LocomotionEnv(gym.Env):
         mujoco.mj_forward(self.internal_state["mj_model"], self.internal_state["data"])
 
         episode_completed = self.internal_state["info_episode_store"]["episode_step"] > 0
-        episode_success = self.internal_state["info_episode_store"]["episode_return"] >= self.env_curriculum_level_success_episode_return
+        episode_return = self.internal_state["info_episode_store"]["episode_return"]
+        episode_success = episode_return >= self.env_curriculum_level_success_episode_return
+        episode_failure = (
+            episode_completed
+            and not episode_success
+            and episode_return < self.env_curriculum_level_failure_episode_return
+        )
         successes_at_level = np.where(
             episode_completed and episode_success,
             self.internal_state["env_curriculum_successes_at_level"] + 1,
@@ -322,7 +329,7 @@ class LocomotionEnv(gym.Env):
         )
         level_success = successes_at_level >= self.env_curriculum_successes_per_level
         failures_at_level = np.where(
-            episode_completed and not episode_success,
+            episode_failure,
             self.internal_state["env_curriculum_failures_at_level"] + 1,
             np.where(
                 episode_completed,
