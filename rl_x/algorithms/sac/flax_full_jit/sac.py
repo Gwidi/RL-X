@@ -20,6 +20,7 @@ from rl_x.algorithms.sac.flax_full_jit.policy import get_policy
 from rl_x.algorithms.sac.flax_full_jit.critic import get_critic
 from rl_x.algorithms.sac.flax_full_jit.entropy_coefficient import EntropyCoefficient
 from rl_x.algorithms.sac.flax_full_jit.rl_train_state import RLTrainState
+from rl_x.algorithms.flax_full_jit_logging import aggregate_metrics
 
 rlx_logger = logging.getLogger("rl_x")
 
@@ -304,13 +305,11 @@ class SAC:
                     learning_iteration_carry, info_and_optimization_metrics = jax.lax.scan(learning_iteration, (policy_state, critic_state, entropy_coefficient_state, replay_buffer, env_state, subkey), jnp.arange(self.nr_updates_per_logging_iteration))
                     policy_state, critic_state, entropy_coefficient_state, replay_buffer, env_state, key = learning_iteration_carry
                     infos, optimization_metrics = info_and_optimization_metrics
-                    infos = {key: jnp.mean(infos[key]) for key in infos}
                     optimization_metrics = {key: jnp.mean(optimization_metrics[key]) for key in optimization_metrics}
 
 
                     # Logging
-                    combined_metrics = {**infos, **optimization_metrics}
-                    combined_metrics = tree.map_structure(lambda x: jnp.mean(x), combined_metrics)
+                    combined_metrics = aggregate_metrics(infos, optimization_metrics)
 
                     def callback(carry):
                         metrics, logging_iteration_step, nr_update_iteration, parallel_seed_id = carry

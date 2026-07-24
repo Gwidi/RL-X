@@ -17,6 +17,7 @@ import wandb
 from rl_x.algorithms.ppo_transformer.flax_full_jit.general_properties import GeneralProperties
 from rl_x.algorithms.ppo_transformer.flax_full_jit.policy import get_policy
 from rl_x.algorithms.ppo_transformer.flax_full_jit.critic import get_critic
+from rl_x.algorithms.flax_full_jit_logging import aggregate_metrics
 
 rlx_logger = logging.getLogger("rl_x")
 
@@ -278,8 +279,7 @@ class PPO_Transformer:
 
 
                     # Logging
-                    combined_metrics = {**infos, **optimization_metrics}
-                    combined_metrics = tree.map_structure(lambda x: jnp.mean(x), combined_metrics)
+                    combined_metrics = aggregate_metrics(infos, optimization_metrics)
 
                     def callback(carry):
                         metrics, learning_iteration_step, combined_learning_iteration_step, parallel_seed_id = carry
