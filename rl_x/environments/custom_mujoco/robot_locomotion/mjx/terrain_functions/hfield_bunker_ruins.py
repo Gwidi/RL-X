@@ -10,6 +10,11 @@ class HFieldBunkerRuinsTerrainGeneration:
         self.random_height_max_per_m_factor = terrain_config["random_height_max_per_m_factor"]
         self.block_height_max_per_m_factor = terrain_config["block_height_max_per_m_factor"]
         self.block_slope_height_max_per_m_factor = terrain_config.get("block_slope_height_max_per_m_factor", self.block_height_max_per_m_factor)
+        self.noise_reference_resolution = int(
+            terrain_config.get("noise_reference_resolution", 80)
+        )
+        if self.noise_reference_resolution < 2:
+            raise ValueError("terrain.noise_reference_resolution must be at least 2.")
 
         hfield_size = self.env.initial_mjx_model.hfield_size[0]
         if hfield_size[0] != hfield_size[1]:
@@ -22,6 +27,69 @@ class HFieldBunkerRuinsTerrainGeneration:
         self.one_meter_length = int(self.hfield_length / (self.hfield_half_length_in_meters * 2))
         self.hfield_half_length = self.hfield_length // 2
         self.mujoco_height_scaling = self.max_possible_height
+        self.noise_reference_one_meter_length = max(
+            1,
+            int(
+                self.noise_reference_resolution
+                / (self.hfield_half_length_in_meters * 2)
+            ),
+        )
+
+
+    def _sample_repeated_reference_noise(
+        self,
+        key,
+        noise_height,
+        cell_size,
+    ):
+        """Samples block noise on the legacy-resolution heightfield grid."""
+        cell_size = min(
+            self.noise_reference_resolution,
+            max(1, cell_size),
+        )
+        coarse_length = max(
+            1,
+            self.noise_reference_resolution // cell_size,
+        )
+        noise = jax.random.uniform(
+            key,
+            shape=(coarse_length, coarse_length),
+            minval=-noise_height,
+            maxval=noise_height,
+        )
+        noise = jnp.repeat(
+            jnp.repeat(noise, cell_size, axis=0),
+            cell_size,
+            axis=1,
+        )
+
+        pad_y = self.noise_reference_resolution - noise.shape[0]
+        pad_x = self.noise_reference_resolution - noise.shape[1]
+        return jnp.pad(noise, ((0, pad_y), (0, pad_x)), mode="edge")
+
+
+    def _resize_reference_noise(self, noise):
+        """Linearly resamples reference noise while aligning terrain edges."""
+        if self.hfield_length == self.noise_reference_resolution:
+            return noise
+
+        source_positions = jnp.linspace(
+            0.0,
+            noise.shape[0] - 1,
+            self.hfield_length,
+        )
+        lower = jnp.floor(source_positions).astype(jnp.int32)
+        upper = jnp.minimum(lower + 1, noise.shape[0] - 1)
+        weight = source_positions - lower
+
+        resized_x = (
+            noise[:, lower] * (1.0 - weight)[None, :]
+            + noise[:, upper] * weight[None, :]
+        )
+        return (
+            resized_x[lower, :] * (1.0 - weight)[:, None]
+            + resized_x[upper, :] * weight[:, None]
+        )
 
 
     def init(self, internal_state):
@@ -189,30 +257,31 @@ class HFieldBunkerRuinsTerrainGeneration:
         # 3. MICRO-UNEVENNESS LAYER: Hard rubble and stones
         # ---------------------------------------------------------------------
         def add_fractal_rubble(terr, noise_k):
-            # Instead of smooth noise, we create discrete, rough stones (Fractal-like noise)
             k1, k2 = jax.random.split(noise_k)
-            
-            # Large stones
-            c_size_1 = max(1, int(0.2 * self.one_meter_length))
-            noise_1 = jax.random.uniform(k1, shape=(self.hfield_length // c_size_1, self.hfield_length // c_size_1), minval=-noise_height, maxval=noise_height)
-            noise_1 = jnp.repeat(jnp.repeat(noise_1, c_size_1, axis=0), c_size_1, axis=1)
-            
-            # Medium stones (gravel)
-            c_size_2 = max(1, int(0.05 * self.one_meter_length))
-            noise_2 = jax.random.uniform(k2, shape=(self.hfield_length // c_size_2, self.hfield_length // c_size_2), minval=-noise_height*0.5, maxval=noise_height*0.5)
-            noise_2 = jnp.repeat(jnp.repeat(noise_2, c_size_2, axis=0), c_size_2, axis=1)
 
-            # Size matching (Padding, if division with remainder cut off pixels)
-            pad_y = self.hfield_length - noise_1.shape[0]
-            pad_x = self.hfield_length - noise_1.shape[1]
-            noise_1 = jnp.pad(noise_1, ((0, pad_y), (0, pad_x)), mode='edge')
-            
-            pad_y = self.hfield_length - noise_2.shape[0]
-            pad_x = self.hfield_length - noise_2.shape[1]
-            noise_2 = jnp.pad(noise_2, ((0, pad_y), (0, pad_x)), mode='edge')
-
-            # Noise applied as absolute values so rubble protrudes outside concrete blocks
-            return terr + jnp.abs(noise_1) + jnp.abs(noise_2)
+            # Keep the physical sharpness of the original 80x80 terrain.
+            # Obstacles are generated at the target resolution, while roughness
+            # is sampled on the legacy grid and linearly interpolated.
+            large_cell_size = max(
+                1,
+                int(0.2 * self.noise_reference_one_meter_length),
+            )
+            medium_cell_size = max(
+                1,
+                int(0.05 * self.noise_reference_one_meter_length),
+            )
+            noise_1 = self._sample_repeated_reference_noise(
+                k1,
+                noise_height,
+                large_cell_size,
+            )
+            noise_2 = self._sample_repeated_reference_noise(
+                k2,
+                noise_height * 0.5,
+                medium_cell_size,
+            )
+            reference_noise = jnp.abs(noise_1) + jnp.abs(noise_2)
+            return terr + self._resize_reference_noise(reference_noise)
 
         terrain_key, noise_key = jax.random.split(keys[0])
         

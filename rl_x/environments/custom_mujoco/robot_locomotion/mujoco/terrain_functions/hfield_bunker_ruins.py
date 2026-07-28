@@ -9,6 +9,11 @@ class HFieldBunkerRuinsTerrainGeneration:
         self.random_height_max_per_m_factor = terrain_config["random_height_max_per_m_factor"]
         self.block_height_max_per_m_factor = terrain_config["block_height_max_per_m_factor"]
         self.block_slope_height_max_per_m_factor = terrain_config.get("block_slope_height_max_per_m_factor", self.block_height_max_per_m_factor)
+        self.noise_reference_resolution = int(
+            terrain_config.get("noise_reference_resolution", 80)
+        )
+        if self.noise_reference_resolution < 2:
+            raise ValueError("terrain.noise_reference_resolution must be at least 2.")
 
         hfield_size = self.env.initial_mj_model.hfield_size[0]
         if hfield_size[0] != hfield_size[1]:
@@ -21,6 +26,71 @@ class HFieldBunkerRuinsTerrainGeneration:
         self.one_meter_length = int(self.hfield_length / (self.hfield_half_length_in_meters * 2))
         self.hfield_half_length = self.hfield_length // 2
         self.mujoco_height_scaling = self.max_possible_height
+        self.noise_reference_one_meter_length = max(
+            1,
+            int(
+                self.noise_reference_resolution
+                / (self.hfield_half_length_in_meters * 2)
+            ),
+        )
+
+
+    def _sample_repeated_reference_noise(
+        self,
+        noise_height,
+        cell_size,
+    ):
+        """Samples block noise on the legacy-resolution heightfield grid."""
+        cell_size = min(
+            self.noise_reference_resolution,
+            max(1, cell_size),
+        )
+        coarse_length = max(
+            1,
+            self.noise_reference_resolution // cell_size,
+        )
+        noise = self.rng().uniform(
+            low=-noise_height,
+            high=noise_height,
+            size=(coarse_length, coarse_length),
+        )
+        noise = np.repeat(
+            np.repeat(noise, cell_size, axis=0),
+            cell_size,
+            axis=1,
+        )
+
+        pad_y = self.noise_reference_resolution - noise.shape[0]
+        pad_x = self.noise_reference_resolution - noise.shape[1]
+        return np.pad(noise, ((0, pad_y), (0, pad_x)), mode="edge")
+
+
+    def _resize_reference_noise(self, noise):
+        """Linearly resamples reference noise while aligning terrain edges."""
+        if self.hfield_length == self.noise_reference_resolution:
+            return noise
+
+        source_positions = np.linspace(
+            0.0,
+            noise.shape[0] - 1,
+            self.hfield_length,
+        )
+        lower = np.floor(source_positions).astype(np.int32)
+        upper = np.minimum(lower + 1, noise.shape[0] - 1)
+        weight = source_positions - lower
+
+        resized_x = (
+            noise[:, lower] * (1.0 - weight)[None, :]
+            + noise[:, upper] * weight[None, :]
+        )
+        return (
+            resized_x[lower, :] * (1.0 - weight)[:, None]
+            + resized_x[upper, :] * weight[:, None]
+        )
+
+
+    def rng(self):
+        return self.env.get_terrain_rng()
 
 
     def init(self):
@@ -80,7 +150,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         max_obstacle_height = curriculum_coeff * self.env.internal_state["robot_dimensions_mean"] * self.block_height_max_per_m_factor
         max_slope_height = curriculum_coeff * self.env.internal_state["robot_dimensions_mean"] * self.block_slope_height_max_per_m_factor
 
-        noise_height = curriculum_coeff * self.env.np_rng.uniform(
+        noise_height = curriculum_coeff * self.rng().uniform(
             low=0.0,
             high=self.env.internal_state["robot_dimensions_mean"] * self.random_height_max_per_m_factor,
         )
@@ -128,23 +198,23 @@ class HFieldBunkerRuinsTerrainGeneration:
         # 2. RUBBLE LAYER: Concrete slabs rotated at various angles (YAW)
         # ---------------------------------------------------------------------
         # Randomize positions (Block centers)
-        cx = self.env.np_rng.uniform(low=0, high=self.hfield_length, size=(num_blocks, 1, 1))
-        cy = self.env.np_rng.uniform(low=0, high=self.hfield_length, size=(num_blocks, 1, 1))
+        cx = self.rng().uniform(low=0, high=self.hfield_length, size=(num_blocks, 1, 1))
+        cy = self.rng().uniform(low=0, high=self.hfield_length, size=(num_blocks, 1, 1))
         
         # Randomize slab dimensions
-        w_px = self.env.np_rng.uniform(low=min_block_size_px, high=max_block_size_px, size=(num_blocks, 1, 1))
-        l_px = self.env.np_rng.uniform(low=min_block_size_px, high=max_block_size_px, size=(num_blocks, 1, 1))
+        w_px = self.rng().uniform(low=min_block_size_px, high=max_block_size_px, size=(num_blocks, 1, 1))
+        l_px = self.rng().uniform(low=min_block_size_px, high=max_block_size_px, size=(num_blocks, 1, 1))
         
         # NEW: Randomize rotation around Z-axis (Yaw)
-        yaw = self.env.np_rng.uniform(low=0.0, high=2 * np.pi, size=(num_blocks, 1, 1))
+        yaw = self.rng().uniform(low=0.0, high=2 * np.pi, size=(num_blocks, 1, 1))
         cos_yaw = np.cos(yaw)
         sin_yaw = np.sin(yaw)
 
         # Randomize base height and slab inclination (Pitch/Roll)
         min_obstacle_height = 0.2 * max_obstacle_height
-        block_base_z = self.env.np_rng.uniform(low=min_obstacle_height, high=max_obstacle_height, size=(num_blocks, 1, 1))
-        slope_x = self.env.np_rng.uniform(low=-0.8, high=0.8, size=(num_blocks, 1, 1)) * max_slope_height / self.one_meter_length
-        slope_y = self.env.np_rng.uniform(low=-0.8, high=0.8, size=(num_blocks, 1, 1)) * max_slope_height / self.one_meter_length
+        block_base_z = self.rng().uniform(low=min_obstacle_height, high=max_obstacle_height, size=(num_blocks, 1, 1))
+        slope_x = self.rng().uniform(low=-0.8, high=0.8, size=(num_blocks, 1, 1)) * max_slope_height / self.one_meter_length
+        slope_y = self.rng().uniform(low=-0.8, high=0.8, size=(num_blocks, 1, 1)) * max_slope_height / self.one_meter_length
 
         # Distance vectors of each map pixel from the center of each block
         dx = x_idx[None, :, :] - cx
@@ -173,29 +243,27 @@ class HFieldBunkerRuinsTerrainGeneration:
         # 3. MICRO-UNEVENNESS LAYER: Hard rubble and stones
         # ---------------------------------------------------------------------
         def add_fractal_rubble(terr):
-            # Instead of smooth noise, we create discrete, rough stones (Fractal-like noise)
-            
-            # Large stones
-            c_size_1 = max(1, int(0.2 * self.one_meter_length))
-            noise_1 = self.env.np_rng.uniform(low=-noise_height, high=noise_height, size=(self.hfield_length // c_size_1, self.hfield_length // c_size_1))
-            noise_1 = np.repeat(np.repeat(noise_1, c_size_1, axis=0), c_size_1, axis=1)
-            
-            # Medium stones (gravel)
-            c_size_2 = max(1, int(0.05 * self.one_meter_length))
-            noise_2 = self.env.np_rng.uniform(low=-noise_height*0.5, high=noise_height*0.5, size=(self.hfield_length // c_size_2, self.hfield_length // c_size_2))
-            noise_2 = np.repeat(np.repeat(noise_2, c_size_2, axis=0), c_size_2, axis=1)
-
-            # Size matching (Padding, if division with remainder cut off pixels)
-            pad_y = self.hfield_length - noise_1.shape[0]
-            pad_x = self.hfield_length - noise_1.shape[1]
-            noise_1 = np.pad(noise_1, ((0, pad_y), (0, pad_x)), mode='edge')
-            
-            pad_y = self.hfield_length - noise_2.shape[0]
-            pad_x = self.hfield_length - noise_2.shape[1]
-            noise_2 = np.pad(noise_2, ((0, pad_y), (0, pad_x)), mode='edge')
-
-            # Noise applied as absolute values so rubble protrudes outside concrete blocks
-            return terr + np.abs(noise_1) + np.abs(noise_2)
+            # Keep the physical sharpness of the original 80x80 terrain.
+            # Obstacles are generated at the target resolution, while roughness
+            # is sampled on the legacy grid and linearly interpolated.
+            large_cell_size = max(
+                1,
+                int(0.2 * self.noise_reference_one_meter_length),
+            )
+            medium_cell_size = max(
+                1,
+                int(0.05 * self.noise_reference_one_meter_length),
+            )
+            noise_1 = self._sample_repeated_reference_noise(
+                noise_height,
+                large_cell_size,
+            )
+            noise_2 = self._sample_repeated_reference_noise(
+                noise_height * 0.5,
+                medium_cell_size,
+            )
+            reference_noise = np.abs(noise_1) + np.abs(noise_2)
+            return terr + self._resize_reference_noise(reference_noise)
         
         if noise_height > 0:
             terrain = add_fractal_rubble(terrain)
