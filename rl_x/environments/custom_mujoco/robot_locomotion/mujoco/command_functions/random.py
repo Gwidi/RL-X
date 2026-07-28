@@ -20,8 +20,13 @@ class RandomCommands:
 
 
     def get_next_command(self):
-        goal_velocities = self.env.np_rng.uniform(size=(3,), low=-self.env.internal_state["max_command_velocities"], high=self.env.internal_state["max_command_velocities"])
-        goal_velocities = np.where(np.abs(goal_velocities) < (self.zero_clip_threshold_percentage * self.env.internal_state["max_command_velocities"]), 0.0, goal_velocities)
+        max_command_velocities = self.env.internal_state["max_command_velocities"]
+        zero_clip_threshold = self.zero_clip_threshold_percentage * max_command_velocities
+
+        goal_velocities = self.env.np_rng.uniform(size=(3,), low=-max_command_velocities, high=max_command_velocities)
+        resampled_goal_velocities = self.env.np_rng.uniform(size=(3,), low=-max_command_velocities, high=max_command_velocities)
+        goal_velocities = np.where(np.abs(goal_velocities) < zero_clip_threshold, resampled_goal_velocities, goal_velocities)
+        goal_velocities = np.where(np.abs(goal_velocities) < zero_clip_threshold, 0.0, goal_velocities)
         goal_velocities = np.where(self.env.np_rng.binomial(n=1, p=self.all_zero_chance), np.zeros(3), goal_velocities)
         goal_velocities = np.where(self.env.np_rng.uniform(size=(3,)) < self.single_zero_chance, 0.0, goal_velocities)
 
