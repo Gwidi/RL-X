@@ -4,6 +4,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfie
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfield_bunker_ruins import HFieldBunkerRuinsTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfield_bunker_ruins_unbounded import HFieldBunkerRuinsUnboundedTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfield_bunker_stairs import HFieldBunkerStairsTerrainGeneration
+from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.hfield_inverted_pyramid_stairs import HFieldInvertedPyramidStairsTerrainGeneration
 
 
 def get_terrain_function(name, env, **kwargs):
@@ -19,5 +20,7 @@ def get_terrain_function(name, env, **kwargs):
         return HFieldBunkerRuinsUnboundedTerrainGeneration(env, **kwargs)
     elif name == "hfield_bunker_stairs":
         return HFieldBunkerStairsTerrainGeneration(env, **kwargs)
+    elif name == "hfield_inverted_pyramid_stairs":
+        return HFieldInvertedPyramidStairsTerrainGeneration(env, **kwargs)
     else:
         raise NotImplementedError
