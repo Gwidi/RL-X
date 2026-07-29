@@ -190,7 +190,13 @@ def get_config(environment_name):
             "inverted_pyramid_tread_depth_scale_max": 1.35,
             "inverted_pyramid_randomize_tread_depth": True,
             "inverted_pyramid_step_height_m": 0.15,
-            "inverted_pyramid_use_curriculum": True
+            "inverted_pyramid_use_curriculum": True,
+            # Used by hfield_bowl. The center is a flat spawn area and the
+            # height rises quadratically up to the circular rim.
+            "bowl_radius_m": 4.0,
+            "bowl_flat_radius_m": 0.8,
+            "bowl_depth_m": 1.0,
+            "bowl_use_curriculum": True
         },
         "add_goal_arrow": False,
         "timestep": 0.005,
