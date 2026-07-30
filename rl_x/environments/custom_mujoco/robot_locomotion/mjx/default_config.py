@@ -199,6 +199,18 @@ def get_config(environment_name):
             "bowl_flat_radius_m": 0.8,
             "bowl_depth_m": 1.0,
             "bowl_use_curriculum": True,
+            # Used by hfield_truncated_pyramid. The square center is a flat
+            # top, and the sides descend linearly to the surrounding ground.
+            "truncated_pyramid_center_half_width_m": 0.8,
+            "truncated_pyramid_outer_half_width_m": 3.2,
+            "truncated_pyramid_height_m": 0.8,
+            "truncated_pyramid_use_curriculum": True,
+            # Used by hfield_inverted_truncated_pyramid. The square center is
+            # a flat bottom, and the sides rise linearly to an outer plateau.
+            "inverted_truncated_pyramid_center_half_width_m": 0.8,
+            "inverted_truncated_pyramid_outer_half_width_m": 3.2,
+            "inverted_truncated_pyramid_height_m": 0.8,
+            "inverted_truncated_pyramid_use_curriculum": True,
         },
         "add_goal_arrow": False,
         "timestep": 0.005,
