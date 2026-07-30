@@ -209,6 +209,14 @@ def get_config(environment_name):
             "inverted_truncated_pyramid_outer_half_width_m": 3.2,
             "inverted_truncated_pyramid_height_m": 0.8,
             "inverted_truncated_pyramid_use_curriculum": True,
+            # Used by hfield_hurdles. Thin square walls surround the spawn
+            # area, so the robot encounters them in every travel direction.
+            "hurdles_first_wall_distance_m": 1.0,
+            "hurdles_wall_spacing_m": 0.8,
+            "hurdles_wall_count": 4,
+            "hurdles_wall_thickness_m": 0.025,
+            "hurdles_wall_height_m": 0.20,
+            "hurdles_use_curriculum": True,
         },
         "add_goal_arrow": False,
         "timestep": 0.005,
