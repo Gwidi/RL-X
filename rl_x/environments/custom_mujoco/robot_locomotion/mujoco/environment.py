@@ -6,6 +6,7 @@ from dm_control import mjcf
 import pygame
 import numpy as np
 from scipy.spatial.transform import Rotation
+from warp import rint
 
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.box_space import BoxSpace
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.viewer import MujocoViewer

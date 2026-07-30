@@ -15,6 +15,7 @@ class RandomDRInitialState:
         self.joint_velocity_max_factor = env.env_config["domain_randomization"]["initial_state"]["joint_velocity_max_factor"]
         self.trunk_velocity_clip_mass_factor = env.env_config["domain_randomization"]["initial_state"]["trunk_velocity_clip_mass_factor"]
         self.trunk_velocity_clip_limit = env.env_config["domain_randomization"]["initial_state"]["trunk_velocity_clip_limit"]
+        self.initial_height_offset = env.env_config["domain_randomization"]["initial_state"]["initial_height_offset"]
 
 
     def setup(self):
@@ -22,7 +23,7 @@ class RandomDRInitialState:
         pitch_angle = self.env.np_rng.uniform(low=-np.pi * self.pitch_angle_pi_factor, high=np.pi * self.pitch_angle_pi_factor)
         yaw_angle = self.env.np_rng.uniform(low=-np.pi * self.yaw_angle_pi_factor, high=np.pi * self.yaw_angle_pi_factor)
         quaternion = Rotation.from_euler("xyz", self.env.internal_state["env_curriculum_coeff"] * np.array([roll_angle, pitch_angle, yaw_angle])).as_quat(scalar_first=True)
-        
+
         actuator_joint_nominal_position_factor = self.env.internal_state["env_curriculum_coeff"] * self.actuator_joint_nominal_position_factor
         actuator_joint_positions = self.env.internal_state["actuator_joint_nominal_positions"] * self.env.np_rng.uniform(low=1 - actuator_joint_nominal_position_factor, high=1 + actuator_joint_nominal_position_factor, size=self.env.internal_state["actuator_joint_nominal_positions"].size)
         actuator_joint_positions += self.env.internal_state["env_curriculum_coeff"] * self.env.np_rng.uniform(low=-self.actuator_joint_position_offset_to_nominal, high=self.actuator_joint_position_offset_to_nominal, size=self.env.internal_state["actuator_joint_nominal_positions"].size)
@@ -30,12 +31,12 @@ class RandomDRInitialState:
 
         joint_velocity_max_factor = self.env.internal_state["env_curriculum_coeff"] * self.joint_velocity_max_factor
         actuator_joint_velocities = self.env.internal_state["actuator_joint_max_velocities"] * self.env.np_rng.uniform(low=-joint_velocity_max_factor, high=joint_velocity_max_factor, size=self.env.actuator_joint_max_velocities.size)
-        
+
         max_trunk_velocity = np.minimum(np.sum(self.env.internal_state["mj_model"].body_mass) * self.trunk_velocity_clip_mass_factor, self.trunk_velocity_clip_limit)
         linear_velocities = self.env.internal_state["env_curriculum_coeff"] * self.env.np_rng.uniform(low=-max_trunk_velocity, high=max_trunk_velocity, size=(3,))
         angular_velocities = self.env.internal_state["env_curriculum_coeff"] * self.env.np_rng.uniform(low=-max_trunk_velocity, high=max_trunk_velocity, size=(3,))
-        
-        linear_positions = np.array([0.0, 0.0, self.env.internal_state["robot_nominal_qpos_height_over_ground"] + self.env.internal_state["center_height"]])
+
+        linear_positions = np.array([0.0, 0.0, self.env.internal_state["robot_nominal_qpos_height_over_ground"] + self.env.internal_state["center_height"] + self.initial_height_offset])
 
         qpos = self.env.initial_qpos.copy()
         qpos[:3] = linear_positions
@@ -54,7 +55,8 @@ class RandomDRInitialState:
         mujoco.mj_forward(self.env.internal_state["mj_model"], data)
         feet_x_pos = data.geom_xpos[self.env.foot_geom_indices, 0]
         feet_y_pos = data.geom_xpos[self.env.foot_geom_indices, 1]
+        # Only correct if feet are BELOW ground (positive value means feet penetrate ground)
         min_feet_z_pos_under_ground = np.max(self.env.terrain_function.ground_height_at(feet_x_pos, feet_y_pos) - data.geom_xpos[self.env.foot_geom_indices, 2])
-        qpos[2] += min_feet_z_pos_under_ground
-
+        if min_feet_z_pos_under_ground > 0:
+            qpos[2] += min_feet_z_pos_under_ground
         return qpos, qvel

@@ -273,4 +273,5 @@ class DefaultDRSeenRobotFunction:
         feet_x_pos = data.geom_xpos[self.env.foot_geom_indices, 0]
         feet_y_pos = data.geom_xpos[self.env.foot_geom_indices, 1]
         min_feet_z_pos_under_ground = np.max(self.env.terrain_function.ground_height_at(feet_x_pos, feet_y_pos) - data.geom_xpos[self.env.foot_geom_indices, 2])
-        self.env.internal_state["data"].qpos[2] += min_feet_z_pos_under_ground
+        if min_feet_z_pos_under_ground > 0:
+            self.env.internal_state["data"].qpos[2] += min_feet_z_pos_under_ground

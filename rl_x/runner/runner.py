@@ -105,7 +105,7 @@ class Runner:
 
         import gymnasium as gym
         # Silences the box bound precision warning for cartpole
-        gym.logger.set_level(40)
+        gym.logger.min_level = 40
 
         if algorithm_uses_torch:  
             # Avoids warning when TensorFloat32 is available

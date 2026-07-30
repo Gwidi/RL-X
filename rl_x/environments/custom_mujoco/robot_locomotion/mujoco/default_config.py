@@ -42,6 +42,7 @@ def get_config(environment_name):
                 "joint_velocity_max_factor": 0.5,
                 "trunk_velocity_clip_mass_factor": 0.1,
                 "trunk_velocity_clip_limit": 0.5,
+                "initial_height_offset": 10.0,
             },
             "joint_dropout": {
                 "type": "default",
@@ -157,6 +158,64 @@ def get_config(environment_name):
             "foot_z_velocity_coeff": 0.2,
             "foot_velocity_coeff": 0.2,
             "foot_flat_contact_coeff": 0.01,
+        },
+        "reward": {
+            "type": "drop_landing_energy_dissipation",
+
+            # -----------------------------------------------------------------
+            # 1. PARAMETRY SPRZĘTOWE (MAB Robotics HB40 / falowniki MD80 / seria MA-p)
+            # -----------------------------------------------------------------
+            # KT silnika (Nm/A) – służy do estymacji prądu z momentu (I = tau / kt)
+            "motor_kt": 0.1,  
+            # Bezpieczny limit prądu przed spaleniem lub uszkodzeniem zębatek planetarnych
+            "max_safe_current": 40.0,  
+            # Docelowa wysokość nad ziemią PO amortyzacji i zatrzymaniu uderzenia
+            "nominal_landing_height": 0.28,  
+
+            # -----------------------------------------------------------------
+            # 2. KOMPONENTY ENERGETYCZNE I PRĄDOWE (Kluczowe dla spadku z 1m)
+            # -----------------------------------------------------------------
+            # WYSOKA NAGRODA: Zmusza silniki do pracy jako generator w fazie uderzenia
+            # i zrzucania energii do Brake Resistor w PDS
+            "regen_braking_reward_coeff": 5.0,  
+            
+            # BARDZO SUROWA KARA: Ścina piki prądowe przekraczające limit 40A,
+            # chroniąc mechanikę przekładni planetarnej przed udarem
+            "current_spike_penalty_coeff": -0.5,  
+            
+            # Standardowa kara za dodatnią pracę z baterii (w locie i po lądowaniu)
+            "power_draw_penalty_coeff": -0.001,  
+            
+            # Lekka regularyzacja momentu obrotowego (przeciwdziała sztywności)
+            "joint_torque_coeff": -0.0001,  
+
+            # -----------------------------------------------------------------
+            # 3. KOMPONENTY STABILNOŚCI I AMORTYZACJI
+            # -----------------------------------------------------------------
+            # BARDZO WYSOKA KARA: Wymusza krytyczne tłumienie (brak wybijania w górę po kontakcie)
+            "post_impact_bounce_coeff": -15.0,  
+            
+            # Silne trzymanie poziomu tułowia (Roll i Pitch bliskie 0)
+            "roll_pitch_pos_coeff": -10.0,  
+            
+            # Tłumienie rotacji tułowia w locie i podczas uderzenia
+            "roll_pitch_vel_coeff": -0.5,  
+            
+            # Aktywowane dopiero po 250ms od uderzenia – uczy powrotu do postawy stojącej
+            "base_height_coeff": -10.0,  
+            
+            # Nagroda za przetrwanie epizodu (nieprzewrócenie się)
+            "alive_coeff": 1.0,  
+
+            # -----------------------------------------------------------------
+            # 4. REGULARYZACJA AKCJI I BEZPIECZEŃSTWO
+            # -----------------------------------------------------------------
+            # Kary za gwałtowne drgania wyjścia sieci (ochrona przed oscylacjami)
+            "action_rate_coeff": -1.0,  
+            "action_smoothness_coeff": -0.1,  
+            
+            # Kara za uderzenie korpusu / kolan o podłoże
+            "collision_coeff": -5.0,  
         },
         "termination": {
             "type": "below_height",
