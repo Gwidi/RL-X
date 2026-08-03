@@ -44,7 +44,6 @@ class DefaultDRMuJoCoModel:
         geom_solref = geom_solref.at[self.env.foot_geom_indices, 1].set(sampled_dampratio)
 
         sampled_solimp_dmin = jnp.clip(self.default_foot_solimp[:, 0] * (1 + internal_state["env_curriculum_coeff"] * jax.random.uniform(keys[5], minval=-self.foot_solimp_factor, maxval=self.foot_solimp_factor, shape=self.default_foot_solimp[:, 0].shape)), 0.1, self.default_foot_solimp[:, 1])
-        foot_solimp = jnp.clip(foot_solimp * (1 + internal_state["env_curriculum_coeff"] * jax.random.uniform(keys[5], minval=-self.foot_solimp_factor, maxval=self.foot_solimp_factor, shape=self.default_foot_solimp.shape)), jnp.array([0.0, 0.0, 0.0, 0.0, 1.0]), jnp.array([1.0, 1.0, 1.0, 1.0, 6.0]))
         geom_solimp = mjx_model.geom_solimp.at[self.env.foot_geom_indices, 0].set(sampled_solimp_dmin)
 
         opt_impratio = jnp.maximum(self.default_impratio + (internal_state["env_curriculum_coeff"] * jax.random.uniform(keys[6], minval=-self.add_impratio, maxval=self.add_impratio)), 1.0)
