@@ -176,7 +176,6 @@ class EnergyDissipationReward:
             + collision_reward
         )
         
-        reward = np.maximum(reward, 0.0)
         reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
 
         # =====================================================================
