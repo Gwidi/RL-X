@@ -109,7 +109,15 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
     # these geoms later is safe while compiling them as tiny boxes is not.
     max_half_height_m = max(0.001, nr_steps * step_height_m / 2.0)
     hidden_z_m = -(2.0 * max_half_height_m + 1.0)
+    calf_geoms = [
+        geom
+        for geom in xml_handle.find_all("geom")
+        if geom.name and geom.name.endswith("_calf")
+    ]
 
+    for geom in calf_geoms:
+        geom.type = "capsule"
+        geom.size = (0.015, 0.085)
     collision_geom_names = [
         geom.name
         for geom in xml_handle.find_all("geom")

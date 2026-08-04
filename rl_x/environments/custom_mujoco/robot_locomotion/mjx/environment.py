@@ -61,8 +61,13 @@ class LocomotionEnv:
         for geom in xml_handle.find_all("geom"):
             is_foot_geom = geom.name and "foot" in geom.name
             is_floor_geom = geom.name == "floor"
+            is_calf_geom = (
+            terrain_type == INVERTED_PYRAMID_BOX_TERRAIN
+            and geom.name
+            and geom.name.endswith("_calf")
+            )
             is_reward_collision_sphere_geom = geom.dclass and geom.dclass.dclass == "reward_collision_sphere"
-            if not is_foot_geom and not is_floor_geom and not is_reward_collision_sphere_geom:
+            if not is_foot_geom and not is_floor_geom and not is_calf_geom and not is_reward_collision_sphere_geom:
                 geom.remove()
             if is_floor_geom:
                 geom.material = ""
