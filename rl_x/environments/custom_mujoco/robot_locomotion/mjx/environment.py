@@ -29,6 +29,11 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mjx.domain_randomization.o
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.domain_randomization.joint_dropout_functions.handler import get_joint_dropout_function
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.exteroceptive_observation_functions.handler import get_exteroceptive_observation_function
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx.terrain_functions.handler import get_terrain_function
+from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes import (
+    TERRAIN_GEOM_PREFIX,
+    TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
+    add_inverted_pyramid_box_geoms,
+)
 
 
 class LocomotionEnv:
@@ -62,7 +67,13 @@ class LocomotionEnv:
             if is_floor_geom:
                 geom.material = ""
 
-        if "hfield" in env_config["terrain"]["type"]:
+        terrain_type = env_config["terrain"]["type"]
+        if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
+            add_inverted_pyramid_box_geoms(
+                xml_handle,
+                env_config["terrain"],
+            )
+        elif "hfield" in terrain_type:
             xml_handle.asset.insert("hfield", 0, name="empty_hfield", file="default_hfield_80.png", size="4 4 30.0 0.125")
             # xml_handle.asset.insert(
             #     "hfield", 
@@ -153,6 +164,20 @@ class LocomotionEnv:
         self.actuator_joint_nr_direct_child_actuator_joints = body_to_children_count[self.body_ids_of_actuator_joints]
 
         self.floor_geom_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        self.terrain_geom_ids = jnp.asarray(
+            [
+                geom_id
+                for geom_id, geom_name in enumerate(geom_names)
+                if geom_name and geom_name.startswith(TERRAIN_GEOM_PREFIX)
+            ],
+            dtype=jnp.int32,
+        )
+        self.ground_geom_ids = jnp.concatenate(
+            (jnp.asarray([self.floor_geom_id]), self.terrain_geom_ids)
+        )
+        self.robot_geom_indices = jnp.flatnonzero(
+            self.initial_mjx_model.geom_bodyid != 0
+        )
 
         self.reward_collision_sphere_geom_ids = jnp.array([geom.id for geom in [self.initial_mj_model.geom(geom_id) for geom_id in range(self.initial_mj_model.ngeom)] if geom.group[0] == 5])
 

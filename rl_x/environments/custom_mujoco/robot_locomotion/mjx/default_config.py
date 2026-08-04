@@ -183,7 +183,8 @@ def get_config(environment_name):
             "curriculum_eval_difficulty": 1.0,
             "curriculum_step_scale": 1.0,
             # Used by hfield_inverted_pyramid_stairs. The center is the
-            # lowest, flat spawn platform and each square ring is one step.
+            # lowest, flat spawn platform and each box ring is one step.
+            "inverted_pyramid_half_width_m": 4.0,
             "inverted_pyramid_center_half_width_m": 0.8,
             # At curriculum 0 the scale range is [1, 1]; at curriculum 1 it
             # reaches the full interval configured below.

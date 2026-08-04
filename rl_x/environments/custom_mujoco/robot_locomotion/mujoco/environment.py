@@ -24,6 +24,11 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.domain_randomizatio
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.domain_randomization.joint_dropout_functions.handler import get_joint_dropout_function
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.exteroceptive_observation_functions.handler import get_exteroceptive_observation_function
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.handler import get_terrain_function
+from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes import (
+    TERRAIN_GEOM_PREFIX,
+    TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
+    add_inverted_pyramid_box_geoms,
+)
 
 
 class LocomotionEnv(gym.Env):
@@ -46,7 +51,13 @@ class LocomotionEnv(gym.Env):
         xml_handle.option.ls_iterations = 50
         xml_handle.option.flag.eulerdamp = "enable"
 
-        if "hfield" in env_config["terrain"]["type"]:
+        terrain_type = env_config["terrain"]["type"]
+        if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
+            add_inverted_pyramid_box_geoms(
+                xml_handle,
+                env_config["terrain"],
+            )
+        elif "hfield" in terrain_type:
             xml_handle.asset.insert("hfield", 0, name="empty_hfield", file="default_hfield_80.png", size="4 4 30.0 0.125")
             # xml_handle.asset.insert(
             #     "hfield", 
@@ -134,6 +145,20 @@ class LocomotionEnv(gym.Env):
         self.actuator_joint_nr_direct_child_actuator_joints = body_to_children_count[self.body_ids_of_actuator_joints]
 
         self.floor_geom_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        self.terrain_geom_ids = np.asarray(
+            [
+                geom_id
+                for geom_id, geom_name in enumerate(geom_names)
+                if geom_name and geom_name.startswith(TERRAIN_GEOM_PREFIX)
+            ],
+            dtype=np.int32,
+        )
+        self.ground_geom_ids = np.concatenate(
+            (np.asarray([self.floor_geom_id]), self.terrain_geom_ids)
+        )
+        self.robot_geom_indices = np.flatnonzero(
+            self.initial_mj_model.geom_bodyid != 0
+        )
 
         self.reward_collision_sphere_geom_ids = np.array([geom.id for geom in [self.initial_mj_model.geom(geom_id) for geom_id in range(self.initial_mj_model.ngeom)] if geom.group[0] == 5])
         
@@ -259,6 +284,23 @@ class LocomotionEnv(gym.Env):
 
     
     def render(self):
+        self.viewer.make_current()
+        if self.terrain_geom_ids.size:
+            self.viewer.model.geom_pos[self.terrain_geom_ids] = (
+                self.internal_state["mj_model"].geom_pos[
+                    self.terrain_geom_ids
+                ]
+            )
+            self.viewer.model.geom_size[self.terrain_geom_ids] = (
+                self.internal_state["mj_model"].geom_size[
+                    self.terrain_geom_ids
+                ]
+            )
+            self.viewer.model.geom_rbound[self.terrain_geom_ids] = (
+                self.internal_state["mj_model"].geom_rbound[
+                    self.terrain_geom_ids
+                ]
+            )
         if self.uses_hfield and self.internal_state["info_episode_store"]["episode_step"] == 1:
             mujoco.mjr_uploadHField(self.internal_state["mj_model"], self.viewer.context, 0)
         
@@ -297,6 +339,11 @@ class LocomotionEnv(gym.Env):
             self.internal_state["data"].site("dir_arrow").xpos += [arrow_offset * np.sin(np.pi/2 + desired_angle), -arrow_offset * np.cos(np.pi/2 + desired_angle), 0]
             self.internal_state["data"].site("dir_arrow_ball").xpos = self.internal_state["data"].body("dir_arrow").xpos + [-0.1 * np.sin(np.pi/2 + desired_angle), 0.1 * np.cos(np.pi/2 + desired_angle), 0]
         
+        if hasattr(self.terrain_function, "get_debug_overlay"):
+            self.viewer.set_custom_overlay(self.terrain_function.get_debug_overlay())
+        else:
+            self.viewer.set_custom_overlay([])
+
         self.viewer.render(self.internal_state["data"])
 
 
