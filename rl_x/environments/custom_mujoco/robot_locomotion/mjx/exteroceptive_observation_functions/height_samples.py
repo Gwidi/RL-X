@@ -1,6 +1,10 @@
 import mujoco
 import jax.numpy as jnp
 
+from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes import (
+    TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
+)
+
 
 class HeightSamplesExteroceptiveObservation:
     def __init__(self, env,
@@ -15,6 +19,14 @@ class HeightSamplesExteroceptiveObservation:
 
         self.floor_is_plane = self.env.initial_mj_model.geom_type[self.env.floor_geom_id] == mujoco.mjtGeom.mjGEOM_PLANE
         self.floor_is_hfield = self.env.initial_mj_model.geom_type[self.env.floor_geom_id] == mujoco.mjtGeom.mjGEOM_HFIELD
+        self.floor_has_box_terrain = (
+            self.env.env_config["terrain"]["type"]
+            == INVERTED_PYRAMID_BOX_TERRAIN
+        )
+
+        if self.floor_is_hfield or self.floor_has_box_terrain:
+            grid_x, grid_y = jnp.meshgrid(jnp.array(self.measured_points_x), jnp.array(self.measured_points_y), indexing='ij')
+            self.base_height_points = jnp.stack([grid_x.flatten(), grid_y.flatten()], axis=1)
 
         if self.floor_is_hfield:
             hfield_size = self.env.initial_mjx_model.hfield_size[0]
@@ -25,17 +37,22 @@ class HeightSamplesExteroceptiveObservation:
             self.max_possible_height = hfield_size[2]
             self.mujoco_height_scaling = self.max_possible_height
 
-            grid_x, grid_y = jnp.meshgrid(jnp.array(self.measured_points_x), jnp.array(self.measured_points_y), indexing='ij')
-            self.base_height_points = jnp.stack([grid_x.flatten(), grid_y.flatten()], axis=1)
-
 
     def get_exteroceptive_observation(self, data, mjx_model, internal_state):
-        if self.floor_is_hfield:
+        if self.floor_is_hfield or self.floor_has_box_terrain:
             rotation_angle = internal_state["imu_orientation_euler"][2]
             global_height_points_0 = self.base_height_points[:, 0] * jnp.cos(rotation_angle) - self.base_height_points[:, 1] * jnp.sin(rotation_angle)
             global_height_points_1 = self.base_height_points[:, 0] * jnp.sin(rotation_angle) + self.base_height_points[:, 1] * jnp.cos(rotation_angle)
             global_height_points = jnp.stack([global_height_points_0, global_height_points_1], axis=1)
             global_height_points += data.qpos[:2]
+
+            if self.floor_has_box_terrain:
+                heights = self.env.terrain_function.ground_height_at(
+                    internal_state,
+                    global_height_points[:, 0],
+                    global_height_points[:, 1],
+                )
+                return data.qpos[2] - heights
 
             global_height_points = (global_height_points * self.one_meter_length).astype(jnp.int32)
             px = global_height_points[:, 0].reshape(-1)

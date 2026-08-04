@@ -48,6 +48,7 @@ class LocomotionEnv:
 
         xml_path = (self.robot_config["directory_path"] / "data" / "plane.xml").as_posix()
         xml_handle = mjcf.from_path(xml_path)
+        terrain_type = env_config["terrain"]["type"]
 
         # Remove all unnecessary assets, materials, meshes and geoms during training
         # This removes all geoms besides feet and floor, if the contacts for other geoms should be enabled this needs to be changed
@@ -62,9 +63,9 @@ class LocomotionEnv:
             is_foot_geom = geom.name and "foot" in geom.name
             is_floor_geom = geom.name == "floor"
             is_calf_geom = (
-            terrain_type == INVERTED_PYRAMID_BOX_TERRAIN
-            and geom.name
-            and geom.name.endswith("_calf")
+                terrain_type == INVERTED_PYRAMID_BOX_TERRAIN
+                and geom.name
+                and geom.name.endswith("_calf")
             )
             is_reward_collision_sphere_geom = geom.dclass and geom.dclass.dclass == "reward_collision_sphere"
             if not is_foot_geom and not is_floor_geom and not is_calf_geom and not is_reward_collision_sphere_geom:
@@ -72,7 +73,6 @@ class LocomotionEnv:
             if is_floor_geom:
                 geom.material = ""
 
-        terrain_type = env_config["terrain"]["type"]
         if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
             add_inverted_pyramid_box_geoms(
                 xml_handle,
