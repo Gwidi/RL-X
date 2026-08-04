@@ -29,6 +29,10 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
     TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
     add_inverted_pyramid_box_geoms,
 )
+from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
+    BUNKER_RUINS_TERRAIN_TYPES,
+    add_bunker_ruins_calf_colliders,
+)
 
 
 class LocomotionEnv(gym.Env):
@@ -52,6 +56,13 @@ class LocomotionEnv(gym.Env):
         xml_handle.option.flag.eulerdamp = "enable"
 
         terrain_type = env_config["terrain"]["type"]
+        uses_calf_colliders = bool(
+            config_value(
+                env_config["terrain"],
+                "uses_calf_colliders",
+                True,
+            )
+        )
         if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
             add_inverted_pyramid_box_geoms(
                 xml_handle,
@@ -70,6 +81,14 @@ class LocomotionEnv(gym.Env):
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
             floor.hfield = "empty_hfield"
+            if (
+                uses_calf_colliders
+                and terrain_type in BUNKER_RUINS_TERRAIN_TYPES
+            ):
+                add_bunker_ruins_calf_colliders(xml_handle)
+            terrain_geom_prefix = None
+        else:
+            terrain_geom_prefix = None
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")
@@ -149,7 +168,9 @@ class LocomotionEnv(gym.Env):
             [
                 geom_id
                 for geom_id, geom_name in enumerate(geom_names)
-                if geom_name and geom_name.startswith(TERRAIN_GEOM_PREFIX)
+                if terrain_geom_prefix
+                and geom_name
+                and geom_name.startswith(terrain_geom_prefix)
             ],
             dtype=np.int32,
         )

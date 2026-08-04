@@ -34,6 +34,10 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
     TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
     add_inverted_pyramid_box_geoms,
 )
+from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
+    BUNKER_RUINS_TERRAIN_TYPES,
+    add_bunker_ruins_calf_colliders,
+)
 
 
 class LocomotionEnv:
@@ -49,6 +53,17 @@ class LocomotionEnv:
         xml_path = (self.robot_config["directory_path"] / "data" / "plane.xml").as_posix()
         xml_handle = mjcf.from_path(xml_path)
         terrain_type = env_config["terrain"]["type"]
+        uses_calf_colliders = bool(
+            config_value(
+                env_config["terrain"],
+                "uses_calf_colliders",
+                True,
+            )
+        )
+        terrain_supports_calf_colliders = terrain_type in (
+            INVERTED_PYRAMID_BOX_TERRAIN,
+            HURDLES_BOX_TERRAIN,
+        ) or terrain_type in BUNKER_RUINS_TERRAIN_TYPES
 
         # Remove all unnecessary assets, materials, meshes and geoms during training
         # This removes all geoms besides feet and floor, if the contacts for other geoms should be enabled this needs to be changed
@@ -63,7 +78,8 @@ class LocomotionEnv:
             is_foot_geom = geom.name and "foot" in geom.name
             is_floor_geom = geom.name == "floor"
             is_calf_geom = (
-                terrain_type == INVERTED_PYRAMID_BOX_TERRAIN
+                uses_calf_colliders
+                and terrain_supports_calf_colliders
                 and geom.name
                 and geom.name.endswith("_calf")
             )
@@ -91,6 +107,14 @@ class LocomotionEnv:
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
             floor.hfield = "empty_hfield"
+            if (
+                uses_calf_colliders
+                and terrain_type in BUNKER_RUINS_TERRAIN_TYPES
+            ):
+                add_bunker_ruins_calf_colliders(xml_handle)
+            terrain_geom_prefix = None
+        else:
+            terrain_geom_prefix = None
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")
@@ -173,7 +197,9 @@ class LocomotionEnv:
             [
                 geom_id
                 for geom_id, geom_name in enumerate(geom_names)
-                if geom_name and geom_name.startswith(TERRAIN_GEOM_PREFIX)
+                if terrain_geom_prefix
+                and geom_name
+                and geom_name.startswith(terrain_geom_prefix)
             ],
             dtype=jnp.int32,
         )

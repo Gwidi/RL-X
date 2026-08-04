@@ -84,6 +84,9 @@ def maximum_number_of_steps(terrain_config):
 
 def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
     """Allocates a fixed set of boxes whose dimensions are sampled at reset."""
+    uses_calf_colliders = bool(
+        config_value(terrain_config, "uses_calf_colliders", True)
+    )
     nr_steps = maximum_number_of_steps(terrain_config)
     half_width_m = float(
         config_value(
@@ -112,7 +115,9 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
     calf_geoms = [
         geom
         for geom in xml_handle.find_all("geom")
-        if geom.name and geom.name.endswith("_calf")
+        if uses_calf_colliders
+        and geom.name
+        and geom.name.endswith("_calf")
     ]
 
     for geom in calf_geoms:
@@ -124,7 +129,10 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
         if geom.name
         and (
             "foot" in geom.name
-            or geom.name.endswith("_calf")
+            or (
+                uses_calf_colliders
+                and geom.name.endswith("_calf")
+            )
         )
     ]
 
