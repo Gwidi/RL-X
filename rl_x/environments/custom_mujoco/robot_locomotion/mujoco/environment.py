@@ -29,10 +29,22 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
     TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
     add_inverted_pyramid_box_geoms,
 )
+from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
+    TERRAIN_GEOM_PREFIX as HURDLES_GEOM_PREFIX,
+    TERRAIN_TYPE as HURDLES_BOX_TERRAIN,
+    add_hurdle_box_geoms,
+)
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
     BUNKER_RUINS_TERRAIN_TYPES,
     add_bunker_ruins_calf_colliders,
 )
+
+
+def config_value(config, name, default):
+    try:
+        return config[name]
+    except (KeyError, AttributeError, TypeError):
+        return default
 
 
 class LocomotionEnv(gym.Env):
@@ -68,6 +80,13 @@ class LocomotionEnv(gym.Env):
                 xml_handle,
                 env_config["terrain"],
             )
+            terrain_geom_prefix = TERRAIN_GEOM_PREFIX
+        elif terrain_type == HURDLES_BOX_TERRAIN:
+            add_hurdle_box_geoms(
+                xml_handle,
+                env_config["terrain"],
+            )
+            terrain_geom_prefix = HURDLES_GEOM_PREFIX
         elif "hfield" in terrain_type:
             xml_handle.asset.insert("hfield", 0, name="empty_hfield", file="default_hfield_80.png", size="4 4 30.0 0.125")
             # xml_handle.asset.insert(
