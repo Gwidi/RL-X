@@ -117,7 +117,7 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
 
     for geom in calf_geoms:
         geom.type = "capsule"
-        geom.size = (0.015, 0.085)
+        geom.size = (0.015, 0.06)
     collision_geom_names = [
         geom.name
         for geom in xml_handle.find_all("geom")
