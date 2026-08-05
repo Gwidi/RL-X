@@ -34,7 +34,7 @@ def get_config(environment_name):
                 "mixed_chance": 0.05,
             },
             "initial_state": {
-                "type": "random",
+                "type": "default",
                 "roll_angle_pi_factor": 0.05,
                 "pitch_angle_pi_factor": 0.05,
                 "yaw_angle_pi_factor": 1.0,
@@ -43,7 +43,7 @@ def get_config(environment_name):
                 "joint_velocity_max_factor": 0.5,
                 "trunk_velocity_clip_mass_factor": 0.1,
                 "trunk_velocity_clip_limit": 0.5,
-                "initial_height_offset": 10.0,
+                "initial_height_offset": 1.0,
             },
             "joint_dropout": {
                 "type": "default",

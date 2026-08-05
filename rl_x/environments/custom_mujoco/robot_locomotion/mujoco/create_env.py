@@ -36,18 +36,18 @@ def create_train_and_eval_env(config):
     else:
         train_env = AsyncVectorEnvWithSkipping(make_env_functions, config.environment.async_skip_percentage)
     train_env = RLXInfo(train_env)
-    train_env.horizon = train_env.call("horizon")[0]
+    train_env.horizon = train_env.get_wrapper_attr("horizon")
     train_env.general_properties = GeneralProperties
 
     if config.environment.copy_train_env_for_eval:
         return train_env, train_env
-    
+
     if config.environment.nr_envs == 1:
         eval_env = gym.vector.SyncVectorEnv(make_env_functions)
     else:
         eval_env = AsyncVectorEnvWithSkipping(make_env_functions, config.environment.async_skip_percentage)
     eval_env = RLXInfo(eval_env)
-    eval_env.horizon = eval_env.call("horizon")[0]
+    eval_env.horizon = eval_env.get_wrapper_attr("horizon")
     eval_env.general_properties = GeneralProperties
 
     return train_env, eval_env
