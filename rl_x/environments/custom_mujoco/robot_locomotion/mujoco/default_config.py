@@ -11,6 +11,7 @@ def get_config(environment_name):
         "train_robot": "unitree_go2",
         "spine_locked": False,
         "control_type": "pd",
+        "async_skip_percentage": 0.5,
         "command": {
             "type": "random",
             "sampling_type": "step_probability",
