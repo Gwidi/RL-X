@@ -41,8 +41,8 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
     add_hurdle_box_geoms,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
-    BUNKER_RUINS_TERRAIN_TYPES,
-    add_bunker_ruins_calf_colliders,
+    CALF_FLOOR_COLLIDER_TERRAIN_TYPES,
+    add_calf_floor_colliders,
 )
 
 
@@ -69,7 +69,7 @@ class LocomotionEnv:
         terrain_supports_calf_colliders = terrain_type in (
             INVERTED_PYRAMID_BOX_TERRAIN,
             HURDLES_BOX_TERRAIN,
-        ) or terrain_type in BUNKER_RUINS_TERRAIN_TYPES
+        ) or terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
 
         # Remove all unnecessary assets, materials, meshes and geoms during training
         # This removes all geoms besides feet and floor, if the contacts for other geoms should be enabled this needs to be changed
@@ -120,14 +120,15 @@ class LocomotionEnv:
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
             floor.hfield = "empty_hfield"
-            if (
-                uses_calf_colliders
-                and terrain_type in BUNKER_RUINS_TERRAIN_TYPES
-            ):
-                add_bunker_ruins_calf_colliders(xml_handle)
             terrain_geom_prefix = None
         else:
             terrain_geom_prefix = None
+
+        if (
+            uses_calf_colliders
+            and terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
+        ):
+            add_calf_floor_colliders(xml_handle)
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")

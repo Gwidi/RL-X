@@ -5,9 +5,13 @@ BUNKER_RUINS_TERRAIN_TYPES = frozenset(
     }
 )
 
+CALF_FLOOR_COLLIDER_TERRAIN_TYPES = (
+    BUNKER_RUINS_TERRAIN_TYPES | {"plane"}
+)
 
-def add_bunker_ruins_calf_colliders(xml_handle):
-    """Enable calf collisions with the bunker-ruins heightfield."""
+
+def add_calf_floor_colliders(xml_handle):
+    """Enable calf collisions with the floor geom."""
     calf_geoms = [
         geom
         for geom in xml_handle.find_all("geom")
@@ -25,3 +29,8 @@ def add_bunker_ruins_calf_colliders(xml_handle):
         )
 
     return tuple(geom.name for geom in calf_geoms)
+
+
+def add_bunker_ruins_calf_colliders(xml_handle):
+    """Backward-compatible alias for calf-to-floor colliders."""
+    return add_calf_floor_colliders(xml_handle)

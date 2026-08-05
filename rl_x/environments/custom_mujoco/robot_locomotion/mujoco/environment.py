@@ -35,8 +35,8 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
     add_hurdle_box_geoms,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
-    BUNKER_RUINS_TERRAIN_TYPES,
-    add_bunker_ruins_calf_colliders,
+    CALF_FLOOR_COLLIDER_TERRAIN_TYPES,
+    add_calf_floor_colliders,
 )
 
 
@@ -100,14 +100,15 @@ class LocomotionEnv(gym.Env):
             floor = xml_handle.find("geom", "floor")
             floor.type = "hfield"
             floor.hfield = "empty_hfield"
-            if (
-                uses_calf_colliders
-                and terrain_type in BUNKER_RUINS_TERRAIN_TYPES
-            ):
-                add_bunker_ruins_calf_colliders(xml_handle)
             terrain_geom_prefix = None
         else:
             terrain_geom_prefix = None
+
+        if (
+            uses_calf_colliders
+            and terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
+        ):
+            add_calf_floor_colliders(xml_handle)
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")
