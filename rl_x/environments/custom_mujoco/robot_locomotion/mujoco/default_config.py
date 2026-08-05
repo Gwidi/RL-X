@@ -219,7 +219,7 @@ def get_config(environment_name):
         },
         "termination": {
             "type": "below_height",
-            "height_percentage_threshold": 0.8,
+            "height_percentage_threshold": 0.1,
         },
         "terrain": {
             "type": "hfield_bunker_ruins",
