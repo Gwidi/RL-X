@@ -40,9 +40,20 @@ class DefaultDRSeenRobotFunction:
         self.default_inertia_quats_xyzw = self.env.initial_mjx_model.body_iquat[1:, [1, 2, 3, 0]]
         self.default_body_positions = self.env.initial_mjx_model.body_pos[1:]
         self.default_body_quats_xyzw = self.env.initial_mjx_model.body_quat[1:, [1, 2, 3, 0]]
-        self.default_geom_pos = self.env.initial_mjx_model.geom_pos[1:]
-        self.default_geom_sizes = self.env.initial_mjx_model.geom_size[1:]
-        self.default_geom_rbound = self.env.initial_mjx_model.geom_rbound[1:]
+        self.robot_geom_indices = self.env.robot_geom_indices
+        self.foot_robot_geom_indices = jnp.searchsorted(
+            self.robot_geom_indices,
+            self.env.foot_geom_indices,
+        )
+        self.default_geom_pos = self.env.initial_mjx_model.geom_pos[
+            self.robot_geom_indices
+        ]
+        self.default_geom_sizes = self.env.initial_mjx_model.geom_size[
+            self.robot_geom_indices
+        ]
+        self.default_geom_rbound = self.env.initial_mjx_model.geom_rbound[
+            self.robot_geom_indices
+        ]
         # self.default_geom_aabb = self.env.initial_mjx_model.geom_aabb[1:]
         # self.default_mesh_pos = self.env.initial_mjx_model.mesh_pos.copy()
         # self.default_mesh_vert = self.env.initial_mjx_model.mesh_vert.copy()
@@ -100,8 +111,12 @@ class DefaultDRSeenRobotFunction:
         default_body_positions = self.default_body_positions * body_size_factor
         default_site_positions = self.default_site_pos * body_size_factor
         default_geom_sizes = self.default_geom_sizes * avg_body_size_factor
-        geom_positions = mjx_model.geom_pos.at[1:].set(self.default_geom_pos * body_size_factor)
-        geom_rbounds = mjx_model.geom_rbound.at[1:].set(self.default_geom_rbound * avg_body_size_factor)
+        geom_positions = mjx_model.geom_pos.at[
+            self.robot_geom_indices
+        ].set(self.default_geom_pos * body_size_factor)
+        geom_rbounds = mjx_model.geom_rbound.at[
+            self.robot_geom_indices
+        ].set(self.default_geom_rbound * avg_body_size_factor)
         # geom_aabbs = mjx_model.geom_aabb.at[1:].set(self.default_geom_aabb * jnp.tile(body_size_factor, 2))
         # mesh_positions = self.default_mesh_pos * body_size_factor
         # mesh_verts = self.default_mesh_vert * body_size_factor
@@ -155,8 +170,12 @@ class DefaultDRSeenRobotFunction:
 
         site_positions = default_site_positions.at[self.env.imu_site_id].set(default_site_positions[self.env.imu_site_id] + env_curriculum_coeff * jax.random.uniform(keys[10], minval=-self.add_imu_position, maxval=self.add_imu_position, shape=(3,)))
 
-        geom_sizes = default_geom_sizes.at[self.env.foot_geom_indices - 1].set(default_geom_sizes[self.env.foot_geom_indices - 1] * (1 + env_curriculum_coeff * jax.random.uniform(keys[11], minval=-self.foot_size_factor, maxval=self.foot_size_factor, shape=(self.env.foot_geom_indices.shape[0], 3))))
-        geom_sizes = mjx_model.geom_size.at[1:].set(geom_sizes)
+        geom_sizes = default_geom_sizes.at[
+            self.foot_robot_geom_indices
+        ].set(default_geom_sizes[self.foot_robot_geom_indices] * (1 + env_curriculum_coeff * jax.random.uniform(keys[11], minval=-self.foot_size_factor, maxval=self.foot_size_factor, shape=(self.env.foot_geom_indices.shape[0], 3))))
+        geom_sizes = mjx_model.geom_size.at[
+            self.robot_geom_indices
+        ].set(geom_sizes)
 
         abs_axis = jnp.abs(self.default_joint_rotation_axes)
         min_axis = jnp.argmin(abs_axis, axis=1)

@@ -39,10 +39,23 @@ class DefaultDRSeenRobotFunction:
         self.default_inertia_quats = self.env.initial_mj_model.body_iquat[1:]
         self.default_body_positions = self.env.initial_mj_model.body_pos[1:]
         self.default_body_quats = self.env.initial_mj_model.body_quat[1:]
-        self.default_geom_pos = self.env.initial_mj_model.geom_pos[1:]
-        self.default_geom_sizes = self.env.initial_mj_model.geom_size[1:]
-        self.default_geom_rbound = self.env.initial_mj_model.geom_rbound[1:]
-        self.default_geom_aabb = self.env.initial_mj_model.geom_aabb[1:]
+        self.robot_geom_indices = self.env.robot_geom_indices
+        self.foot_robot_geom_indices = np.searchsorted(
+            self.robot_geom_indices,
+            self.env.foot_geom_indices,
+        )
+        self.default_geom_pos = self.env.initial_mj_model.geom_pos[
+            self.robot_geom_indices
+        ]
+        self.default_geom_sizes = self.env.initial_mj_model.geom_size[
+            self.robot_geom_indices
+        ]
+        self.default_geom_rbound = self.env.initial_mj_model.geom_rbound[
+            self.robot_geom_indices
+        ]
+        self.default_geom_aabb = self.env.initial_mj_model.geom_aabb[
+            self.robot_geom_indices
+        ]
         self.default_mesh_pos = self.env.initial_mj_model.mesh_pos.copy()
         self.default_mesh_vert = self.env.initial_mj_model.mesh_vert.copy()
         self.default_site_pos = self.env.initial_mj_model.site_pos.copy()
@@ -149,7 +162,7 @@ class DefaultDRSeenRobotFunction:
         site_positions[self.env.imu_site_id] += env_curriculum_coeff * self.env.np_rng.uniform(low=-self.add_imu_position, high=self.add_imu_position, size=(3,))
 
         geom_sizes = default_geom_sizes
-        geom_sizes[self.env.foot_geom_indices - 1] *= (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.foot_size_factor, high=self.foot_size_factor, size=(self.env.foot_geom_indices.shape[0], 3)))
+        geom_sizes[self.foot_robot_geom_indices] *= (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.foot_size_factor, high=self.foot_size_factor, size=(self.env.foot_geom_indices.shape[0], 3)))
 
         abs_axis = np.abs(self.default_joint_rotation_axes)
         min_axis = np.argmin(abs_axis, axis=1)
@@ -208,10 +221,18 @@ class DefaultDRSeenRobotFunction:
         self.env.internal_state["mj_model"].body_ipos[1:] = coms
         self.env.internal_state["mj_model"].body_iquat[1:] = inertia_quats
         self.env.internal_state["mj_model"].site_pos = site_positions
-        self.env.internal_state["mj_model"].geom_size[1:] = geom_sizes
-        self.env.internal_state["mj_model"].geom_pos[1:] = geom_positions
-        self.env.internal_state["mj_model"].geom_rbound[1:] = geom_rbounds
-        self.env.internal_state["mj_model"].geom_aabb[1:] = geom_aabbs
+        self.env.internal_state["mj_model"].geom_size[
+            self.robot_geom_indices
+        ] = geom_sizes
+        self.env.internal_state["mj_model"].geom_pos[
+            self.robot_geom_indices
+        ] = geom_positions
+        self.env.internal_state["mj_model"].geom_rbound[
+            self.robot_geom_indices
+        ] = geom_rbounds
+        self.env.internal_state["mj_model"].geom_aabb[
+            self.robot_geom_indices
+        ] = geom_aabbs
         self.env.internal_state["mj_model"].mesh_pos = mesh_positions
         self.env.internal_state["mj_model"].mesh_vert = mesh_verts
         self.env.internal_state["mj_model"].site_size = site_sizes
