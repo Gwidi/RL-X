@@ -128,6 +128,12 @@ def get_config(environment_name):
         },
         "policy_exteroceptive_observation_type": "none",
         "critic_exteroceptive_observation_type": "height_over_ground",
+        # Height samples are signed distances from the robot base to the
+        # terrain. A symmetric scale preserves information about terrain both
+        # below and above the base instead of clipping every negative sample.
+        # Set this to False to restore the legacy sample / 5.0 - 1.0 mapping.
+        "height_samples_use_symmetric_normalization": False,
+        "height_samples_normalization_scale_m": 1.0,
         "reward": {
             "type": "default",
             "tracking_xy_velocity_command_coeff": 2.0,

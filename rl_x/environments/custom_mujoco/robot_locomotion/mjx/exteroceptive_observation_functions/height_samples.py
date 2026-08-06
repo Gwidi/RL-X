@@ -17,6 +17,25 @@ class HeightSamplesExteroceptiveObservation:
         self.env = env
         self.measured_points_x = measured_points_x
         self.measured_points_y = measured_points_y
+        self.use_symmetric_normalization = bool(
+            self.env.env_config.get(
+                "height_samples_use_symmetric_normalization",
+                True,
+            )
+        )
+        self.normalization_scale_m = float(
+            self.env.env_config.get(
+                "height_samples_normalization_scale_m",
+                1.0,
+            )
+        )
+        if (
+            self.use_symmetric_normalization
+            and self.normalization_scale_m <= 0.0
+        ):
+            raise ValueError(
+                "height_samples_normalization_scale_m must be positive."
+            )
 
         self.nr_exteroceptive_observations = len(self.measured_points_x) * len(self.measured_points_y)
 
@@ -39,6 +58,20 @@ class HeightSamplesExteroceptiveObservation:
             self.one_meter_length = int(self.hfield_length / (self.hfield_half_length_in_meters * 2))
             self.max_possible_height = hfield_size[2]
             self.mujoco_height_scaling = self.max_possible_height
+
+
+    def normalize_observation(self, observation):
+        if not self.use_symmetric_normalization:
+            return jnp.clip(
+                (observation / (10.0 / 2)) - 1.0,
+                -1.0,
+                1.0,
+            )
+        return jnp.clip(
+            observation / self.normalization_scale_m,
+            -1.0,
+            1.0,
+        )
 
 
     def get_exteroceptive_observation(self, data, mjx_model, internal_state):

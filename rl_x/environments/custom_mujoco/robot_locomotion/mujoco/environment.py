@@ -550,9 +550,49 @@ class LocomotionEnv(gym.Env):
         observation[self.imu_linear_vel_obs_idx] = np.clip(observation[self.imu_linear_vel_obs_idx] / 10.0, -1.0, 1.0)
         observation[self.imu_angular_vel_obs_idx] = np.clip(observation[self.imu_angular_vel_obs_idx] / 50.0, -1.0, 1.0)
         if len(self.policy_exteroception_obs_idx) > 0:
-            observation[self.policy_exteroception_obs_idx] = np.clip((observation[self.policy_exteroception_obs_idx] / (10.0 / 2)) - 1.0, -1.0, 1.0)
+            policy_exteroception = observation[
+                self.policy_exteroception_obs_idx
+            ]
+            normalize_observation = getattr(
+                self.policy_exteroceptive_observation_function,
+                "normalize_observation",
+                None,
+            )
+            if normalize_observation is None:
+                policy_exteroception = np.clip(
+                    (policy_exteroception / (10.0 / 2)) - 1.0,
+                    -1.0,
+                    1.0,
+                )
+            else:
+                policy_exteroception = normalize_observation(
+                    policy_exteroception
+                )
+            observation[
+                self.policy_exteroception_obs_idx
+            ] = policy_exteroception
         if len(self.critic_exteroception_obs_idx) > 0:
-            observation[self.critic_exteroception_obs_idx] = np.clip((observation[self.critic_exteroception_obs_idx] / (10.0 / 2)) - 1.0, -1.0, 1.0)
+            critic_exteroception = observation[
+                self.critic_exteroception_obs_idx
+            ]
+            normalize_observation = getattr(
+                self.critic_exteroceptive_observation_function,
+                "normalize_observation",
+                None,
+            )
+            if normalize_observation is None:
+                critic_exteroception = np.clip(
+                    (critic_exteroception / (10.0 / 2)) - 1.0,
+                    -1.0,
+                    1.0,
+                )
+            else:
+                critic_exteroception = normalize_observation(
+                    critic_exteroception
+                )
+            observation[
+                self.critic_exteroception_obs_idx
+            ] = critic_exteroception
 
         observation = np.nan_to_num(observation, nan=0.0, posinf=0.0, neginf=0.0)
         observation = np.clip(observation, -10.0, 10.0)

@@ -674,9 +674,49 @@ class LocomotionEnv:
         observation = observation.at[self.imu_linear_vel_obs_idx].set(jnp.clip(observation[self.imu_linear_vel_obs_idx] / 10.0, -1.0, 1.0))
         observation = observation.at[self.imu_angular_vel_obs_idx].set(jnp.clip(observation[self.imu_angular_vel_obs_idx] / 50.0, -1.0, 1.0))
         if len(self.policy_exteroception_obs_idx) > 0:
-            observation = observation.at[self.policy_exteroception_obs_idx].set(jnp.clip((observation[self.policy_exteroception_obs_idx] / (10.0 / 2)) - 1.0, -1.0, 1.0))
+            policy_exteroception = observation[
+                self.policy_exteroception_obs_idx
+            ]
+            normalize_observation = getattr(
+                self.policy_exteroceptive_observation_function,
+                "normalize_observation",
+                None,
+            )
+            if normalize_observation is None:
+                policy_exteroception = jnp.clip(
+                    (policy_exteroception / (10.0 / 2)) - 1.0,
+                    -1.0,
+                    1.0,
+                )
+            else:
+                policy_exteroception = normalize_observation(
+                    policy_exteroception
+                )
+            observation = observation.at[
+                self.policy_exteroception_obs_idx
+            ].set(policy_exteroception)
         if len(self.critic_exteroception_obs_idx) > 0:
-            observation = observation.at[self.critic_exteroception_obs_idx].set(jnp.clip((observation[self.critic_exteroception_obs_idx] / (10.0 / 2)) - 1.0, -1.0, 1.0))
+            critic_exteroception = observation[
+                self.critic_exteroception_obs_idx
+            ]
+            normalize_observation = getattr(
+                self.critic_exteroceptive_observation_function,
+                "normalize_observation",
+                None,
+            )
+            if normalize_observation is None:
+                critic_exteroception = jnp.clip(
+                    (critic_exteroception / (10.0 / 2)) - 1.0,
+                    -1.0,
+                    1.0,
+                )
+            else:
+                critic_exteroception = normalize_observation(
+                    critic_exteroception
+                )
+            observation = observation.at[
+                self.critic_exteroception_obs_idx
+            ].set(critic_exteroception)
 
         observation = jnp.nan_to_num(observation, nan=0.0, posinf=0.0, neginf=0.0)
         observation = jnp.clip(observation, -10.0, 10.0)
