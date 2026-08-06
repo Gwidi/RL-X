@@ -72,7 +72,7 @@
             <inertial pos="0.031 0.0164 -0.003" quat="0.707107 0.707107 0 0" mass="0.827" diaginertia="0.0040626 0.00387148 0.000683492" />
             <joint name="RL_thigh_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-1.57 1.57" />
             <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="1 0.41 0 1" mesh="l1lf" />
-            <geom size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
+            <geom name="RL_thigh" size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
             <geom class="reward_collision_sphere" pos="0.01 0 0" size="0.065"/>
               <body name="rl_l2" pos="0.0584 0.2 0" quat="0.116034 -0.993245 0 0">
                 <inertial pos="0.001 0.104 -0.003" quat="0.707107 0.707107 0 0" mass="0.118" diaginertia="0.000525296 0.000518946 2.20064e-05" />
@@ -96,7 +96,7 @@
             <inertial pos="0.031 -0.0164 -0.003" quat="0.707107 0.707107 0 0" mass="0.827" diaginertia="0.0040626 0.00387148 0.000683492" />
             <joint name="RR_thigh_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-1.57 1.57" />
             <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="1 0.41 0 1" mesh="l1r" />
-            <geom size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
+            <geom name="RR_thigh" size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
             <geom class="reward_collision_sphere" pos="0.01 0 0" size="0.065"/>
             <body name="rr_l2" pos="0.0584 -0.2 0" quat="0.116034 0.993245 0 0">
               <inertial pos="0.001 -0.104 -0.003" quat="0.707107 0.707107 0 0" mass="0.118" diaginertia="0.000525296 0.000518946 2.20064e-05" />
@@ -121,7 +121,7 @@
           <inertial pos="0.031 -0.016 -0.003" quat="0.707107 0.707107 0 0" mass="0.827" diaginertia="0.0040626 0.00387148 0.000683492" />
           <joint name="FR_thigh_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-1.57 1.57" />
           <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="1 0.41 0 1" mesh="l1r" />
-          <geom size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
+          <geom name="FR_thigh" size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
           <geom class="reward_collision_sphere" pos="0.01 0 0" size="0.065"/>
           <body name="fr_l2" pos="0.0584 -0.2 0" quat="0.116034 0.993245 0 0">
             <inertial pos="0.001 -0.104 -0.003" quat="0.707107 0.707107 0 0" mass="0.118" diaginertia="0.000525296 0.000518946 2.20064e-05" />
@@ -145,7 +145,7 @@
           <inertial pos="0.031 0.0164 -0.003" quat="0.707107 0.707107 0 0" mass="0.827" diaginertia="0.0040626 0.00387148 0.000683492" />
           <joint name="FL_thigh_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-1.57 1.57" />
           <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="1 0.41 0 1" mesh="l1lf" />
-          <geom size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
+          <geom name="FL_thigh" size="0.05 0.055" quat="0.707388 0 0.706825 0" type="cylinder" rgba="1 0.41 0 0" />
           <geom class="reward_collision_sphere" pos="0.01 0 0" size="0.065"/>
           <body name="fl_l2" pos="0.0584 0.2 0" quat="0.116034 -0.993245 0 0">
             <inertial pos="0.001 0.104 -0.003" quat="0.707107 0.707107 0 0" mass="0.118" diaginertia="0.000525296 0.000518946 2.20064e-05" />

@@ -36,7 +36,9 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
     CALF_FLOOR_COLLIDER_TERRAIN_TYPES,
+    THIGH_FLOOR_COLLIDER_TERRAIN_TYPES,
     add_calf_floor_colliders,
+    add_thigh_floor_colliders,
 )
 
 
@@ -75,6 +77,13 @@ class LocomotionEnv(gym.Env):
                 True,
             )
         )
+        uses_thigh_colliders = bool(
+            config_value(
+                env_config["terrain"],
+                "uses_thigh_colliders",
+                True,
+            )
+        )
         if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
             add_inverted_pyramid_box_geoms(
                 xml_handle,
@@ -109,6 +118,12 @@ class LocomotionEnv(gym.Env):
             and terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
         ):
             add_calf_floor_colliders(xml_handle)
+
+        if (
+            uses_thigh_colliders
+            and terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
+        ):
+            add_thigh_floor_colliders(xml_handle)
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")

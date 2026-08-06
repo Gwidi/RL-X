@@ -173,7 +173,9 @@ def get_config(environment_name):
         },
         "terrain": {
             "type": "hfield_bunker_ruins",
-            "uses_calf_colliders": True,
+            "uses_calf_colliders":  False,
+            "uses_thigh_colliders": False,
+            "seed": -1,
             "wave_fn_min": 0,
             "wave_fn_max": 2,
             "wave_height_max_per_m_factor": 0.05,

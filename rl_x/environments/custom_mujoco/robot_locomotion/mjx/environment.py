@@ -42,7 +42,9 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
     CALF_FLOOR_COLLIDER_TERRAIN_TYPES,
+    THIGH_FLOOR_COLLIDER_TERRAIN_TYPES,
     add_calf_floor_colliders,
+    add_thigh_floor_colliders,
 )
 
 
@@ -66,10 +68,20 @@ class LocomotionEnv:
                 True,
             )
         )
+        uses_thigh_colliders = bool(
+            config_value(
+                env_config["terrain"],
+                "uses_thigh_colliders",
+                True,
+            )
+        )
         terrain_supports_calf_colliders = terrain_type in (
             INVERTED_PYRAMID_BOX_TERRAIN,
             HURDLES_BOX_TERRAIN,
         ) or terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
+        terrain_supports_thigh_colliders = (
+            terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
+        )
 
         # Remove all unnecessary assets, materials, meshes and geoms during training
         # This removes all geoms besides feet and floor, if the contacts for other geoms should be enabled this needs to be changed
@@ -89,8 +101,14 @@ class LocomotionEnv:
                 and geom.name
                 and geom.name.endswith("_calf")
             )
+            is_thigh_geom = (
+                uses_thigh_colliders
+                and terrain_supports_thigh_colliders
+                and geom.name
+                and geom.name.endswith("_thigh")
+            )
             is_reward_collision_sphere_geom = geom.dclass and geom.dclass.dclass == "reward_collision_sphere"
-            if not is_foot_geom and not is_floor_geom and not is_calf_geom and not is_reward_collision_sphere_geom:
+            if not is_foot_geom and not is_floor_geom and not is_calf_geom and not is_thigh_geom and not is_reward_collision_sphere_geom:
                 geom.remove()
             if is_floor_geom:
                 geom.material = ""
@@ -129,6 +147,12 @@ class LocomotionEnv:
             and terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
         ):
             add_calf_floor_colliders(xml_handle)
+
+        if (
+            uses_thigh_colliders
+            and terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
+        ):
+            add_thigh_floor_colliders(xml_handle)
         
         if self.should_render and self.add_goal_arrow:
             trunk = xml_handle.find("body", "trunk")
