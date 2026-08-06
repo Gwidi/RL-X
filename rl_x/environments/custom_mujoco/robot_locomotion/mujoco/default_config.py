@@ -34,7 +34,7 @@ def get_config(environment_name):
                 "mixed_chance": 0.05,
             },
             "initial_state": {
-                "type": "default",
+                "type": "energy_dissipation_curriculum",
                 "roll_angle_pi_factor": 0.05,
                 "pitch_angle_pi_factor": 0.05,
                 "yaw_angle_pi_factor": 1.0,
@@ -44,6 +44,13 @@ def get_config(environment_name):
                 "trunk_velocity_clip_mass_factor": 0.1,
                 "trunk_velocity_clip_limit": 0.5,
                 "initial_height_offset": 1.0,
+                "energy_dissipation_curriculum": {
+                    "start_height": 0.5,
+                    "target_height": 1.5,
+                    "max_roll_angle_deg": 20,
+                    "max_pitch_angle_deg": 20,
+                    "max_lateral_velocity": 10.0,
+                },
             },
             "joint_dropout": {
                 "type": "default",
