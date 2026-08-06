@@ -54,8 +54,6 @@ class SimplifiedLandingReward:
         self.env.internal_state["previous_imu_linear_velocity"] = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
 
     def reward_and_info(self, action):
-        curriculum_coeff = self.env.internal_state.get("env_curriculum_coeff", 1.0)
-        
         # Wyciągnij stany
         qvel = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
         tau = self.env.internal_state["data"].qfrc_actuator[self.env.actuator_joint_mask_qvel]
@@ -64,47 +62,29 @@ class SimplifiedLandingReward:
         euler = self.env.internal_state["imu_orientation_euler"]
 
         # =====================================================================
-        # 1. KARY ZA RUCH I ORIENTACJĘ (Cel: stać stabilnie)
+        # UWAGA: USUNIĘTO curriculum_coeff. NAGRODY MUSZĄ BYĆ ZAWSZE AKTYWNE!
         # =====================================================================
-        # Zamiast skomplikowanego post_impact_bounce, po prostu karzemy za jakąkolwiek prędkość bazy
-        # Chcemy, żeby robot wyhamował do zera (szczególnie w osi Z)
-        base_vel_reward = curriculum_coeff * self.base_vel_coeff * -(np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel)))
         
-        # Orientacja bazy - ma być płaska
-        angular_position_reward = curriculum_coeff * self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
+        base_vel_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel)))
+        angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
 
-        # Docelowa wysokość (karzemy zawsze, bez czekania na uderzenie, co wymusza trzymanie nóg w gotowości)
         height_diff = self.env.internal_state["robot_imu_height_over_ground"] - self.nominal_landing_height
-        base_height_reward = curriculum_coeff * self.base_height_coeff * -np.square(height_diff)
+        base_height_reward = self.base_height_coeff * -np.square(height_diff)
 
-        # =====================================================================
-        # 2. KARY ZA ENERGIĘ I WYBUCHOWOŚĆ (Zabija wystrzeliwanie w kosmos)
-        # =====================================================================
-        # Kara za wysokie prędkości w stawach (kluczowe, by robot nie "kopał" ziemi)
-        joint_vel_reward = curriculum_coeff * self.joint_vel_coeff * -np.mean(np.square(qvel))
-        
-        # Kara za momenty obrotowe
-        torque_reward = curriculum_coeff * self.joint_torque_coeff * -np.mean(np.square(tau))
+        joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
+        torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
+        action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
-        # Action rate (płynność)
-        action_rate_reward = curriculum_coeff * self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
-
-        # =====================================================================
-        # 3. KOLIZJE I PRZEŻYCIE
-        # =====================================================================
         all_contact_relevant_geom_xpos = self.env.internal_state["data"].geom_xpos[self.env.reward_collision_sphere_geom_ids]
         all_contact_relevant_geom_sizes = self.env.internal_state["mj_model"].geom_size[self.env.reward_collision_sphere_geom_ids, 0]
         distance_between_geoms = np.linalg.norm(all_contact_relevant_geom_xpos[:, None] - all_contact_relevant_geom_xpos[None], axis=-1)
         contact_between_geoms = distance_between_geoms <= (all_contact_relevant_geom_sizes[:, None] + all_contact_relevant_geom_sizes[None])
         nr_collisions = (np.sum(contact_between_geoms) - len(self.env.reward_collision_sphere_geom_ids)) // 2
         nr_collisions = np.maximum(nr_collisions - self.env.internal_state["nr_collisions_in_nominal"], 0)
-        collision_reward = curriculum_coeff * self.collision_coeff * -nr_collisions
+        
+        collision_reward = self.collision_coeff * -nr_collisions
+        alive_reward = self.alive_coeff * 1.0
 
-        alive_reward = curriculum_coeff * self.alive_coeff * 1.0
-
-        # =====================================================================
-        # AGREGACJA NAGRODY
-        # =====================================================================
         reward = (
             alive_reward
             + base_vel_reward
@@ -132,9 +112,7 @@ class SimplifiedLandingReward:
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
 
-        # =====================================================================
-        # DIAGNOSTYKA WYMAGANA PRZEZ ENVIRONMENT.PY (aby uniknąć KeyError)
-        # =====================================================================
+        # Obliczenia błędów śledzenia i wysokości nóg...
         feet_floor_contacts = self.env.terrain_function.check_feet_floor_contact()
         desired_imu_linear_velocity_xy = self.env.internal_state["goal_velocities"][:2]
         xy_difference = desired_imu_linear_velocity_xy - lin_vel[:2]
