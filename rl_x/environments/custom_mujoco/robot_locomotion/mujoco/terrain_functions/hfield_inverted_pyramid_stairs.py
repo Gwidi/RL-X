@@ -27,11 +27,11 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         )
         self.tread_depth_scale_min = terrain_config.get(
             "inverted_pyramid_tread_depth_scale_min",
-            0.65,
+            0.85,
         )
         self.tread_depth_scale_max = terrain_config.get(
             "inverted_pyramid_tread_depth_scale_max",
-            1.35,
+            1.15,
         )
         self.randomize_tread_depth = terrain_config.get(
             "inverted_pyramid_randomize_tread_depth",
@@ -83,9 +83,19 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         self.env.internal_state[
             "terrain/inverted_pyramid_tread_depth_m"
         ] = self.tread_depth_m
+        initial_tread_depths_m = np.full(
+            self.max_nr_steps,
+            self.tread_depth_m,
+        )
+        self.env.internal_state[
+            "terrain/inverted_pyramid_tread_depths_m"
+        ] = initial_tread_depths_m
+        self.env.internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
+        ] = self.step_inner_edges(initial_tread_depths_m)
         self.env.internal_state[
             "terrain/inverted_pyramid_nr_steps"
-        ] = self.number_of_steps(self.tread_depth_m)
+        ] = self.number_of_steps(initial_tread_depths_m)
 
     def sample(self):
         if self.terrain_geom_ids.size != self.max_nr_steps * 4:
@@ -104,10 +114,21 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
             1.0,
             curriculum_coeff,
         )
-        sampled_tread_depth_m = self.sample_tread_depth(curriculum_coeff)
+        sampled_tread_depths_m = self.sample_tread_depths(curriculum_coeff)
         positions, sizes, rbounds, nr_steps = self.box_geometry(
             curriculum_coeff,
-            sampled_tread_depth_m,
+            sampled_tread_depths_m,
+        )
+        inner_edges_m = self.step_inner_edges(sampled_tread_depths_m)
+        outer_edges_m = np.minimum(
+            inner_edges_m + sampled_tread_depths_m,
+            self.half_width_m,
+        )
+        active = np.arange(self.max_nr_steps) < nr_steps
+        applied_tread_depths_m = np.where(
+            active,
+            outer_edges_m - inner_edges_m,
+            0.0,
         )
 
         model = self.env.internal_state["mj_model"]
@@ -124,14 +145,20 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         ] = nr_steps * applied_step_height_m
         self.env.internal_state[
             "terrain/inverted_pyramid_tread_depth_m"
-        ] = sampled_tread_depth_m
+        ] = np.sum(applied_tread_depths_m) / max(nr_steps, 1)
+        self.env.internal_state[
+            "terrain/inverted_pyramid_tread_depths_m"
+        ] = applied_tread_depths_m
+        self.env.internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
+        ] = inner_edges_m
         self.env.internal_state[
             "terrain/inverted_pyramid_nr_steps"
         ] = nr_steps
 
-    def sample_tread_depth(self, curriculum_coeff):
+    def sample_tread_depths(self, curriculum_coeff):
         if not self.randomize_tread_depth:
-            return self.tread_depth_m
+            return np.full(self.max_nr_steps, self.tread_depth_m)
 
         randomization_coeff = np.clip(curriculum_coeff, 0.0, 1.0)
         min_scale = 1.0 + randomization_coeff * (
@@ -143,21 +170,47 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         return self.tread_depth_m * self.rng().uniform(
             low=min_scale,
             high=max_scale,
+            size=self.max_nr_steps,
         )
 
-    def number_of_steps(self, tread_depth_m):
-        available_width_m = self.half_width_m - self.center_half_width_m
-        return int(np.ceil(available_width_m / tread_depth_m))
-
-    def box_geometry(self, curriculum_coeff, tread_depth_m):
-        """Returns four non-overlapping rectangles for every square tread."""
-        nr_steps = self.number_of_steps(tread_depth_m)
-        step_indices = np.arange(self.max_nr_steps)
-        inner = np.minimum(
-            self.center_half_width_m + step_indices * tread_depth_m,
+    def step_inner_edges(self, tread_depths_m):
+        tread_depths_m = np.asarray(tread_depths_m)
+        if tread_depths_m.ndim == 0:
+            tread_depths_m = np.full(
+                self.max_nr_steps,
+                tread_depths_m,
+            )
+        return np.minimum(
+            self.center_half_width_m
+            + np.concatenate(
+                (np.zeros(1), np.cumsum(tread_depths_m[:-1]))
+            ),
             self.half_width_m,
         )
-        outer = np.minimum(inner + tread_depth_m, self.half_width_m)
+
+    def number_of_steps(self, tread_depths_m):
+        return int(
+            np.count_nonzero(
+                self.step_inner_edges(tread_depths_m)
+                < self.half_width_m - 1e-6
+            )
+        )
+
+    def box_geometry(self, curriculum_coeff, tread_depths_m):
+        """Returns four non-overlapping rectangles for every square tread."""
+        tread_depths_m = np.asarray(tread_depths_m)
+        if tread_depths_m.ndim == 0:
+            tread_depths_m = np.full(
+                self.max_nr_steps,
+                tread_depths_m,
+            )
+        nr_steps = self.number_of_steps(tread_depths_m)
+        step_indices = np.arange(self.max_nr_steps)
+        inner = self.step_inner_edges(tread_depths_m)
+        outer = np.minimum(
+            inner + tread_depths_m,
+            self.half_width_m,
+        )
         half_depth = np.maximum((outer - inner) / 2.0, 0.001)
         middle = (inner + outer) / 2.0
         half_height = (
@@ -201,15 +254,17 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
 
     def ground_height_at(self, x_in_m, y_in_m):
         radius = np.maximum(np.abs(x_in_m), np.abs(y_in_m))
-        distance = np.maximum(radius - self.center_half_width_m, 0.0)
-        tread_depth_m = self.env.internal_state[
-            "terrain/inverted_pyramid_tread_depth_m"
+        inner_edges_m = self.env.internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
         ]
         nr_steps = self.env.internal_state[
             "terrain/inverted_pyramid_nr_steps"
         ]
         step_index = np.clip(
-            np.ceil(distance / tread_depth_m - 1e-6),
+            np.sum(
+                radius[..., None] > inner_edges_m + 1e-6,
+                axis=-1,
+            ),
             0,
             nr_steps,
         )
@@ -285,7 +340,7 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         return [
             ("Terrain", "inverted pyramid stairs (boxes)"),
             (
-                "Tread depth",
+                "Mean tread depth",
                 f'{state["terrain/inverted_pyramid_tread_depth_m"]:.3f} m',
             ),
             (

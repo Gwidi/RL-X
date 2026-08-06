@@ -49,7 +49,7 @@ def maximum_number_of_steps(terrain_config):
         config_value(
             terrain_config,
             "inverted_pyramid_tread_depth_scale_min",
-            0.65,
+            0.85,
         )
     )
 

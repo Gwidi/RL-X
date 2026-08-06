@@ -194,8 +194,8 @@ def get_config(environment_name):
             # At curriculum 0 the scale range is [1, 1]; at curriculum 1 it
             # reaches the full interval configured below.
             "inverted_pyramid_tread_depth_m": 0.4,
-            "inverted_pyramid_tread_depth_scale_min": 0.65,
-            "inverted_pyramid_tread_depth_scale_max": 1.35,
+            "inverted_pyramid_tread_depth_scale_min": 0.85,
+            "inverted_pyramid_tread_depth_scale_max": 1.15,
             "inverted_pyramid_randomize_tread_depth": True,
             "inverted_pyramid_step_height_m": 0.15,
             "inverted_pyramid_use_curriculum": True,

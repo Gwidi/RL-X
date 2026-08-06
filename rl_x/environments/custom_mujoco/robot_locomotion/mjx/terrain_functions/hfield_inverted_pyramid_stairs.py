@@ -27,11 +27,11 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         )
         self.tread_depth_scale_min = terrain_config.get(
             "inverted_pyramid_tread_depth_scale_min",
-            0.65,
+            0.85,
         )
         self.tread_depth_scale_max = terrain_config.get(
             "inverted_pyramid_tread_depth_scale_max",
-            1.35,
+            1.15,
         )
         self.randomize_tread_depth = terrain_config.get(
             "inverted_pyramid_randomize_tread_depth",
@@ -75,9 +75,19 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         internal_state[
             "terrain/inverted_pyramid_tread_depth_m"
         ] = jnp.asarray(self.tread_depth_m)
+        initial_tread_depths_m = jnp.full(
+            self.max_nr_steps,
+            self.tread_depth_m,
+        )
+        internal_state[
+            "terrain/inverted_pyramid_tread_depths_m"
+        ] = initial_tread_depths_m
+        internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
+        ] = self.step_inner_edges(initial_tread_depths_m)
         internal_state[
             "terrain/inverted_pyramid_nr_steps"
-        ] = self.number_of_steps(self.tread_depth_m)
+        ] = self.number_of_steps(initial_tread_depths_m)
 
     def sample(self, mjx_model, internal_state, key):
         if self.terrain_geom_ids.size != self.max_nr_steps * 4:
@@ -95,13 +105,23 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
             1.0,
             curriculum_coeff,
         )
-        sampled_tread_depth_m = self.sample_tread_depth(
+        sampled_tread_depths_m = self.sample_tread_depths(
             curriculum_coeff,
             key,
         )
         positions, sizes, rbounds, nr_steps = self.box_geometry(
             curriculum_coeff,
-            sampled_tread_depth_m,
+            sampled_tread_depths_m,
+        )
+        inner_edges_m = self.step_inner_edges(sampled_tread_depths_m)
+        outer_edges_m = jnp.minimum(
+            inner_edges_m + sampled_tread_depths_m,
+            self.half_width_m,
+        )
+        applied_tread_depths_m = jnp.where(
+            jnp.arange(self.max_nr_steps) < nr_steps,
+            outer_edges_m - inner_edges_m,
+            0.0,
         )
         new_mjx_model = mjx_model.replace(
             geom_pos=mjx_model.geom_pos.at[self.terrain_geom_ids].set(
@@ -124,15 +144,21 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         ] = nr_steps * applied_step_height_m
         internal_state[
             "terrain/inverted_pyramid_tread_depth_m"
-        ] = sampled_tread_depth_m
+        ] = jnp.sum(applied_tread_depths_m) / jnp.maximum(nr_steps, 1)
+        internal_state[
+            "terrain/inverted_pyramid_tread_depths_m"
+        ] = applied_tread_depths_m
+        internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
+        ] = inner_edges_m
         internal_state[
             "terrain/inverted_pyramid_nr_steps"
         ] = nr_steps
         return new_mjx_model
 
-    def sample_tread_depth(self, curriculum_coeff, key):
+    def sample_tread_depths(self, curriculum_coeff, key):
         if not self.randomize_tread_depth:
-            return jnp.asarray(self.tread_depth_m)
+            return jnp.full(self.max_nr_steps, self.tread_depth_m)
         randomization_coeff = jnp.clip(curriculum_coeff, 0.0, 1.0)
         min_scale = 1.0 + randomization_coeff * (
             self.tread_depth_scale_min - 1.0
@@ -142,25 +168,46 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         )
         return self.tread_depth_m * jax.random.uniform(
             key,
-            shape=(),
+            shape=(self.max_nr_steps,),
             minval=min_scale,
             maxval=max_scale,
         )
 
-    def number_of_steps(self, tread_depth_m):
-        return jnp.ceil(
-            (self.half_width_m - self.center_half_width_m)
-            / tread_depth_m
-        ).astype(jnp.int32)
-
-    def box_geometry(self, curriculum_coeff, tread_depth_m):
-        nr_steps = self.number_of_steps(tread_depth_m)
-        step_indices = jnp.arange(self.max_nr_steps)
-        inner = jnp.minimum(
-            self.center_half_width_m + step_indices * tread_depth_m,
+    def step_inner_edges(self, tread_depths_m):
+        tread_depths_m = jnp.asarray(tread_depths_m)
+        if tread_depths_m.ndim == 0:
+            tread_depths_m = jnp.full(
+                self.max_nr_steps,
+                tread_depths_m,
+            )
+        return jnp.minimum(
+            self.center_half_width_m
+            + jnp.concatenate(
+                (jnp.zeros(1), jnp.cumsum(tread_depths_m[:-1]))
+            ),
             self.half_width_m,
         )
-        outer = jnp.minimum(inner + tread_depth_m, self.half_width_m)
+
+    def number_of_steps(self, tread_depths_m):
+        return jnp.count_nonzero(
+            self.step_inner_edges(tread_depths_m)
+            < self.half_width_m - 1e-6
+        ).astype(jnp.int32)
+
+    def box_geometry(self, curriculum_coeff, tread_depths_m):
+        tread_depths_m = jnp.asarray(tread_depths_m)
+        if tread_depths_m.ndim == 0:
+            tread_depths_m = jnp.full(
+                self.max_nr_steps,
+                tread_depths_m,
+            )
+        nr_steps = self.number_of_steps(tread_depths_m)
+        step_indices = jnp.arange(self.max_nr_steps)
+        inner = self.step_inner_edges(tread_depths_m)
+        outer = jnp.minimum(
+            inner + tread_depths_m,
+            self.half_width_m,
+        )
         half_depth = jnp.maximum((outer - inner) / 2.0, 0.001)
         middle = (inner + outer) / 2.0
         half_height = (
@@ -206,17 +253,13 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
 
     def ground_height_at(self, internal_state, x_in_m, y_in_m):
         radius = jnp.maximum(jnp.abs(x_in_m), jnp.abs(y_in_m))
-        distance = jnp.maximum(
-            radius - self.center_half_width_m,
-            0.0,
-        )
+        inner_edges_m = internal_state[
+            "terrain/inverted_pyramid_step_inner_edges_m"
+        ]
         step_index = jnp.clip(
-            jnp.ceil(
-                distance
-                / internal_state[
-                    "terrain/inverted_pyramid_tread_depth_m"
-                ]
-                - 1e-6
+            jnp.sum(
+                radius[..., None] > inner_edges_m + 1e-6,
+                axis=-1,
             ),
             0,
             internal_state["terrain/inverted_pyramid_nr_steps"],
