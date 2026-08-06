@@ -9,12 +9,17 @@ class SimplifiedLandingReward:
         self.alive_coeff = env.env_config["reward"].get("alive_coeff", 1.0) * dt
         self.base_height_coeff = env.env_config["reward"].get("base_height_coeff", 5.0) * dt
         self.roll_pitch_pos_coeff = env.env_config["reward"].get("roll_pitch_pos_coeff", 3.0) * dt
-        self.base_vel_coeff = env.env_config["reward"].get("base_vel_coeff", 2.0) * dt # Zastępuje skomplikowane kary za odbijanie
+        self.base_vel_coeff = env.env_config["reward"].get("base_vel_coeff", 2.0) * dt 
         
         # Kary za "sztywność" i wybuchowość
         self.joint_torque_coeff = env.env_config["reward"].get("joint_torque_coeff", 0.05) * dt
-        self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt # KLUCZOWE: zabija strzelanie nogami
+        self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
+        
+        # NOWE: Kara za odchylanie nóg od naturalnej pozycji stojącej
+        self.joint_pos_coeff = env.env_config["reward"].get("joint_pos_coeff", 10.0) * dt
+        
+        # ZWIĘKSZONA W BASHU: Kara za uderzenie o glebę
         self.collision_coeff = env.env_config["reward"].get("collision_coeff", 1.0) * dt
 
         self.nominal_landing_height = env.env_config["reward"]["nominal_landing_height"]
@@ -36,8 +41,6 @@ class SimplifiedLandingReward:
         return np.stack([lower_joint_limits, upper_joint_limits], axis=1)
 
     def setup(self):
-        # Usunięto skomplikowane śledzenie fazy uderzenia
-        # Zostawiamy tylko zmienne potrzebne do obserwacji (get_observation)
         self.env.internal_state["feet_time_on_ground"] = np.zeros(self.env.nr_feet)
         self.env.internal_state["feet_time_in_air"] = np.zeros(self.env.nr_feet)
         self.env.internal_state["previous_imu_linear_velocity"] = np.zeros(self.env.imu_linear_velocity_sensor_dim)
@@ -47,29 +50,28 @@ class SimplifiedLandingReward:
     def step(self):
         feet_floor_contacts = self.env.terrain_function.check_feet_floor_contact()
         
-        # Aktualizacja zmiennych dla obserwacji środowiska:
         self.env.internal_state["feet_time_on_ground"] = np.where(feet_floor_contacts, self.env.internal_state["feet_time_on_ground"] + self.env.dt, 0.0)
         self.env.internal_state["feet_time_in_air"] = np.where(feet_floor_contacts, 0.0, self.env.internal_state["feet_time_in_air"] + self.env.dt)
         self.env.internal_state["previous_actuator_joint_velocities"] = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
         self.env.internal_state["previous_imu_linear_velocity"] = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
 
     def reward_and_info(self, action):
-        # Wyciągnij stany
+        qpos = self.env.internal_state["data"].qpos[self.env.actuator_joint_mask_qpos]
         qvel = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
         tau = self.env.internal_state["data"].qfrc_actuator[self.env.actuator_joint_mask_qvel]
         lin_vel = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
         ang_vel = self.env.internal_state["data"].sensordata[self.env.imu_angular_velocity_sensor_adr:self.env.imu_angular_velocity_sensor_adr + self.env.imu_angular_velocity_sensor_dim]
         euler = self.env.internal_state["imu_orientation_euler"]
 
-        # =====================================================================
-        # UWAGA: USUNIĘTO curriculum_coeff. NAGRODY MUSZĄ BYĆ ZAWSZE AKTYWNE!
-        # =====================================================================
-        
         base_vel_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
 
         height_diff = self.env.internal_state["robot_imu_height_over_ground"] - self.nominal_landing_height
         base_height_reward = self.base_height_coeff * -np.square(height_diff)
+
+        # NOWE: Wymuszenie trzymania nóg w naturalnej pozycji (zapobiega zwijaniu się)
+        nominal_joint_pos = self.env.internal_state["actuator_joint_nominal_positions"]
+        joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - nominal_joint_pos))
 
         joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
@@ -90,6 +92,7 @@ class SimplifiedLandingReward:
             + base_vel_reward
             + angular_position_reward
             + base_height_reward
+            + joint_pos_reward  # Dodane do sumy
             + joint_vel_reward
             + torque_reward
             + action_rate_reward
@@ -98,21 +101,20 @@ class SimplifiedLandingReward:
         
         reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # =====================================================================
-        # LOGOWANIE
-        # =====================================================================
+        # Logowanie
         info = self.env.internal_state["info"]
         info["reward/alive"] = alive_reward
         info["reward/base_vel"] = base_vel_reward
         info["reward/angular_position"] = angular_position_reward
         info["reward/base_height"] = base_height_reward
+        info["reward/joint_pos"] = joint_pos_reward  # Nowy log
         info["reward/joint_vel"] = joint_vel_reward
         info["reward/joint_torque"] = torque_reward
         info["reward/action_rate"] = action_rate_reward
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
 
-        # Obliczenia błędów śledzenia i wysokości nóg...
+        # Diagnostyka
         feet_floor_contacts = self.env.terrain_function.check_feet_floor_contact()
         desired_imu_linear_velocity_xy = self.env.internal_state["goal_velocities"][:2]
         xy_difference = desired_imu_linear_velocity_xy - lin_vel[:2]
