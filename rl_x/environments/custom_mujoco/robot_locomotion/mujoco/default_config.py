@@ -180,6 +180,7 @@ def get_config(environment_name):
             "base_height_coeff": 10.0,
             "roll_pitch_pos_coeff": 10.0,
             "base_vel_coeff": 2.0,        # Zamiast skomplikowanego post_impact_bounce
+            "joint_pos_coeff": 10.0,
             "joint_vel_coeff": 0.5,       # Zamiast śledzenia prądu i falownika
             "joint_torque_coeff": 0.05,
             "action_rate_coeff": 1.0,
