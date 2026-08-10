@@ -123,18 +123,6 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
     for geom in calf_geoms:
         geom.type = "capsule"
         geom.size = (0.015, 0.06)
-    collision_geom_names = [
-        geom.name
-        for geom in xml_handle.find_all("geom")
-        if geom.name
-        and (
-            "foot" in geom.name
-            or (
-                uses_calf_colliders
-                and geom.name.endswith("_calf")
-            )
-        )
-    ]
 
     geom_names = []
     for step_idx in range(nr_steps):
@@ -150,13 +138,15 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
                     f"{max_half_height_m}"
                 ),
                 group="1",
+                contype="0",
+                conaffinity="1",
                 rgba="0.38 0.42 0.46 1",
             )
             geom_names.append(name)
-            for collision_geom_name in collision_geom_names:
+            for calf_geom in calf_geoms:
                 xml_handle.contact.add(
                     "pair",
-                    geom1=collision_geom_name,
+                    geom1=calf_geom.name,
                     geom2=name,
                 )
 
