@@ -5,25 +5,40 @@ class SimplifiedLandingReward:
         self.env = env
         dt = env.dt
 
-        # Podstawowe wagi - dostosuj je w env_config (musisz je mieć zdefiniowane!)
         self.alive_coeff = env.env_config["reward"].get("alive_coeff", 1.0) * dt
         self.base_height_coeff = env.env_config["reward"].get("base_height_coeff", 5.0) * dt
         self.roll_pitch_pos_coeff = env.env_config["reward"].get("roll_pitch_pos_coeff", 3.0) * dt
         self.base_vel_coeff = env.env_config["reward"].get("base_vel_coeff", 2.0) * dt 
         
-        # Kary za "sztywność" i wybuchowość
         self.joint_torque_coeff = env.env_config["reward"].get("joint_torque_coeff", 0.05) * dt
         self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
         
-        # NOWE: Kara za odchylanie nóg od naturalnej pozycji stojącej
         self.joint_pos_coeff = env.env_config["reward"].get("joint_pos_coeff", 10.0) * dt
-        
-        # ZWIĘKSZONA W BASHU: Kara za uderzenie o glebę
         self.collision_coeff = env.env_config["reward"].get("collision_coeff", 1.0) * dt
 
         self.nominal_landing_height = env.env_config["reward"]["nominal_landing_height"]
         self.soft_joint_position_limit = env.env_config["reward"].get("soft_joint_position_limit", 0.9)
+
+        # =====================================================================
+        # RĘCZNIE ZDEFINIOWANA POZYCJA NOMINALNA (Wymuszona w nagrodzie)
+        # UWAGA: Upewnij się, że ta kolejność pokrywa się z qpos w MuJoCo!
+        # =====================================================================
+        self.custom_target_joint_positions = np.array([
+            0.0,   # spine
+            -0.1,  # RL_hip
+            -0.8,  # RL_thigh
+            1.5,   # RL_calf
+            0.1,   # RR_hip
+            0.8,   # RR_thigh
+            -1.5,  # RR_calf
+            -0.1,  # FR_hip
+            0.8,   # FR_thigh
+            -1.5,  # FR_calf
+            0.1,   # FL_hip
+            -0.8,  # FL_thigh
+            1.5    # FL_calf
+        ])
 
     def init(self):
         self.env.internal_state["joint_position_limits"] = self.calculate_joint_position_limits()
@@ -70,8 +85,7 @@ class SimplifiedLandingReward:
         base_height_reward = self.base_height_coeff * -np.square(height_diff)
 
         # NOWE: Wymuszenie trzymania nóg w naturalnej pozycji (zapobiega zwijaniu się)
-        nominal_joint_pos = self.env.internal_state["actuator_joint_nominal_positions"]
-        joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - nominal_joint_pos))
+        joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - self.custom_target_joint_positions))
 
         joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
