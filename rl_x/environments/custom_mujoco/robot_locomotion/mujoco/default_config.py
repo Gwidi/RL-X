@@ -47,9 +47,9 @@ def get_config(environment_name):
                 "energy_dissipation_curriculum": {
                     "start_height": 0.5,
                     "target_height": 1.5,
-                    "max_roll_angle_deg": 20,
-                    "max_pitch_angle_deg": 20,
-                    "max_lateral_velocity": 3.0,
+                    "max_roll_angle_deg": 15,
+                    "max_pitch_angle_deg": 15,
+                    "max_lateral_velocity": 0.3,
                 },
             },
             "joint_dropout": {
