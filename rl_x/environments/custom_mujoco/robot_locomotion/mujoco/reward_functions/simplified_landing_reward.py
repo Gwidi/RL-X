@@ -9,36 +9,13 @@ class SimplifiedLandingReward:
         self.base_height_coeff = env.env_config["reward"].get("base_height_coeff", 5.0) * dt
         self.roll_pitch_pos_coeff = env.env_config["reward"].get("roll_pitch_pos_coeff", 3.0) * dt
         self.base_vel_coeff = env.env_config["reward"].get("base_vel_coeff", 2.0) * dt 
-        
         self.joint_torque_coeff = env.env_config["reward"].get("joint_torque_coeff", 0.05) * dt
         self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
-        
-        self.joint_pos_coeff = env.env_config["reward"].get("joint_pos_coeff", 10.0) * dt
         self.collision_coeff = env.env_config["reward"].get("collision_coeff", 1.0) * dt
 
         self.nominal_landing_height = env.env_config["reward"]["nominal_landing_height"]
         self.soft_joint_position_limit = env.env_config["reward"].get("soft_joint_position_limit", 0.9)
-
-        # =====================================================================
-        # RĘCZNIE ZDEFINIOWANA POZYCJA NOMINALNA (Wymuszona w nagrodzie)
-        # UWAGA: Upewnij się, że ta kolejność pokrywa się z qpos w MuJoCo!
-        # =====================================================================
-        self.custom_target_joint_positions = np.array([
-            0.0,   # spine
-            -0.1,  # RL_hip
-            -0.8,  # RL_thigh
-            1.5,   # RL_calf
-            0.1,   # RR_hip
-            0.8,   # RR_thigh
-            -1.5,  # RR_calf
-            -0.1,  # FR_hip
-            0.8,   # FR_thigh
-            -1.5,  # FR_calf
-            0.1,   # FL_hip
-            -0.8,  # FL_thigh
-            1.5    # FL_calf
-        ])
 
     def init(self):
         self.env.internal_state["joint_position_limits"] = self.calculate_joint_position_limits()
@@ -61,6 +38,10 @@ class SimplifiedLandingReward:
         self.env.internal_state["previous_imu_linear_velocity"] = np.zeros(self.env.imu_linear_velocity_sensor_dim)
         self.env.internal_state["sum_tracking_performance_percentage"] = 0.0
         self.env.internal_state["previous_actuator_joint_velocities"] = np.zeros(self.env.nr_actuator_joints)
+        
+        # Wznowione śledzenie momentu uderzenia
+        self.env.internal_state["has_touched_ground"] = False
+        self.env.internal_state["time_since_touchdown"] = 0.0
 
     def step(self):
         feet_floor_contacts = self.env.terrain_function.check_feet_floor_contact()
@@ -70,8 +51,14 @@ class SimplifiedLandingReward:
         self.env.internal_state["previous_actuator_joint_velocities"] = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
         self.env.internal_state["previous_imu_linear_velocity"] = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
 
+        # Logika czasu po uderzeniu
+        if np.any(feet_floor_contacts):
+            self.env.internal_state["has_touched_ground"] = True
+            
+        if self.env.internal_state.get("has_touched_ground", False):
+            self.env.internal_state["time_since_touchdown"] += self.env.dt
+
     def reward_and_info(self, action):
-        qpos = self.env.internal_state["data"].qpos[self.env.actuator_joint_mask_qpos]
         qvel = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
         tau = self.env.internal_state["data"].qfrc_actuator[self.env.actuator_joint_mask_qvel]
         lin_vel = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
@@ -81,12 +68,34 @@ class SimplifiedLandingReward:
         base_vel_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
 
-        height_diff = self.env.internal_state["robot_imu_height_over_ground"] - self.nominal_landing_height
-        base_height_reward = self.base_height_coeff * -np.square(height_diff)
+        # =====================================================================
+        # INTELIGENTNA KARA ZA WYSOKOŚĆ (3 fazy lądowania)
+        # =====================================================================
+        height = self.env.internal_state["robot_imu_height_over_ground"]
+        target_height = self.nominal_landing_height
+        has_touched = self.env.internal_state.get("has_touched_ground", False)
+        time_since_touch = self.env.internal_state.get("time_since_touchdown", 0.0)
 
-        # NOWE: Wymuszenie trzymania nóg w naturalnej pozycji (zapobiega zwijaniu się)
-        joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - self.custom_target_joint_positions))
+        base_height_reward = 0.0
 
+        if not has_touched:
+            # FAZA 1: LOT W DÓŁ
+            # Karzemy TYLKO jeśli zwinie nogi pod siebie będąc wysoko w powietrzu
+            if height < target_height:
+                base_height_reward = self.base_height_coeff * -np.square(height - target_height)
+        else:
+            # FAZA 2 i 3: PO UDERZENIU
+            if height > target_height:
+                # Bezwzględna kara za odbijanie się od ziemi jak piłka (powrót w górę)
+                base_height_reward = self.base_height_coeff * -np.square(height - target_height)
+            else:
+                # Robot kuca w celu amortyzacji (height <= target_height)
+                # Dajemy mu swobodę przez pierwsze 0.4s po kontakcie z ziemią.
+                # Po 0.4s kara zaczyna rosnąć od zera do maksa przez kolejne 0.6 sekundy.
+                squat_penalty_weight = np.clip((time_since_touch - 0.4) / 0.6, 0.0, 1.0)
+                base_height_reward = squat_penalty_weight * self.base_height_coeff * -np.square(height - target_height)
+
+        # Reszta kar
         joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
@@ -106,7 +115,6 @@ class SimplifiedLandingReward:
             + base_vel_reward
             + angular_position_reward
             + base_height_reward
-            + joint_pos_reward  # Dodane do sumy
             + joint_vel_reward
             + torque_reward
             + action_rate_reward
@@ -121,7 +129,6 @@ class SimplifiedLandingReward:
         info["reward/base_vel"] = base_vel_reward
         info["reward/angular_position"] = angular_position_reward
         info["reward/base_height"] = base_height_reward
-        info["reward/joint_pos"] = joint_pos_reward  # Nowy log
         info["reward/joint_vel"] = joint_vel_reward
         info["reward/joint_torque"] = torque_reward
         info["reward/action_rate"] = action_rate_reward
