@@ -21,8 +21,10 @@ class EnergyDissipationCurriculumInitialState:
 
     def _get_curriculum_schedule(self, coeff):
         height = self.start_height + (self.target_height - self.start_height) * coeff
-        angle_multiplier = 4 * coeff * (1 - coeff) 
-        velocity_multiplier = 4 * coeff * (1 - coeff)
+        
+        angle_multiplier = coeff 
+        velocity_multiplier = coeff
+        
         return height, angle_multiplier, velocity_multiplier
 
     def setup(self):
