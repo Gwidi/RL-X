@@ -65,8 +65,29 @@ class SimplifiedLandingReward:
         ang_vel = self.env.internal_state["data"].sensordata[self.env.imu_angular_velocity_sensor_adr:self.env.imu_angular_velocity_sensor_adr + self.env.imu_angular_velocity_sensor_dim]
         euler = self.env.internal_state["imu_orientation_euler"]
 
-        base_vel_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
+
+        # =====================================================================
+        # INTELIGENTNE KARY ZA PRĘDKOŚĆ (Tolerancja podczas amortyzacji)
+        # =====================================================================
+        has_touched = self.env.internal_state.get("has_touched_ground", False)
+        time_since_touch = self.env.internal_state.get("time_since_touchdown", 0.0)
+
+        # 1. Prędkość korpusu: Zawsze karzemy za ślizganie się w poziomie (X, Y) i rotacje
+        base_vel_xy_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel[:2])) + np.sum(np.square(ang_vel)))
+        
+        # Karę za ruch góra/dół (Z) i ruch stawów włączamy na pełnej mocy 
+        # dopiero po fazie amortyzacji (np. po 0.3 sekundach).
+        if has_touched and time_since_touch < 0.3:
+            # W fazie "deep squat" pozwalamy na opadanie w osi Z i zginanie nóg!
+            base_vel_z_reward = 0.0
+            joint_vel_reward = 0.0
+        else:
+            # Po amortyzacji (lub w locie) - robot ma zastygnąć w bezruchu
+            base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2])
+            joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
+
+        base_vel_reward = base_vel_xy_reward + base_vel_z_reward
 
         # =====================================================================
         # INTELIGENTNA KARA ZA WYSOKOŚĆ (3 fazy lądowania)
@@ -96,7 +117,6 @@ class SimplifiedLandingReward:
                 base_height_reward = squat_penalty_weight * self.base_height_coeff * -np.square(height - target_height)
 
         # Reszta kar
-        joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
