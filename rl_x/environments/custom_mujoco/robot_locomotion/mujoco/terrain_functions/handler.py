@@ -9,6 +9,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.h
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_bowl import HFieldBowlTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_truncated_pyramid import HFieldTruncatedPyramidTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_inverted_truncated_pyramid import HFieldInvertedTruncatedPyramidTerrainGeneration
+from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_inverted_truncated_pyramid_unbounded import HFieldInvertedTruncatedPyramidUnboundedTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_hurdles import HFieldHurdlesTerrainGeneration
 
 def get_terrain_function(name, env, **kwargs):
@@ -34,6 +35,8 @@ def get_terrain_function(name, env, **kwargs):
         return HFieldTruncatedPyramidTerrainGeneration(env, **kwargs)
     elif name == "hfield_inverted_truncated_pyramid":
         return HFieldInvertedTruncatedPyramidTerrainGeneration(env, **kwargs)
+    elif name == "hfield_inverted_truncated_pyramid_unbounded":
+        return HFieldInvertedTruncatedPyramidUnboundedTerrainGeneration(env, **kwargs)
     elif name == "hfield_hurdles":
         return HFieldHurdlesTerrainGeneration(env, **kwargs)
     else:

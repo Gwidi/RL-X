@@ -185,8 +185,8 @@ def get_config(environment_name):
             "block_length_in_meters": 0.5,
             "block_height_max_per_m_factor": 0.2,
             "block_slope_height_max_per_m_factor": 0.2,
-            # Used by hfield_bunker_ruins_unbounded. Difficulty 1.0 matches
-            # hfield_bunker_ruins at env_curriculum_coeff == 1.0.
+            # Used by unbounded terrain variants. Difficulty 1.0 matches the
+            # corresponding bounded terrain at env_curriculum_coeff == 1.0.
             "curriculum_initial_difficulty": 0.0,
             "curriculum_eval_difficulty": 1.0,
             "curriculum_step_scale": 1.0,
@@ -220,6 +220,8 @@ def get_config(environment_name):
             "inverted_truncated_pyramid_outer_half_width_m": 3.2,
             "inverted_truncated_pyramid_height_m": 0.8,
             "inverted_truncated_pyramid_use_curriculum": True,
+            # hfield_inverted_truncated_pyramid_unbounded reuses the geometry
+            # above and scales its height with curriculum_*_difficulty.
             # Used by hfield_hurdles. Thin square walls surround the spawn
             # area, so the robot encounters them in every travel direction.
             "hurdles_first_wall_distance_m": 1.0,
