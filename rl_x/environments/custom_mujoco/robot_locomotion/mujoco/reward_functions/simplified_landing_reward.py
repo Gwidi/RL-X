@@ -12,7 +12,10 @@ class SimplifiedLandingReward:
         self.joint_torque_coeff = env.env_config["reward"].get("joint_torque_coeff", 0.05) * dt
         self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
-        self.collision_coeff = env.env_config["reward"].get("collision_coeff", 1.0) * dt
+        
+        # ZMIANA 1: Rozdzielenie kolizji
+        self.self_collision_coeff = env.env_config["reward"].get("collision_coeff", 20.0) * dt
+        self.floor_collision_coeff = 2.0 * dt  # Łagodne ostrzeżenie za łydki na ziemi
         
         self.joint_pos_coeff = env.env_config["reward"].get("joint_pos_coeff", 5.0) * dt
 
@@ -71,69 +74,66 @@ class SimplifiedLandingReward:
         height = self.env.internal_state["robot_imu_height_over_ground"]
         target_height = self.nominal_landing_height
 
-        # =====================================================================
-        # 1. KARY ZALEŻNE OD FAZY (LOT vs LĄDOWANIE)
-        # =====================================================================
         base_vel_xy_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel[:2])) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
         
         if not has_touched:
-            # W POWIETRZU: Dyscyplina (brak wierzgania)
+            # W POWIETRZU: Dyscyplina zapobiegająca eksplozji fizyki
             nominal_joint_pos = self.env.internal_state["actuator_joint_nominal_positions"]
             joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - nominal_joint_pos))
             base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2])
             joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
             
-            # W powietrzu karzemy za wysokość tylko jeśli wierzga (skula się) do góry
             base_height_reward = self.base_height_coeff * -np.square(height - target_height) if height < target_height else 0.0
 
         else:
-            # NA ZIEMI: Swoboda pozycji nóg (zero kary za pozycję)
+            # NA ZIEMI: Swoboda pozycji nóg
             joint_pos_reward = 0.0
             
             if time_since_touch < 0.3:
-                # FAZA AMORTYZACJI (Deep Squat): Brak kar za opadanie i zginanie nóg
-                base_vel_z_reward = 0.0
+                # ZMIANA 2: Asymetryczna prędkość w osi Z podczas Deep Squata
+                # Jeśli leci w dół (amortyzacja) -> zero kary. Jeśli odbija w górę -> silna kara.
+                if lin_vel[2] > 0:
+                    base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2]) * 2.0
+                else:
+                    base_vel_z_reward = 0.0
+                    
                 joint_vel_reward = 0.0
                 
-                # Kara za wysokość rośnie powoli (pozwala swobodnie zejść poniżej 0.38)
                 squat_penalty_weight = np.clip((time_since_touch) / 0.3, 0.0, 1.0) if height < target_height else 1.0
                 base_height_reward = squat_penalty_weight * self.base_height_coeff * -np.square(height - target_height)
             else:
-                # PO AMORTYZACJI: Powrót kar za ruch (wymuszony bezruch)
+                # PO AMORTYZACJI: Wymuszony bezruch
                 base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2])
                 joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
                 base_height_reward = self.base_height_coeff * -np.square(height - target_height)
 
         base_vel_reward = base_vel_xy_reward + base_vel_z_reward
 
-        # =====================================================================
-        # 2. ZUŻYCIE PRĄDU I WIBRACJE
-        # =====================================================================
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
         # =====================================================================
-        # 3. ROZBUDOWANE KOLIZJE (Self-Collision + Gleba)
+        # ZMIANA 3: ROZDZIELONE KOLIZJE
         # =====================================================================
         all_geom_xpos = self.env.internal_state["data"].geom_xpos[self.env.reward_collision_sphere_geom_ids]
         all_geom_sizes = self.env.internal_state["mj_model"].geom_size[self.env.reward_collision_sphere_geom_ids, 0]
         
-        # A) Zderzenia części ciała ze sobą (Self-Collision)
+        # A) Zderzenia ciała ze sobą -> Ogromna kara (np. 20.0 z basha)
         distance_between_geoms = np.linalg.norm(all_geom_xpos[:, None] - all_geom_xpos[None], axis=-1)
         contact_between_geoms = distance_between_geoms <= (all_geom_sizes[:, None] + all_geom_sizes[None])
         nr_self_collisions = (np.sum(contact_between_geoms) - len(self.env.reward_collision_sphere_geom_ids)) // 2
         nr_self_collisions = np.maximum(nr_self_collisions - self.env.internal_state["nr_collisions_in_nominal"], 0)
-        
-        # B) Zderzenia ciała (łydki, brzuch) z glebą
+        self_collision_reward = self.self_collision_coeff * -nr_self_collisions
+
+        # B) Łydki/brzuch dotykające gleby -> Mała kara (2.0) zachęcająca do nie zderzania się, ale dopuszczająca głęboki przysiad
         geom_ground_heights = self.env.terrain_function.ground_height_at(all_geom_xpos[:, 0], all_geom_xpos[:, 1])
         geom_clearance = all_geom_xpos[:, 2] - geom_ground_heights
-        # Kolizja zachodzi, gdy odległość środka sfery od gleby jest mniejsza niż jej promień
         nr_floor_collisions = np.sum(geom_clearance < all_geom_sizes)
+        floor_collision_reward = self.floor_collision_coeff * -nr_floor_collisions
         
-        # Łączymy kary
-        nr_collisions = nr_self_collisions + nr_floor_collisions
-        collision_reward = self.collision_coeff * -nr_collisions
+        collision_reward = self_collision_reward + floor_collision_reward
+        # =====================================================================
 
         alive_reward = self.alive_coeff * 1.0
 
@@ -151,7 +151,6 @@ class SimplifiedLandingReward:
         
         reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Logowanie
         info = self.env.internal_state["info"]
         info["reward/alive"] = alive_reward
         info["reward/base_vel"] = base_vel_reward
@@ -164,7 +163,6 @@ class SimplifiedLandingReward:
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
 
-        # Diagnostyka
         desired_imu_linear_velocity_xy = self.env.internal_state["goal_velocities"][:2]
         xy_difference = desired_imu_linear_velocity_xy - lin_vel[:2]
         max_xy_velocity_diff_abs = np.mean(2 * self.env.internal_state["max_command_velocities"][:2])
