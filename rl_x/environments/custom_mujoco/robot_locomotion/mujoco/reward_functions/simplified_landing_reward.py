@@ -74,6 +74,11 @@ class SimplifiedLandingReward:
         height = self.env.internal_state["robot_imu_height_over_ground"]
         target_height = self.nominal_landing_height
 
+        if height < 0.15:
+            base_crash_reward = -20.0 * self.env.dt
+        else:
+            base_crash_reward = 0.0
+
         base_vel_xy_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel[:2])) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
         
@@ -142,6 +147,7 @@ class SimplifiedLandingReward:
             + base_vel_reward
             + angular_position_reward
             + base_height_reward
+            + base_crash_reward
             + joint_pos_reward
             + joint_vel_reward
             + torque_reward
@@ -156,6 +162,7 @@ class SimplifiedLandingReward:
         info["reward/base_vel"] = base_vel_reward
         info["reward/angular_position"] = angular_position_reward
         info["reward/base_height"] = base_height_reward
+        info["reward/base_crash"] = base_crash_reward
         info["reward/joint_pos"] = joint_pos_reward
         info["reward/joint_vel"] = joint_vel_reward
         info["reward/joint_torque"] = torque_reward
