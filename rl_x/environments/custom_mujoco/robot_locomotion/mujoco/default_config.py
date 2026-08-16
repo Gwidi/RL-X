@@ -49,7 +49,7 @@ def get_config(environment_name):
                     "target_height": 1.5,
                     "max_roll_angle_deg": 15,
                     "max_pitch_angle_deg": 15,
-                    "max_lateral_velocity": 0.3,
+                    "max_lateral_velocity": 1.0,
                 },
             },
             "joint_dropout": {
