@@ -9,6 +9,13 @@ TERRAIN_TYPE = "hfield_hurdles"
 TERRAIN_GEOM_PREFIX = "hurdle_wall_"
 DEFAULT_HALF_WIDTH_M = 4.0
 
+THIGH_COLLIDER_FROMTO = {
+    "RL_thigh": (0.053, 0.0, 0.0, 0.053, 0.2, 0.0),
+    "RR_thigh": (0.053, 0.0, 0.0, 0.053, -0.2, 0.0),
+    "FR_thigh": (0.053, 0.0, 0.0, 0.053, -0.2, 0.0),
+    "FL_thigh": (0.053, 0.0, 0.0, 0.053, 0.2, 0.0),
+}
+
 
 def number_of_walls(terrain_config):
     wall_count = config_value(
@@ -42,6 +49,9 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
     """Allocates four boxes for each concentric square hurdle wall."""
     uses_calf_colliders = bool(
         config_value(terrain_config, "uses_calf_colliders", True)
+    )
+    uses_thigh_colliders = bool(
+        config_value(terrain_config, "uses_thigh_colliders", False)
     )
     wall_count = number_of_walls(terrain_config)
     first_wall_distance_m = float(
@@ -115,14 +125,31 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
                 uses_calf_colliders
                 and geom.name.endswith("_calf")
             )
+            or (
+                uses_thigh_colliders
+                and geom.name.endswith("_thigh")
+            )
         )
     ]
     for geom in collision_geoms:
         if geom.name.endswith("_calf"):
             geom.type = "capsule"
             geom.size = (0.015, 0.085)
-        # Use a terrain-specific collision bit so calves collide with the
-        # boxes but not with the plane underneath them.
+            geom.rgba = "0 1 0 1"  # green
+        if geom.name.endswith("_thigh"):
+            geom.type = "capsule"
+            geom.size = (0.015, 0.085)
+            thigh_fromto = THIGH_COLLIDER_FROMTO.get(geom.name)
+            if thigh_fromto is not None:
+                # Follow the orange thigh link from the hip axis to the
+                # calf-joint attachment instead of retaining the cylinder's
+                # original orientation.
+                geom.pos = None
+                geom.quat = None
+                geom.fromto = thigh_fromto
+            geom.rgba = "0 1 0 1"  # green
+        # Use a terrain-specific collision bit so the selected limb
+        # colliders collide with the boxes but not with the plane below.
         geom.conaffinity = 2
 
     geom_names = []
