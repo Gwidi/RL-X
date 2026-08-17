@@ -135,6 +135,13 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
         if geom.name.endswith("_calf"):
             geom.type = "capsule"
             geom.size = (0.015, 0.085)
+            # Give calf-box contacts a softer, explicitly selected contact
+            # model.  Priority 1 prevents the boxes' inherited direct-format
+            # solref (-1000, -80) from being mixed with these parameters.
+            geom.condim = 3
+            geom.priority = 1
+            geom.solref = (0.03, 1.0)
+            geom.solimp = (0.8, 0.95, 0.003, 0.5, 2.0)
             geom.rgba = "0 1 0 1"  # green
         if geom.name.endswith("_thigh"):
             geom.type = "capsule"

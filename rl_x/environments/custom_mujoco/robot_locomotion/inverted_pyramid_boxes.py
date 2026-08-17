@@ -195,6 +195,16 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
         geom.type = "capsule"
         geom.size = (0.015, 0.06)
         geom.conaffinity = 2
+        # Calves only use collision bit 2, so these parameters affect their
+        # contacts with the terrain boxes without changing foot-floor contact.
+        # The higher priority is important: the boxes inherit the root geom's
+        # direct-format solref (-1000, -80), which would otherwise be mixed
+        # with this positive time-constant format.
+        geom.condim = 3
+        geom.priority = 1
+        geom.solref = (0.03, 1.0)
+        geom.solimp = (0.8, 0.95, 0.003, 0.5, 2.0)
+        geom.rgba = [0.0, 1.0, 0.0, 1.0]  # green
 
     geom_names = []
     for step_idx in range(nr_steps):
@@ -213,6 +223,7 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
                 contype="2",
                 conaffinity="0",
                 rgba="0.38 0.42 0.46 1",
+                friction="1.0 0.005 0.0001",
             )
             geom_names.append(name)
 
