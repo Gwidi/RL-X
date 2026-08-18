@@ -10,6 +10,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         self.random_height_max_per_m_factor = terrain_config["random_height_max_per_m_factor"]
         self.block_height_max_per_m_factor = terrain_config["block_height_max_per_m_factor"]
         self.block_slope_height_max_per_m_factor = terrain_config.get("block_slope_height_max_per_m_factor", self.block_height_max_per_m_factor)
+        self.safe_start_zone_radius_m = self.env.env_curriculum_start_zone_radius_m
         self.noise_reference_resolution = int(
             terrain_config.get("noise_reference_resolution", 80)
         )
@@ -295,7 +296,7 @@ class HFieldBunkerRuinsTerrainGeneration:
         # ---------------------------------------------------------------------
         # 4. SAFE STARTING ZONE (Overwrite only, no funnel)
         # ---------------------------------------------------------------------
-        safe_radius_px = int(0.8 * self.one_meter_length)
+        safe_radius_px = int(self.safe_start_zone_radius_m * self.one_meter_length)
         center_x = self.hfield_half_length
         center_y = self.hfield_half_length
         

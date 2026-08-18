@@ -230,10 +230,16 @@ class LocomotionEnv(gym.Env):
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
         self.env_curriculum_level_failure_episode_return = env_config.get("env_curriculum_level_failure_episode_return", 10.0)
+        self.env_curriculum_start_zone_radius_m = env_config.get("env_curriculum_start_zone_radius_m", 0.8)
+        self.env_curriculum_min_outside_start_zone_fraction = env_config.get("env_curriculum_min_outside_start_zone_fraction", 0.8)
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
             raise ValueError("env_curriculum_disabled_coeff must be between 0.0 and 1.0.")
+        if not np.isfinite(self.env_curriculum_start_zone_radius_m) or self.env_curriculum_start_zone_radius_m < 0.0:
+            raise ValueError("env_curriculum_start_zone_radius_m must be finite and non-negative.")
+        if not 0.0 <= self.env_curriculum_min_outside_start_zone_fraction <= 1.0:
+            raise ValueError("env_curriculum_min_outside_start_zone_fraction must be between 0.0 and 1.0.")
         if self.env_curriculum_successes_per_level < 1:
             raise ValueError("env_curriculum_successes_per_level must be at least 1.")
         if self.env_curriculum_failures_per_level < 1:
@@ -303,10 +309,12 @@ class LocomotionEnv(gym.Env):
                 "rollout/episode_return": 0.0,
                 "rollout/episode_length": 0,
                 "env_curriculum/coefficient": env_curriculum_coeff,
+                "env_curriculum/outside_start_zone_fraction": 0.0,
             },
             "info_episode_store": {
                 "episode_return": 0.0,
                 "episode_step": 0,
+                "episode_steps_outside_start_zone": 0,
                 "episode_total_xy_velocity_diff_abs": 0.0,
             },
         }
@@ -413,9 +421,19 @@ class LocomotionEnv(gym.Env):
         self.internal_state["data"].ctrl = np.zeros(self.nr_actuator_joints)
         mujoco.mj_forward(self.internal_state["mj_model"], self.internal_state["data"])
 
-        episode_completed = self.internal_state["info_episode_store"]["episode_step"] > 0
+        episode_steps = self.internal_state["info_episode_store"]["episode_step"]
+        episode_completed = episode_steps > 0
         episode_return = self.internal_state["info_episode_store"]["episode_return"]
-        episode_success = episode_return >= self.env_curriculum_level_success_episode_return
+        outside_start_zone_fraction = (
+            self.internal_state["info_episode_store"]["episode_steps_outside_start_zone"]
+            / max(episode_steps, 1)
+        )
+        episode_success = (
+            episode_return >= self.env_curriculum_level_success_episode_return
+            and outside_start_zone_fraction
+            >= self.env_curriculum_min_outside_start_zone_fraction
+        )
+        self.internal_state["info"]["env_curriculum/outside_start_zone_fraction"] = outside_start_zone_fraction
         episode_failure = (
             episode_completed
             and not episode_success
@@ -479,6 +497,7 @@ class LocomotionEnv(gym.Env):
         self.internal_state["info_episode_store"] = {
             "episode_return": 0.0,
             "episode_step": 0,
+            "episode_steps_outside_start_zone": 0,
             "episode_total_xy_velocity_diff_abs": 0.0,
         }
 
@@ -516,17 +535,30 @@ class LocomotionEnv(gym.Env):
         truncated = self.internal_state["info_episode_store"]["episode_step"] >= (self.horizon - 1)
         done = terminated | truncated
 
+        distance_from_start_zone_center = np.linalg.norm(
+            self.internal_state["data"].qpos[:2] - self.initial_qpos[:2]
+        )
+        outside_start_zone = (
+            distance_from_start_zone_center
+            >= self.env_curriculum_start_zone_radius_m
+        )
+
         self.terrain_function.post_step()
         self.reward_function.step()
 
         self.internal_state["second_last_action"] = self.internal_state["last_action"].copy()
         self.internal_state["last_action"] = chosen_action.copy()
         self.internal_state["info_episode_store"]["episode_step"] += 1
+        self.internal_state["info_episode_store"]["episode_steps_outside_start_zone"] += int(outside_start_zone)
         self.internal_state["info_episode_store"]["episode_return"] += reward
         self.internal_state["info_episode_store"]["episode_total_xy_velocity_diff_abs"] += self.internal_state["info"]["env_info/xy_vel_diff_abs"]
         self.internal_state["info"]["rollout/episode_return"] = np.where(done, self.internal_state["info_episode_store"]["episode_return"], self.internal_state["info"]["rollout/episode_return"])
         self.internal_state["info"]["rollout/episode_length"] = np.where(done, self.internal_state["info_episode_store"]["episode_step"], self.internal_state["info"]["rollout/episode_length"])
         self.internal_state["info"]["env_curriculum/coefficient"] = self.internal_state["env_curriculum_coeff"]
+        self.internal_state["info"]["env_curriculum/outside_start_zone_fraction"] = (
+            self.internal_state["info_episode_store"]["episode_steps_outside_start_zone"]
+            / self.internal_state["info_episode_store"]["episode_step"]
+        )
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info()
 

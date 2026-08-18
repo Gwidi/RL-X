@@ -26,6 +26,8 @@ def get_config(environment_name):
         "env_curriculum_nr_levels": 100,
         "env_curriculum_level_success_episode_return": 8.0,
         "env_curriculum_level_failure_episode_return": 10.0,
+        "env_curriculum_start_zone_radius_m": 0.8,
+        "env_curriculum_min_outside_start_zone_fraction": 0.8,
         "env_curriculum_successes_per_level": 5,
         "env_curriculum_failures_per_level": 2,
         "domain_randomization": {

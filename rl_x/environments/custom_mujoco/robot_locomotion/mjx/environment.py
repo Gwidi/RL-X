@@ -259,11 +259,17 @@ class LocomotionEnv:
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
         self.env_curriculum_level_failure_episode_return = env_config.get("env_curriculum_level_failure_episode_return", 10.0)
+        self.env_curriculum_start_zone_radius_m = env_config.get("env_curriculum_start_zone_radius_m", 0.8)
+        self.env_curriculum_min_outside_start_zone_fraction = env_config.get("env_curriculum_min_outside_start_zone_fraction", 0.8)
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
             raise ValueError("env_curriculum_disabled_coeff must be between 0.0 and 1.0.")
+        if not np.isfinite(self.env_curriculum_start_zone_radius_m) or self.env_curriculum_start_zone_radius_m < 0.0:
+            raise ValueError("env_curriculum_start_zone_radius_m must be finite and non-negative.")
+        if not 0.0 <= self.env_curriculum_min_outside_start_zone_fraction <= 1.0:
+            raise ValueError("env_curriculum_min_outside_start_zone_fraction must be between 0.0 and 1.0.")
         if self.env_curriculum_successes_per_level < 1:
             raise ValueError("env_curriculum_successes_per_level must be at least 1.")
         if self.env_curriculum_failures_per_level < 1:
@@ -449,11 +455,13 @@ class LocomotionEnv:
         info["env_curriculum/coefficient"] = internal_state["env_curriculum_coeff"]
         info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
         info["env_curriculum/last_episode_success"] = internal_state["env_curriculum_last_episode_success"]
+        info["env_curriculum/outside_start_zone_fraction"] = 0.0
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
             "episode_return": reward,
             "episode_step": 0,
+            "episode_steps_outside_start_zone": 0,
             "episode_total_xy_velocity_diff_abs": 0.0,
         }
 
@@ -483,13 +491,24 @@ class LocomotionEnv:
         new_state = state
 
         episode_return = new_state.info_episode_store["episode_return"]
-        episode_success = episode_return >= self.env_curriculum_level_success_episode_return
+        episode_steps = new_state.info_episode_store["episode_step"]
+        outside_start_zone_fraction = (
+            new_state.info_episode_store["episode_steps_outside_start_zone"]
+            / jnp.maximum(episode_steps, 1)
+        )
+        episode_success = (
+            (episode_return >= self.env_curriculum_level_success_episode_return)
+            & (
+                outside_start_zone_fraction
+                >= self.env_curriculum_min_outside_start_zone_fraction
+            )
+        )
         if self.env_curriculum_require_full_episode:
             episode_success &= (
                 (new_state.info_episode_store["episode_step"] >= self.horizon)
                 & ~new_state.terminated
             )
-        episode_completed = new_state.info_episode_store["episode_step"] > 0
+        episode_completed = episode_steps > 0
         episode_failure = (
             episode_completed
             & ~episode_success
@@ -577,6 +596,7 @@ class LocomotionEnv:
         info_episode_store = {
             "episode_return": reward,
             "episode_step": 0,
+            "episode_steps_outside_start_zone": 0,
             "episode_total_xy_velocity_diff_abs": 0.0,
         }
 
@@ -591,6 +611,7 @@ class LocomotionEnv:
         )
         new_state.info["env_curriculum/success_rate"] = new_state.internal_state["env_curriculum_success_rate"]
         new_state.info["env_curriculum/last_episode_success"] = new_state.internal_state["env_curriculum_last_episode_success"]
+        new_state.info["env_curriculum/outside_start_zone_fraction"] = outside_start_zone_fraction
 
         return new_state
 
@@ -641,12 +662,21 @@ class LocomotionEnv:
         truncated = state.info_episode_store["episode_step"] >= (self.horizon - 1)
         done = terminated | truncated
 
+        distance_from_start_zone_center = jnp.linalg.norm(
+            data.qpos[:2] - self.initial_qpos[:2]
+        )
+        outside_start_zone = (
+            distance_from_start_zone_center
+            >= self.env_curriculum_start_zone_radius_m
+        )
+
         data = self.terrain_function.post_step(data, mjx_model, state.internal_state, terrain_key)
         self.reward_function.step(data, state.internal_state)
 
         state.internal_state["second_last_action"] = state.internal_state["last_action"]
         state.internal_state["last_action"] = chosen_action
         state.info_episode_store["episode_step"] += 1
+        state.info_episode_store["episode_steps_outside_start_zone"] += outside_start_zone.astype(jnp.int32)
         state.info_episode_store["episode_return"] += reward
         state.info_episode_store["episode_total_xy_velocity_diff_abs"] += state.info["env_info/xy_vel_diff_abs"]
         state.info["rollout/episode_return"] = jnp.where(done, state.info_episode_store["episode_return"], state.info["rollout/episode_return"])
@@ -654,6 +684,10 @@ class LocomotionEnv:
         state.info["env_curriculum/coefficient"] = state.internal_state["env_curriculum_coeff"]
         state.info["env_curriculum/success_rate"] = state.internal_state["env_curriculum_success_rate"]
         state.info["env_curriculum/last_episode_success"] = state.internal_state["env_curriculum_last_episode_success"]
+        state.info["env_curriculum/outside_start_zone_fraction"] = (
+            state.info_episode_store["episode_steps_outside_start_zone"]
+            / state.info_episode_store["episode_step"]
+        )
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info(state.internal_state, state.info)
 
