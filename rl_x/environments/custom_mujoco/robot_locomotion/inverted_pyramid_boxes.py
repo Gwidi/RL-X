@@ -204,6 +204,7 @@ def add_inverted_pyramid_box_geoms(xml_handle, terrain_config):
         geom.priority = 1
         geom.solref = (0.03, 1.0)
         geom.solimp = (0.8, 0.95, 0.003, 0.5, 2.0)
+        geom.friction = (0.5, 0.005, 0.0001)
         geom.rgba = [0.0, 1.0, 0.0, 1.0]  # green
 
     geom_names = []
