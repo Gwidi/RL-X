@@ -9,6 +9,11 @@ TERRAIN_TYPE = "hfield_hurdles"
 TERRAIN_GEOM_PREFIX = "hurdle_wall_"
 DEFAULT_HALF_WIDTH_M = 4.0
 
+# A single Coulomb coefficient cannot reproduce the separate static and
+# kinetic friction of real materials.  Use a middle-of-the-range value for a
+# dry aluminium link rubbing against a wooden hurdle as a stable baseline.
+ALUMINUM_WOOD_FRICTION = (0.4, 0.005, 0.0001)
+
 THIGH_COLLIDER_FROMTO = {
     "RL_thigh": (0.053, 0.0, 0.0, 0.053, 0.2, 0.0),
     "RR_thigh": (0.053, 0.0, 0.0, 0.053, -0.2, 0.0),
@@ -140,12 +145,21 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
             # solref (-1000, -80) from being mixed with these parameters.
             geom.condim = 3
             geom.priority = 1
+            geom.friction = ALUMINUM_WOOD_FRICTION
             geom.solref = (0.03, 1.0)
             geom.solimp = (0.8, 0.95, 0.003, 0.5, 2.0)
             geom.rgba = "0 1 0 1"  # green
         if geom.name.endswith("_thigh"):
             geom.type = "capsule"
             geom.size = (0.015, 0.085)
+            # The box has priority 0 and default sliding friction 1.0.  Give
+            # the thigh higher priority so its aluminium-wood approximation
+            # is selected instead of max-mixed back to 1.0.
+            geom.condim = 3
+            geom.priority = 1
+            geom.friction = ALUMINUM_WOOD_FRICTION
+            geom.solref = (0.03, 1.0)
+            geom.solimp = (0.8, 0.95, 0.003, 0.5, 2.0)
             thigh_fromto = THIGH_COLLIDER_FROMTO.get(geom.name)
             if thigh_fromto is not None:
                 # Follow the orange thigh link from the hip axis to the
