@@ -46,9 +46,9 @@ def get_config(environment_name):
                 "initial_height_offset": 1.0,
                 "energy_dissipation_curriculum": {
                     "start_height": 0.5,
-                    "target_height": 1.5,
-                    "max_roll_angle_deg": 15,
-                    "max_pitch_angle_deg": 15,
+                    "target_height": 2.0,
+                    "max_roll_angle_deg": 10,
+                    "max_pitch_angle_deg": 10,
                     "max_lateral_velocity": 1.0,
                 },
             },
