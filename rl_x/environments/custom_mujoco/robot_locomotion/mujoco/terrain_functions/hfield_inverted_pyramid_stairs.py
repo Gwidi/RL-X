@@ -10,6 +10,8 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
 class HFieldInvertedPyramidStairsTerrainGeneration:
     """Square stair basin built from box geoms around a flat center."""
 
+    uses_terrain_curriculum = True
+
     def __init__(self, env):
         self.env = env
         terrain_config = self.env.env_config["terrain"]
@@ -46,6 +48,18 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
             "inverted_pyramid_use_curriculum",
             True,
         )
+        self.initial_difficulty = self.env.env_config.get(
+            "terrain_curriculum_initial_difficulty",
+            0.0,
+        )
+        self.eval_difficulty = self.env.env_config.get(
+            "terrain_curriculum_eval_difficulty",
+            1.0,
+        )
+        self.curriculum_step_scale = self.env.env_config.get(
+            "terrain_curriculum_step_scale",
+            1.0,
+        )
         self.max_nr_steps = maximum_number_of_steps(terrain_config)
         self.terrain_geom_ids = np.asarray(
             getattr(env, "terrain_geom_ids", ()),
@@ -64,6 +78,23 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         if self.step_height_m < 0.0:
             raise ValueError(
                 "terrain.inverted_pyramid_step_height_m must be non-negative."
+            )
+        bounded_curriculum_values = (
+            (
+                "terrain_curriculum_initial_difficulty",
+                self.initial_difficulty,
+            ),
+            ("terrain_curriculum_eval_difficulty", self.eval_difficulty),
+        )
+        for name, value in bounded_curriculum_values:
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0.")
+        if (
+            not np.isfinite(self.curriculum_step_scale)
+            or self.curriculum_step_scale <= 0.0
+        ):
+            raise ValueError(
+                "terrain_curriculum_step_scale must be positive."
             )
 
     def rng(self):
@@ -97,6 +128,53 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
         self.env.internal_state[
             "terrain/inverted_pyramid_nr_steps"
         ] = self.number_of_steps(initial_tread_depths_m)
+        difficulty = (
+            self.eval_difficulty
+            if self.uses_fixed_difficulty()
+            else self.initial_difficulty
+        )
+        difficulty = difficulty if self.use_curriculum else 1.0
+        self.env.internal_state["terrain_curriculum_coeff"] = difficulty
+        self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ] = difficulty
+
+    def uses_fixed_difficulty(self):
+        return (
+            self.env.internal_state["in_eval_mode"]
+            or self.env.runner_mode == "test"
+        )
+
+    def update_curriculum(self, curriculum_delta):
+        if not self.use_curriculum:
+            self.env.internal_state["terrain_curriculum_coeff"] = 1.0
+            return
+        if self.uses_fixed_difficulty():
+            self.env.internal_state[
+                "terrain_curriculum_coeff"
+            ] = self.eval_difficulty
+            return
+        self.env.internal_state["terrain_curriculum_coeff"] = np.clip(
+            self.env.internal_state["terrain_curriculum_coeff"]
+            + self.curriculum_step_scale * curriculum_delta,
+            0.0,
+            1.0,
+        )
+
+    def add_curriculum_info(self):
+        info = self.env.internal_state["info"]
+        info["terrain_curriculum/applied_difficulty"] = self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ]
+        info["terrain_curriculum/next_difficulty"] = self.env.internal_state[
+            "terrain_curriculum_coeff"
+        ]
+        info["terrain_curriculum/step_height_m"] = self.env.internal_state[
+            "terrain/inverted_pyramid_step_height_m"
+        ]
+        info["terrain_curriculum/max_height_m"] = self.env.internal_state[
+            "terrain/inverted_pyramid_max_height_m"
+        ]
 
     def sample(self):
         if self.terrain_geom_ids.size != self.max_nr_steps * 4:
@@ -105,16 +183,10 @@ class HFieldInvertedPyramidStairsTerrainGeneration:
                 "box geoms."
             )
 
-        curriculum_coeff = (
-            self.env.internal_state["env_curriculum_coeff"]
-            if self.use_curriculum
-            else 1.0
-        )
-        curriculum_coeff = np.where(
-            self.env.internal_state["in_eval_mode"],
-            1.0,
-            curriculum_coeff,
-        )
+        curriculum_coeff = self.env.internal_state["terrain_curriculum_coeff"]
+        self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ] = curriculum_coeff
         sampled_tread_depths_m = self.sample_tread_depths(curriculum_coeff)
         positions, sizes, rbounds, nr_steps = self.box_geometry(
             curriculum_coeff,
