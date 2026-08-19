@@ -9,6 +9,10 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
 class HFieldHurdlesTerrainGeneration:
     """Thin concentric square walls built from MuJoCo box geoms."""
 
+    # Unlike the unbounded terrain variants, hurdles clamp their difficulty
+    # to [0, 1].
+    uses_terrain_curriculum = True
+
     def __init__(self, env):
         self.env = env
         terrain_config = self.env.env_config["terrain"]
@@ -27,6 +31,15 @@ class HFieldHurdlesTerrainGeneration:
         )
         self.use_curriculum = terrain_config.get(
             "hurdles_use_curriculum", True
+        )
+        self.initial_difficulty = self.env.env_config.get(
+            "terrain_curriculum_initial_difficulty", 0.0
+        )
+        self.eval_difficulty = self.env.env_config.get(
+            "terrain_curriculum_eval_difficulty", 1.0
+        )
+        self.curriculum_step_scale = self.env.env_config.get(
+            "terrain_curriculum_step_scale", 1.0
         )
         self.half_width_m = terrain_config.get(
             "hurdles_half_width_m", DEFAULT_HALF_WIDTH_M
@@ -56,6 +69,23 @@ class HFieldHurdlesTerrainGeneration:
                 "terrain.hurdles_wall_height_m must be finite and "
                 "non-negative."
             )
+        bounded_curriculum_values = (
+            (
+                "terrain_curriculum_initial_difficulty",
+                self.initial_difficulty,
+            ),
+            ("terrain_curriculum_eval_difficulty", self.eval_difficulty),
+        )
+        for name, value in bounded_curriculum_values:
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0.")
+        if (
+            not np.isfinite(self.curriculum_step_scale)
+            or self.curriculum_step_scale <= 0.0
+        ):
+            raise ValueError(
+                "terrain_curriculum_step_scale must be positive."
+            )
         inner_wall_edge_m = (
             self.wall_centers_m[0] - self.wall_thickness_m / 2.0
         )
@@ -80,22 +110,60 @@ class HFieldHurdlesTerrainGeneration:
         self.env.internal_state[
             "terrain/hurdles_effective_thickness_m"
         ] = self.wall_thickness_m
+        difficulty = (
+            self.eval_difficulty
+            if self.uses_fixed_difficulty()
+            else self.initial_difficulty
+        )
+        difficulty = difficulty if self.use_curriculum else 1.0
+        self.env.internal_state["terrain_curriculum_coeff"] = difficulty
+        self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ] = difficulty
+
+    def uses_fixed_difficulty(self):
+        return (
+            self.env.internal_state["in_eval_mode"]
+            or self.env.runner_mode == "test"
+        )
+
+    def update_curriculum(self, curriculum_delta):
+        if not self.use_curriculum:
+            self.env.internal_state["terrain_curriculum_coeff"] = 1.0
+            return
+        if self.uses_fixed_difficulty():
+            self.env.internal_state[
+                "terrain_curriculum_coeff"
+            ] = self.eval_difficulty
+            return
+        self.env.internal_state["terrain_curriculum_coeff"] = np.clip(
+            self.env.internal_state["terrain_curriculum_coeff"]
+            + self.curriculum_step_scale * curriculum_delta,
+            0.0,
+            1.0,
+        )
+
+    def add_curriculum_info(self):
+        info = self.env.internal_state["info"]
+        info["terrain_curriculum/applied_difficulty"] = self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ]
+        info["terrain_curriculum/next_difficulty"] = self.env.internal_state[
+            "terrain_curriculum_coeff"
+        ]
+        info["terrain_curriculum/hurdle_height_m"] = self.env.internal_state[
+            "terrain/hurdles_height_m"
+        ]
 
     def sample(self):
         if self.terrain_geom_ids.size != self.wall_count * 4:
             raise RuntimeError(
                 "The model does not contain the expected hurdle box geoms."
             )
-        curriculum_coeff = (
-            self.env.internal_state["env_curriculum_coeff"]
-            if self.use_curriculum
-            else 1.0
-        )
-        curriculum_coeff = np.where(
-            self.env.internal_state["in_eval_mode"],
-            1.0,
-            curriculum_coeff,
-        )
+        curriculum_coeff = self.env.internal_state["terrain_curriculum_coeff"]
+        self.env.internal_state[
+            "terrain_curriculum_applied_coeff"
+        ] = curriculum_coeff
         positions, sizes, rbounds = self.box_geometry(curriculum_coeff)
         model = self.env.internal_state["mj_model"]
         model.geom_pos[self.terrain_geom_ids] = positions

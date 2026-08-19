@@ -32,6 +32,9 @@ def get_config(environment_name):
         "env_curriculum_successes_per_level": 5,
         "env_curriculum_failures_per_level": 2,
         "env_curriculum_require_full_episode": False,
+        "terrain_curriculum_initial_difficulty": 0.0,
+        "terrain_curriculum_eval_difficulty": 1.0,
+        "terrain_curriculum_step_scale": 1.0,
         "domain_randomization": {
             "sampling_type": "step_probability_and_reset",
             "action_delay": {

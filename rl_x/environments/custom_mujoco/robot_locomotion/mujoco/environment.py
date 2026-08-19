@@ -258,6 +258,11 @@ class LocomotionEnv(gym.Env):
         self.policy_exteroceptive_observation_function = get_exteroceptive_observation_function(env_config["policy_exteroceptive_observation_type"], self)
         self.critic_exteroceptive_observation_function = get_exteroceptive_observation_function(env_config["critic_exteroceptive_observation_type"], self)
         self.terrain_function = get_terrain_function(env_config["terrain"]["type"], self)
+        self.terrain_uses_curriculum = getattr(
+            self.terrain_function, "uses_terrain_curriculum", False
+        ) or getattr(
+            self.terrain_function, "uses_unbounded_curriculum", False
+        )
         self.domain_randomization_sampling_function = get_sampling_function(env_config["domain_randomization"]["sampling_type"], self)
         self.domain_randomization_action_delay_function = get_domain_randomization_action_delay_function(env_config["domain_randomization"]["action_delay"]["type"], self)
         self.domain_randomization_mujoco_model_function = get_domain_randomization_mujoco_model_function(env_config["domain_randomization"]["mujoco_model"]["type"], self)
@@ -326,7 +331,7 @@ class LocomotionEnv(gym.Env):
         self.domain_randomization_seen_robot_function.init()
         self.domain_randomization_unseen_robot_function.init()
         self.reward_function.reward_and_info(np.zeros(self.nr_actuator_joints))
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info()
 
         if self.should_render:
@@ -480,7 +485,7 @@ class LocomotionEnv(gym.Env):
         if self.env_curriculum_enabled:
             self.internal_state["env_curriculum_coeff"] = np.clip(self.internal_state["env_curriculum_coeff"] + curriculum_level_delta / self.env_curriculum_nr_levels, 0.0, 1.0)
         self.internal_state["env_curriculum_coeff"] = np.where(self.internal_state["in_eval_mode"], 1.0, self.internal_state["env_curriculum_coeff"])
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             curriculum_delta = curriculum_level_delta / self.env_curriculum_nr_levels
             self.terrain_function.update_curriculum(curriculum_delta)
         
@@ -559,7 +564,7 @@ class LocomotionEnv(gym.Env):
             self.internal_state["info_episode_store"]["episode_steps_outside_start_zone"]
             / self.internal_state["info_episode_store"]["episode_step"]
         )
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info()
 
         if self.should_render:

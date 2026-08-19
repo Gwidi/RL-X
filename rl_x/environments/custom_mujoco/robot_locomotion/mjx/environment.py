@@ -288,6 +288,11 @@ class LocomotionEnv:
         self.policy_exteroceptive_observation_function = get_exteroceptive_observation_function(env_config["policy_exteroceptive_observation_type"], self)
         self.critic_exteroceptive_observation_function = get_exteroceptive_observation_function(env_config["critic_exteroceptive_observation_type"], self)
         self.terrain_function = get_terrain_function(env_config["terrain"]["type"], self)
+        self.terrain_uses_curriculum = getattr(
+            self.terrain_function, "uses_terrain_curriculum", False
+        ) or getattr(
+            self.terrain_function, "uses_unbounded_curriculum", False
+        )
         self.domain_randomization_sampling_function = get_sampling_function(env_config["domain_randomization"]["sampling_type"], self)
         self.domain_randomization_action_delay_function = get_domain_randomization_action_delay_function(env_config["domain_randomization"]["action_delay"]["type"], self)
         self.domain_randomization_mujoco_model_function = get_domain_randomization_mujoco_model_function(env_config["domain_randomization"]["mujoco_model"]["type"], self)
@@ -456,7 +461,7 @@ class LocomotionEnv:
         info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
         info["env_curriculum/last_episode_success"] = internal_state["env_curriculum_last_episode_success"]
         info["env_curriculum/outside_start_zone_fraction"] = 0.0
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
             "episode_return": reward,
@@ -576,7 +581,7 @@ class LocomotionEnv:
         if self.env_curriculum_enabled:
             new_state.internal_state["env_curriculum_coeff"] = jnp.clip(new_state.internal_state["env_curriculum_coeff"] + curriculum_level_delta / self.env_curriculum_nr_levels, 0.0, 1.0)
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             curriculum_delta = curriculum_level_delta / self.env_curriculum_nr_levels
             self.terrain_function.update_curriculum(new_state.internal_state, curriculum_delta)
 
@@ -688,7 +693,7 @@ class LocomotionEnv:
             state.info_episode_store["episode_steps_outside_start_zone"]
             / state.info_episode_store["episode_step"]
         )
-        if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
+        if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info(state.internal_state, state.info)
 
         def when_done(_):

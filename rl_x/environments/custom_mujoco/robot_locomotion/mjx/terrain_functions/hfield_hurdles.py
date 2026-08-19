@@ -10,6 +10,10 @@ from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
 class HFieldHurdlesTerrainGeneration:
     """Thin concentric square walls built from MJX box geoms."""
 
+    # Unlike the unbounded terrain variants, hurdles clamp their difficulty
+    # to [0, 1].
+    uses_terrain_curriculum = True
+
     def __init__(self, env):
         self.env = env
         terrain_config = self.env.env_config["terrain"]
@@ -28,6 +32,15 @@ class HFieldHurdlesTerrainGeneration:
         )
         self.use_curriculum = terrain_config.get(
             "hurdles_use_curriculum", True
+        )
+        self.initial_difficulty = self.env.env_config.get(
+            "terrain_curriculum_initial_difficulty", 0.0
+        )
+        self.eval_difficulty = self.env.env_config.get(
+            "terrain_curriculum_eval_difficulty", 1.0
+        )
+        self.curriculum_step_scale = self.env.env_config.get(
+            "terrain_curriculum_step_scale", 1.0
         )
         self.half_width_m = terrain_config.get(
             "hurdles_half_width_m", DEFAULT_HALF_WIDTH_M
@@ -57,6 +70,23 @@ class HFieldHurdlesTerrainGeneration:
                 "terrain.hurdles_wall_height_m must be finite and "
                 "non-negative."
             )
+        bounded_curriculum_values = (
+            (
+                "terrain_curriculum_initial_difficulty",
+                self.initial_difficulty,
+            ),
+            ("terrain_curriculum_eval_difficulty", self.eval_difficulty),
+        )
+        for name, value in bounded_curriculum_values:
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0.")
+        if (
+            not np.isfinite(self.curriculum_step_scale)
+            or self.curriculum_step_scale <= 0.0
+        ):
+            raise ValueError(
+                "terrain_curriculum_step_scale must be positive."
+            )
         if self.wall_centers_m[0] - self.wall_thickness_m / 2.0 <= 0.0:
             raise ValueError(
                 "The first hurdle wall must leave a flat spawn area."
@@ -78,6 +108,43 @@ class HFieldHurdlesTerrainGeneration:
         internal_state[
             "terrain/hurdles_effective_thickness_m"
         ] = self.wall_thickness_m
+        difficulty = jnp.where(
+            internal_state["in_eval_mode"],
+            self.eval_difficulty,
+            self.initial_difficulty,
+        )
+        difficulty = jnp.where(self.use_curriculum, difficulty, 1.0)
+        internal_state["terrain_curriculum_coeff"] = difficulty
+        internal_state["terrain_curriculum_applied_coeff"] = difficulty
+
+    def update_curriculum(self, internal_state, curriculum_delta):
+        next_difficulty = jnp.clip(
+            internal_state["terrain_curriculum_coeff"]
+            + self.curriculum_step_scale * curriculum_delta,
+            0.0,
+            1.0,
+        )
+        next_difficulty = jnp.where(
+            internal_state["in_eval_mode"],
+            self.eval_difficulty,
+            next_difficulty,
+        )
+        internal_state["terrain_curriculum_coeff"] = jnp.where(
+            self.use_curriculum,
+            next_difficulty,
+            1.0,
+        )
+
+    def add_curriculum_info(self, internal_state, info):
+        info["terrain_curriculum/applied_difficulty"] = internal_state[
+            "terrain_curriculum_applied_coeff"
+        ]
+        info["terrain_curriculum/next_difficulty"] = internal_state[
+            "terrain_curriculum_coeff"
+        ]
+        info["terrain_curriculum/hurdle_height_m"] = internal_state[
+            "terrain/hurdles_height_m"
+        ]
 
     def sample(self, mjx_model, internal_state, key):
         del key
@@ -85,14 +152,8 @@ class HFieldHurdlesTerrainGeneration:
             raise RuntimeError(
                 "The model does not contain the expected hurdle box geoms."
             )
-        curriculum_coeff = jnp.where(
-            self.use_curriculum,
-            internal_state["env_curriculum_coeff"],
-            1.0,
-        )
-        curriculum_coeff = jnp.where(
-            internal_state["in_eval_mode"], 1.0, curriculum_coeff
-        )
+        curriculum_coeff = internal_state["terrain_curriculum_coeff"]
+        internal_state["terrain_curriculum_applied_coeff"] = curriculum_coeff
         positions, sizes, rbounds = self.box_geometry(curriculum_coeff)
         internal_state["terrain/hurdles_height_m"] = (
             curriculum_coeff * self.wall_height_m
