@@ -79,9 +79,10 @@ class LocomotionEnv:
             INVERTED_PYRAMID_BOX_TERRAIN,
             HURDLES_BOX_TERRAIN,
         ) or terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
-        terrain_supports_thigh_colliders = (
-            terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
-        )
+        terrain_supports_thigh_colliders = terrain_type in (
+            INVERTED_PYRAMID_BOX_TERRAIN,
+            HURDLES_BOX_TERRAIN,
+        ) or terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
 
         # Remove all unnecessary assets, materials, meshes and geoms during training
         # This removes all geoms besides feet and floor, if the contacts for other geoms should be enabled this needs to be changed
