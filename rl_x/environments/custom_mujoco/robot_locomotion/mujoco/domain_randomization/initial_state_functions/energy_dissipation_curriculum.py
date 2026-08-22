@@ -20,11 +20,28 @@ class EnergyDissipationCurriculumInitialState:
         self.is_energy_curriculum = initial_state_config.get("type") == "energy_dissipation_curriculum"
 
     def _get_curriculum_schedule(self, coeff):
-        height = self.start_height + (self.target_height - self.start_height) * coeff
+        mode = self.env.np_rng.choice(["extreme_height", "extreme_rotation", "extreme_velocity", "mixed_combat"])
         
-        angle_multiplier = coeff 
-        velocity_multiplier = coeff
-        
+        if mode == "extreme_height":
+            height = self.start_height + (4.0 * coeff)
+            angle_multiplier = 0.0
+            velocity_multiplier = 0.0
+            
+        elif mode == "extreme_rotation":
+            height = self.start_height + (2.0 * coeff)
+            angle_multiplier = coeff * 2.0 
+            velocity_multiplier = 0.0
+            
+        elif mode == "extreme_velocity":
+            height = self.start_height + (2.0 * coeff)
+            angle_multiplier = 0.0
+            velocity_multiplier = coeff * 3.0 
+            
+        else: # "mixed_combat"
+            height = self.start_height + ((self.target_height - self.start_height) * coeff)
+            angle_multiplier = coeff * 1.5
+            velocity_multiplier = coeff * 1.5
+
         return height, angle_multiplier, velocity_multiplier
 
     def setup(self):
