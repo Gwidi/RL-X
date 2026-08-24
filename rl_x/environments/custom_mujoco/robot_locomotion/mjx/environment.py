@@ -256,6 +256,7 @@ class LocomotionEnv:
         self.robot_dimensions_mean = 0.5  # This can be calculated smartly...
 
         self.env_curriculum_enabled = env_config.get("env_curriculum_enabled", True)
+        self.env_curriculum_initial_coeff = env_config.get("env_curriculum_initial_coeff", 0.0)
         self.env_curriculum_disabled_coeff = env_config.get("env_curriculum_disabled_coeff", 0.99)
         self.env_curriculum_nr_levels = env_config["env_curriculum_nr_levels"]
         self.env_curriculum_level_success_episode_return = env_config["env_curriculum_level_success_episode_return"]
@@ -265,6 +266,8 @@ class LocomotionEnv:
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
+        if not 0.0 <= self.env_curriculum_initial_coeff <= 1.0:
+            raise ValueError("env_curriculum_initial_coeff must be between 0.0 and 1.0.")
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
             raise ValueError("env_curriculum_disabled_coeff must be between 0.0 and 1.0.")
         if not np.isfinite(self.env_curriculum_start_zone_radius_m) or self.env_curriculum_start_zone_radius_m < 0.0:
@@ -414,7 +417,7 @@ class LocomotionEnv:
         max_command_velocity = jnp.minimum(self.robot_dimensions_mean * self.command_function.max_velocity_per_m_factor, self.command_function.clip_max_velocity)
         max_command_velocities = max_command_velocity * jnp.array([self.env_config["command"]["x_velocity_multiplier"], 1.0, 1.0])
         initial_curriculum_coeff = (
-            0.0
+            self.env_curriculum_initial_coeff
             if self.env_curriculum_enabled
             else self.env_curriculum_disabled_coeff
         )
