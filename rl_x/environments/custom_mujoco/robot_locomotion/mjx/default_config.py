@@ -33,6 +33,7 @@ def get_config(environment_name):
         "env_curriculum_successes_per_level": 1,
         "env_curriculum_failures_per_level": 1,
         "env_curriculum_require_full_episode": False,
+        "cost_of_transport_min_mean_speed": 0.05,
         "terrain_curriculum_initial_difficulty": 0.0,
         "terrain_curriculum_eval_difficulty": 1.0,
         "terrain_curriculum_step_scale": 1.0,

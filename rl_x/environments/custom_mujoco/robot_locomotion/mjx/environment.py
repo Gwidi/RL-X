@@ -266,6 +266,10 @@ class LocomotionEnv:
         self.env_curriculum_successes_per_level = env_config.get("env_curriculum_successes_per_level", 5)
         self.env_curriculum_failures_per_level = env_config.get("env_curriculum_failures_per_level", 2)
         self.env_curriculum_require_full_episode = env_config.get("env_curriculum_require_full_episode", False)
+        self.cost_of_transport_min_mean_speed = env_config.get(
+            "cost_of_transport_min_mean_speed",
+            0.05,
+        )
         if not 0.0 <= self.env_curriculum_initial_coeff <= 1.0:
             raise ValueError("env_curriculum_initial_coeff must be between 0.0 and 1.0.")
         if not 0.0 <= self.env_curriculum_disabled_coeff <= 1.0:
@@ -278,6 +282,8 @@ class LocomotionEnv:
             raise ValueError("env_curriculum_successes_per_level must be at least 1.")
         if self.env_curriculum_failures_per_level < 1:
             raise ValueError("env_curriculum_failures_per_level must be at least 1.")
+        if not np.isfinite(self.cost_of_transport_min_mean_speed) or self.cost_of_transport_min_mean_speed < 0.0:
+            raise ValueError("cost_of_transport_min_mean_speed must be finite and non-negative.")
 
         self.control_function = get_control_function(env_config["control_type"], self)
         self.control_frequency_hz = self.control_function.control_frequency_hz
@@ -462,6 +468,9 @@ class LocomotionEnv:
         self.reward_function.reward_and_info(data, mjx_model, internal_state, jnp.zeros(self.nr_actuator_joints), info)
         info["rollout/episode_return"] = reward
         info["rollout/episode_length"] = 0
+        info["rollout/cost_of_transport"] = 0.0
+        info["rollout/cost_of_transport_valid"] = 0.0
+        info["rollout/froude_number"] = 0.0
         info["env_curriculum/coefficient"] = internal_state["env_curriculum_coeff"]
         info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
         info["env_curriculum/last_episode_success"] = internal_state["env_curriculum_last_episode_success"]
@@ -473,6 +482,10 @@ class LocomotionEnv:
             "episode_step": 0,
             "episode_steps_outside_start_zone": 0,
             "episode_total_xy_velocity_diff_abs": 0.0,
+            "episode_positive_actuator_energy": 0.0,
+            "episode_transport_normalizer": 0.0,
+            "episode_froude_number_sum": 0.0,
+            "episode_xy_distance": 0.0,
         }
 
         state = State(mjx_model, data, next_observation, next_observation, reward, terminated, truncated, info, info_episode_store, internal_state, key)
@@ -650,6 +663,10 @@ class LocomotionEnv:
             "episode_step": 0,
             "episode_steps_outside_start_zone": 0,
             "episode_total_xy_velocity_diff_abs": 0.0,
+            "episode_positive_actuator_energy": 0.0,
+            "episode_transport_normalizer": 0.0,
+            "episode_froude_number_sum": 0.0,
+            "episode_xy_distance": 0.0,
         }
 
         # Reset everything besides parts of the internal_state, info and the key
@@ -706,6 +723,44 @@ class LocomotionEnv:
 
         reward = self.reward_function.reward_and_info(data, mjx_model, state.internal_state, chosen_action, state.info)
 
+        # Accumulate dimensionless locomotion metrics over the episode.  CoT
+        # uses positive actuator work (no energy regeneration) divided by the
+        # weight-distance integral.  The nominal IMU height is used as the
+        # characteristic leg length for the Froude number.
+        actuator_joint_velocities = data.qvel[self.actuator_joint_mask_qvel]
+        actuator_joint_torques = data.qfrc_actuator[self.actuator_joint_mask_qvel]
+        positive_actuator_power = jnp.sum(
+            jnp.maximum(actuator_joint_torques * actuator_joint_velocities, 0.0)
+        )
+        xy_speed = jnp.linalg.norm(data.qvel[:2])
+        gravity = jnp.linalg.norm(mjx_model.opt.gravity)
+        robot_mass = jnp.sum(mjx_model.body_mass[1:])
+        characteristic_length = jnp.maximum(
+            state.internal_state["robot_nominal_imu_height_over_ground"],
+            1e-8,
+        )
+        froude_number = jnp.nan_to_num(
+            xy_speed ** 2 / jnp.maximum(
+                gravity * characteristic_length,
+                1e-8,
+            ),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        positive_actuator_energy = jnp.nan_to_num(
+            positive_actuator_power * self.dt,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        transport_normalizer = jnp.nan_to_num(
+            robot_mass * gravity * xy_speed * self.dt,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
         should_sample_commands = self.command_sampling_function.step(command_sampling_key)
         self.command_function.get_next_command(state.internal_state, should_sample_commands, command_key)
         
@@ -731,8 +786,45 @@ class LocomotionEnv:
         state.info_episode_store["episode_steps_outside_start_zone"] += outside_start_zone.astype(jnp.int32)
         state.info_episode_store["episode_return"] += reward
         state.info_episode_store["episode_total_xy_velocity_diff_abs"] += state.info["env_info/xy_vel_diff_abs"]
+        state.info_episode_store["episode_positive_actuator_energy"] += positive_actuator_energy
+        state.info_episode_store["episode_transport_normalizer"] += transport_normalizer
+        state.info_episode_store["episode_froude_number_sum"] += froude_number
+        state.info_episode_store["episode_xy_distance"] += xy_speed * self.dt
         state.info["rollout/episode_return"] = jnp.where(done, state.info_episode_store["episode_return"], state.info["rollout/episode_return"])
         state.info["rollout/episode_length"] = jnp.where(done, state.info_episode_store["episode_step"], state.info["rollout/episode_length"])
+        episode_cost_of_transport = (
+            state.info_episode_store["episode_positive_actuator_energy"]
+            / jnp.maximum(
+                state.info_episode_store["episode_transport_normalizer"],
+                1e-8,
+            )
+        )
+        episode_froude_number = (
+            state.info_episode_store["episode_froude_number_sum"]
+            / state.info_episode_store["episode_step"]
+        )
+        episode_mean_xy_speed = (
+            state.info_episode_store["episode_xy_distance"]
+            / (state.info_episode_store["episode_step"] * self.dt)
+        )
+        cost_of_transport_valid = (
+            episode_mean_xy_speed >= self.cost_of_transport_min_mean_speed
+        )
+        state.info["rollout/cost_of_transport"] = jnp.where(
+            done,
+            episode_cost_of_transport,
+            state.info["rollout/cost_of_transport"],
+        )
+        state.info["rollout/cost_of_transport_valid"] = jnp.where(
+            done,
+            cost_of_transport_valid.astype(jnp.float32),
+            state.info["rollout/cost_of_transport_valid"],
+        )
+        state.info["rollout/froude_number"] = jnp.where(
+            done,
+            episode_froude_number,
+            state.info["rollout/froude_number"],
+        )
         state.info["env_curriculum/coefficient"] = state.internal_state["env_curriculum_coeff"]
         state.info["env_curriculum/success_rate"] = state.internal_state["env_curriculum_success_rate"]
         state.info["env_curriculum/last_episode_success"] = state.internal_state["env_curriculum_last_episode_success"]

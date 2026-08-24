@@ -313,6 +313,30 @@ class PPO:
                         "eval/episode_return": jnp.mean(eval_env_state.info["rollout/episode_return"]),
                         "eval/episode_length": jnp.mean(eval_env_state.info["rollout/episode_length"]),
                     }
+                    if (
+                        "rollout/cost_of_transport" in eval_env_state.info
+                        and "rollout/cost_of_transport_valid" in eval_env_state.info
+                        and "rollout/froude_number" in eval_env_state.info
+                    ):
+                        cost_of_transport_valid = eval_env_state.info[
+                            "rollout/cost_of_transport_valid"
+                        ]
+                        nr_valid_costs = jnp.sum(cost_of_transport_valid)
+                        eval_metrics["eval/cost_of_transport"] = jnp.where(
+                            nr_valid_costs > 0,
+                            jnp.sum(
+                                eval_env_state.info["rollout/cost_of_transport"]
+                                * cost_of_transport_valid
+                            )
+                            / jnp.maximum(nr_valid_costs, 1.0),
+                            jnp.nan,
+                        )
+                        eval_metrics["eval/cost_of_transport_valid_fraction"] = jnp.mean(
+                            cost_of_transport_valid
+                        )
+                        eval_metrics["eval/froude_number"] = jnp.mean(
+                            eval_env_state.info["rollout/froude_number"]
+                        )
                     if "env_curriculum/success_rate" in eval_env_state.info:
                         eval_metrics["eval/success_rate"] = jnp.mean(
                             eval_env_state.info["env_curriculum/success_rate"]

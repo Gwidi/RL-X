@@ -336,6 +336,43 @@ class PPO:
                             eval_nr_episodes += 1
                             evaluation_metrics["eval/episode_return"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_return", i))
                             evaluation_metrics["eval/episode_length"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_length", i))
+                            try:
+                                cost_of_transport_valid = float(
+                                    self.eval_env.get_final_info_value_at_index(
+                                        eval_info,
+                                        "rollout/cost_of_transport_valid",
+                                        i,
+                                    )
+                                )
+                                evaluation_metrics.setdefault(
+                                    "eval/cost_of_transport_valid_fraction",
+                                    [],
+                                ).append(cost_of_transport_valid)
+                                evaluation_metrics.setdefault(
+                                    "eval/froude_number",
+                                    [],
+                                ).append(
+                                    self.eval_env.get_final_info_value_at_index(
+                                        eval_info,
+                                        "rollout/froude_number",
+                                        i,
+                                    )
+                                )
+                                if cost_of_transport_valid:
+                                    evaluation_metrics.setdefault(
+                                        "eval/cost_of_transport",
+                                        [],
+                                    ).append(
+                                        self.eval_env.get_final_info_value_at_index(
+                                            eval_info,
+                                            "rollout/cost_of_transport",
+                                            i,
+                                        )
+                                    )
+                            except (KeyError, TypeError):
+                                # These metrics are optional for environments
+                                # other than robot_locomotion.
+                                pass
                             if eval_nr_episodes == self.evaluation_episodes:
                                 break
                     if eval_nr_episodes == self.evaluation_episodes:
