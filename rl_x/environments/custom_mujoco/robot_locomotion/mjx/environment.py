@@ -393,8 +393,7 @@ class LocomotionEnv:
 
         if self.add_goal_arrow:
             goal_velocities = state.internal_state["goal_velocities"][env_id]
-            trunk_rotation = state.internal_state["imu_orientation_euler"][env_id][2]
-            desired_angle = trunk_rotation + np.arctan2(goal_velocities[1], goal_velocities[0])
+            desired_angle = np.arctan2(goal_velocities[1], goal_velocities[0])
             rot_mat = Rotation_NP.from_euler('xyz', (np.array([np.pi/2, 0, np.pi/2 + desired_angle]))).as_matrix()
             data.site("dir_arrow").xmat = rot_mat.reshape((9,))
             magnitude = np.sqrt(np.sum(np.square([goal_velocities[0], goal_velocities[1]])))
@@ -848,6 +847,17 @@ class LocomotionEnv:
 
 
     def get_observation(self, data, mjx_model, internal_state, key, action):
+        global_goal_linear_velocity = jnp.array([
+            internal_state["goal_velocities"][0],
+            internal_state["goal_velocities"][1],
+            0.0,
+        ])
+        local_goal_linear_velocity = internal_state["imu_orientation_rotation_inverse"].apply(global_goal_linear_velocity)
+        observed_goal_velocities = jnp.array([
+            local_goal_linear_velocity[0],
+            local_goal_linear_velocity[1],
+            internal_state["goal_velocities"][2],
+        ])
         observation = jnp.concatenate([
             data.qpos[self.actuator_joint_mask_qpos],
             data.qvel[self.actuator_joint_mask_qvel],
@@ -857,7 +867,7 @@ class LocomotionEnv:
             internal_state["feet_time_in_air"],
             data.sensordata[self.imu_linear_velocity_sensor_adr:self.imu_linear_velocity_sensor_adr + self.imu_linear_velocity_sensor_dim],
             data.sensordata[self.imu_angular_velocity_sensor_adr:self.imu_angular_velocity_sensor_adr + self.imu_angular_velocity_sensor_dim],
-            internal_state["goal_velocities"],
+            observed_goal_velocities,
             internal_state["imu_orientation_rotation_inverse"].apply(jnp.array([0.0, 0.0, -1.0])),
             jnp.array([self.policy_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),
             jnp.array([self.critic_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),

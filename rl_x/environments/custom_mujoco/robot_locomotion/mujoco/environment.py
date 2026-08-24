@@ -418,8 +418,7 @@ class LocomotionEnv(gym.Env):
 
         if self.add_goal_arrow:
             goal_velocities = self.internal_state["goal_velocities"]
-            trunk_rotation = self.internal_state["imu_orientation_euler"][2]
-            desired_angle = trunk_rotation + np.arctan2(goal_velocities[1], goal_velocities[0])
+            desired_angle = np.arctan2(goal_velocities[1], goal_velocities[0])
             rot_mat = Rotation.from_euler('xyz', (np.array([np.pi/2, 0, np.pi/2 + desired_angle]))).as_matrix()
             self.internal_state["data"].site("dir_arrow").xmat = rot_mat.reshape((9,))
             magnitude = np.sqrt(np.sum(np.square([goal_velocities[0], goal_velocities[1]])))
@@ -737,6 +736,17 @@ class LocomotionEnv(gym.Env):
 
 
     def get_observation(self, action):
+        global_goal_linear_velocity = np.array([
+            self.internal_state["goal_velocities"][0],
+            self.internal_state["goal_velocities"][1],
+            0.0,
+        ])
+        local_goal_linear_velocity = self.internal_state["imu_orientation_rotation_inverse"].apply(global_goal_linear_velocity)
+        observed_goal_velocities = np.array([
+            local_goal_linear_velocity[0],
+            local_goal_linear_velocity[1],
+            self.internal_state["goal_velocities"][2],
+        ])
         observation = np.concatenate([
             self.internal_state["data"].qpos[self.actuator_joint_mask_qpos],
             self.internal_state["data"].qvel[self.actuator_joint_mask_qvel],
@@ -746,7 +756,7 @@ class LocomotionEnv(gym.Env):
             self.internal_state["feet_time_in_air"],
             self.internal_state["data"].sensordata[self.imu_linear_velocity_sensor_adr:self.imu_linear_velocity_sensor_adr + self.imu_linear_velocity_sensor_dim],
             self.internal_state["data"].sensordata[self.imu_angular_velocity_sensor_adr:self.imu_angular_velocity_sensor_adr + self.imu_angular_velocity_sensor_dim],
-            self.internal_state["goal_velocities"],
+            observed_goal_velocities,
             self.internal_state["imu_orientation_rotation_inverse"].apply(np.array([0.0, 0.0, -1.0])),
             np.array([self.policy_exteroceptive_observation_function.get_exteroceptive_observation()]).reshape(-1),
             np.array([self.critic_exteroceptive_observation_function.get_exteroceptive_observation()]).reshape(-1),

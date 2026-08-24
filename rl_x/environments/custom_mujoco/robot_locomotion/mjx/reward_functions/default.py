@@ -78,17 +78,21 @@ class DefaultReward:
     def reward_and_info(self, data, mjx_model, internal_state, action, info):
         curriculum_coeff = internal_state["env_curriculum_coeff"]
         
-        # Tracking velocity command reward
+        # Track commands in the world frame. The velocimeter and gyro report
+        # values in the IMU frame, so rotate them before comparing them with
+        # the global velocity command.
         current_imu_linear_velocity = data.sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
-        desired_imu_linear_velocity_xy = internal_state["goal_velocities"][:2]
-        xy_difference = desired_imu_linear_velocity_xy - current_imu_linear_velocity[:2]
+        current_global_linear_velocity = internal_state["imu_orientation_rotation"].apply(current_imu_linear_velocity)
+        desired_global_linear_velocity_xy = internal_state["goal_velocities"][:2]
+        xy_difference = desired_global_linear_velocity_xy - current_global_linear_velocity[:2]
         xy_velocity_difference_norm = jnp.sum(jnp.square(xy_difference))
         tracking_xy_velocity_command_reward = self.tracking_xy_velocity_command_coeff * jnp.exp(-xy_velocity_difference_norm / self.tracking_xy_temperature)
 
         # Tracking angular velocity command reward
         current_imu_angular_velocity = data.sensordata[self.env.imu_angular_velocity_sensor_adr:self.env.imu_angular_velocity_sensor_adr + self.env.imu_angular_velocity_sensor_dim]
-        desired_imu_yaw_velocity = internal_state["goal_velocities"][2]
-        yaw_velocity_difference_norm = jnp.square(current_imu_angular_velocity[2] - desired_imu_yaw_velocity)
+        current_global_angular_velocity = internal_state["imu_orientation_rotation"].apply(current_imu_angular_velocity)
+        desired_global_yaw_velocity = internal_state["goal_velocities"][2]
+        yaw_velocity_difference_norm = jnp.square(current_global_angular_velocity[2] - desired_global_yaw_velocity)
         tracking_yaw_velocity_command_reward = self.tracking_yaw_velocity_command_coeff * jnp.exp(-yaw_velocity_difference_norm / self.tracking_yaw_temperature)
 
         # Alive clipped reward
