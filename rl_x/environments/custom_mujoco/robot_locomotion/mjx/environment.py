@@ -428,8 +428,9 @@ class LocomotionEnv:
             "env_curriculum_levels_in_a_row": 0.0,
             "env_curriculum_successes_at_level": 0.0,
             "env_curriculum_failures_at_level": 0.0,
-            "env_curriculum_completed_episodes": 0.0,
-            "env_curriculum_successful_episodes": 0.0,
+            "terrain_curriculum_levels_in_a_row": 0.0,
+            "terrain_curriculum_successes_at_level": 0.0,
+            "terrain_curriculum_failures_at_level": 0.0,
             "env_curriculum_success_rate": 0.0,
             "env_curriculum_last_episode_success": 0.0,
             "actuator_joint_nominal_positions": self.initial_qpos[self.actuator_joint_mask_qpos],
@@ -502,89 +503,131 @@ class LocomotionEnv:
             new_state.info_episode_store["episode_steps_outside_start_zone"]
             / jnp.maximum(episode_steps, 1)
         )
-        episode_success = (
-            (episode_return >= self.env_curriculum_level_success_episode_return)
+        episode_reached_reward_threshold = (
+            episode_return >= self.env_curriculum_level_success_episode_return
+        )
+        env_episode_success = episode_reached_reward_threshold
+        if self.env_curriculum_require_full_episode:
+            env_episode_success &= (
+                (new_state.info_episode_store["episode_step"] >= self.horizon)
+                & ~new_state.terminated
+            )
+        terrain_episode_success = (
+            env_episode_success
             & (
                 outside_start_zone_fraction
                 >= self.env_curriculum_min_outside_start_zone_fraction
             )
         )
-        if self.env_curriculum_require_full_episode:
-            episode_success &= (
-                (new_state.info_episode_store["episode_step"] >= self.horizon)
-                & ~new_state.terminated
-            )
         episode_completed = episode_steps > 0
-        episode_failure = (
+        episode_counts_towards_success_rate = (
             episode_completed
-            & ~episode_success
+            & episode_reached_reward_threshold
+        )
+        env_episode_failure = (
+            episode_completed
+            & ~env_episode_success
             & (episode_return < self.env_curriculum_level_failure_episode_return)
         )
-        new_state.internal_state["env_curriculum_completed_episodes"] += episode_completed.astype(jnp.float32)
-        new_state.internal_state["env_curriculum_successful_episodes"] += (
-            episode_completed & episode_success
-        ).astype(jnp.float32)
-        new_state.internal_state["env_curriculum_success_rate"] = (
-            new_state.internal_state["env_curriculum_successful_episodes"]
-            / jnp.maximum(new_state.internal_state["env_curriculum_completed_episodes"], 1.0)
+        terrain_episode_failure = (
+            episode_completed
+            & ~terrain_episode_success
+            & (episode_return < self.env_curriculum_level_failure_episode_return)
+        )
+        # This value is binary for each vectorized environment. Once an
+        # environment completes an episode above the reward threshold during
+        # an evaluation, it remains successful for the rest of that
+        # evaluation. PPO averages these flags across all environments.
+        new_state.internal_state["env_curriculum_success_rate"] = jnp.maximum(
+            new_state.internal_state["env_curriculum_success_rate"],
+            episode_counts_towards_success_rate.astype(jnp.float32),
         )
         new_state.internal_state["env_curriculum_last_episode_success"] = jnp.where(
             episode_completed,
-            episode_success.astype(jnp.float32),
+            env_episode_success.astype(jnp.float32),
             new_state.internal_state["env_curriculum_last_episode_success"],
         )
-        successes_at_level = jnp.where(
-            episode_completed & episode_success,
-            new_state.internal_state["env_curriculum_successes_at_level"] + 1,
-            jnp.where(
-                episode_completed,
+
+        def update_curriculum_counters(prefix, episode_success, episode_failure):
+            successes_key = f"{prefix}_curriculum_successes_at_level"
+            failures_key = f"{prefix}_curriculum_failures_at_level"
+            levels_key = f"{prefix}_curriculum_levels_in_a_row"
+            successes_at_level = jnp.where(
+                episode_completed & episode_success,
+                new_state.internal_state[successes_key] + 1,
+                jnp.where(
+                    episode_completed,
+                    0,
+                    new_state.internal_state[successes_key],
+                ),
+            )
+            level_success = (
+                successes_at_level >= self.env_curriculum_successes_per_level
+            )
+            failures_at_level = jnp.where(
+                episode_failure,
+                new_state.internal_state[failures_key] + 1,
+                jnp.where(
+                    episode_completed,
+                    0,
+                    new_state.internal_state[failures_key],
+                ),
+            )
+            level_failure = (
+                failures_at_level >= self.env_curriculum_failures_per_level
+            )
+            previous_levels_in_a_row = new_state.internal_state[levels_key]
+            levels_in_a_row = jnp.where(
+                level_success,
+                jnp.where(
+                    previous_levels_in_a_row >= 0,
+                    previous_levels_in_a_row + 1,
+                    1,
+                ),
+                jnp.where(
+                    level_failure,
+                    jnp.where(
+                        previous_levels_in_a_row < 0,
+                        previous_levels_in_a_row - 1,
+                        -1,
+                    ),
+                    previous_levels_in_a_row,
+                ),
+            )
+            level_delta = jnp.where(
+                level_success | level_failure,
+                levels_in_a_row,
                 0,
-                new_state.internal_state["env_curriculum_successes_at_level"],
-            ),
-        )
-        level_success = successes_at_level >= self.env_curriculum_successes_per_level
-        failures_at_level = jnp.where(
-            episode_failure,
-            new_state.internal_state["env_curriculum_failures_at_level"] + 1,
-            jnp.where(
-                episode_completed,
+            )
+            new_state.internal_state[successes_key] = jnp.where(
+                level_success,
                 0,
-                new_state.internal_state["env_curriculum_failures_at_level"],
-            ),
-        )
-        level_failure = failures_at_level >= self.env_curriculum_failures_per_level
-        previous_levels_in_a_row = new_state.internal_state["env_curriculum_levels_in_a_row"]
-        levels_in_a_row = jnp.where(
-            level_success,
-            jnp.where(previous_levels_in_a_row >= 0, previous_levels_in_a_row + 1, 1),
-            jnp.where(
+                successes_at_level,
+            )
+            new_state.internal_state[failures_key] = jnp.where(
                 level_failure,
-                jnp.where(previous_levels_in_a_row < 0, previous_levels_in_a_row - 1, -1),
-                previous_levels_in_a_row,
-            ),
+                0,
+                failures_at_level,
+            )
+            new_state.internal_state[levels_key] = levels_in_a_row
+            return level_delta
+
+        env_curriculum_level_delta = update_curriculum_counters(
+            "env",
+            env_episode_success,
+            env_episode_failure,
         )
-        curriculum_level_delta = jnp.where(
-            level_success | level_failure,
-            levels_in_a_row,
-            0,
-        )
-        new_state.internal_state["env_curriculum_successes_at_level"] = jnp.where(
-            level_success,
-            0,
-            successes_at_level,
-        )
-        new_state.internal_state["env_curriculum_failures_at_level"] = jnp.where(
-            level_failure,
-            0,
-            failures_at_level,
-        )
-        new_state.internal_state["env_curriculum_levels_in_a_row"] = levels_in_a_row
         if self.env_curriculum_enabled:
-            new_state.internal_state["env_curriculum_coeff"] = jnp.clip(new_state.internal_state["env_curriculum_coeff"] + curriculum_level_delta / self.env_curriculum_nr_levels, 0.0, 1.0)
+            new_state.internal_state["env_curriculum_coeff"] = jnp.clip(new_state.internal_state["env_curriculum_coeff"] + env_curriculum_level_delta / self.env_curriculum_nr_levels, 0.0, 1.0)
         new_state.internal_state["env_curriculum_coeff"] = jnp.where(new_state.internal_state["in_eval_mode"], 1.0, new_state.internal_state["env_curriculum_coeff"])
         if self.terrain_uses_curriculum:
-            curriculum_delta = curriculum_level_delta / self.env_curriculum_nr_levels
-            self.terrain_function.update_curriculum(new_state.internal_state, curriculum_delta)
+            terrain_curriculum_level_delta = update_curriculum_counters(
+                "terrain",
+                terrain_episode_success,
+                terrain_episode_failure,
+            )
+            terrain_curriculum_delta = terrain_curriculum_level_delta / self.env_curriculum_nr_levels
+            self.terrain_function.update_curriculum(new_state.internal_state, terrain_curriculum_delta)
 
         new_state.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(data.site_xmat[self.imu_site_id].reshape(3, 3))
         new_state.internal_state["imu_orientation_rotation_inverse"] = new_state.internal_state["imu_orientation_rotation"].inv()
