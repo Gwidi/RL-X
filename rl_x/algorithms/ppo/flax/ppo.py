@@ -337,6 +337,21 @@ class PPO:
                             evaluation_metrics["eval/episode_return"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_return", i))
                             evaluation_metrics["eval/episode_length"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_length", i))
                             try:
+                                evaluation_metrics.setdefault(
+                                    "eval/energy_consumption_joules",
+                                    [],
+                                ).append(
+                                    self.eval_env.get_final_info_value_at_index(
+                                        eval_info,
+                                        "rollout/energy_consumption_joules",
+                                        i,
+                                    )
+                                )
+                            except (KeyError, TypeError):
+                                # Optional for environments other than
+                                # robot_locomotion.
+                                pass
+                            try:
                                 cost_of_transport_valid = float(
                                     self.eval_env.get_final_info_value_at_index(
                                         eval_info,

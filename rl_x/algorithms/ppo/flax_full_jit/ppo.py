@@ -337,6 +337,10 @@ class PPO:
                         eval_metrics["eval/froude_number"] = jnp.mean(
                             eval_env_state.info["rollout/froude_number"]
                         )
+                    if "rollout/energy_consumption_joules" in eval_env_state.info:
+                        eval_metrics["eval/energy_consumption_joules"] = jnp.mean(
+                            eval_env_state.info["rollout/energy_consumption_joules"]
+                        )
                     if "env_curriculum/success_rate" in eval_env_state.info:
                         eval_metrics["eval/success_rate"] = jnp.mean(
                             eval_env_state.info["env_curriculum/success_rate"]

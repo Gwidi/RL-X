@@ -469,6 +469,7 @@ class LocomotionEnv:
         info["rollout/episode_length"] = 0
         info["rollout/cost_of_transport"] = 0.0
         info["rollout/cost_of_transport_valid"] = 0.0
+        info["rollout/energy_consumption_joules"] = 0.0
         info["rollout/froude_number"] = 0.0
         info["env_curriculum/coefficient"] = internal_state["env_curriculum_coeff"]
         info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
@@ -818,6 +819,11 @@ class LocomotionEnv:
             done,
             cost_of_transport_valid.astype(jnp.float32),
             state.info["rollout/cost_of_transport_valid"],
+        )
+        state.info["rollout/energy_consumption_joules"] = jnp.where(
+            done,
+            state.info_episode_store["episode_positive_actuator_energy"],
+            state.info["rollout/energy_consumption_joules"],
         )
         state.info["rollout/froude_number"] = jnp.where(
             done,

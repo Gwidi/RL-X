@@ -327,6 +327,7 @@ class LocomotionEnv(gym.Env):
                 "rollout/episode_length": 0,
                 "rollout/cost_of_transport": 0.0,
                 "rollout/cost_of_transport_valid": 0.0,
+                "rollout/energy_consumption_joules": 0.0,
                 "rollout/froude_number": 0.0,
                 "env_curriculum/coefficient": env_curriculum_coeff,
                 "env_curriculum/success_rate": 0.0,
@@ -706,6 +707,11 @@ class LocomotionEnv(gym.Env):
             done,
             float(cost_of_transport_valid),
             self.internal_state["info"]["rollout/cost_of_transport_valid"],
+        )
+        self.internal_state["info"]["rollout/energy_consumption_joules"] = np.where(
+            done,
+            self.internal_state["info_episode_store"]["episode_positive_actuator_energy"],
+            self.internal_state["info"]["rollout/energy_consumption_joules"],
         )
         self.internal_state["info"]["rollout/froude_number"] = np.where(
             done,
