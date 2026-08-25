@@ -186,7 +186,9 @@ class EnergyDissipationCurriculumInitialState:
         info["curriculum/height"] = height
         info["curriculum/angle_scale"] = angle_scale
         info["curriculum/lateral_vel_scale"] = vel_scale
-        info["curriculum/pinned_axis"] = pinned_axis or "none"
+        axis_to_id = {"none": 0, "height": 1, "angle": 2, "lateral_vel": 3}
+        pinned_name = next((name for name, pin in self._last_pins.items() if pin != "none"), "none")
+        info["curriculum/pinned_axis_id"] = axis_to_id[pinned_name]
         for name, axis in self.axes.items():
             info[f"curriculum/{name}_low"] = axis.low
             info[f"curriculum/{name}_high"] = axis.high
