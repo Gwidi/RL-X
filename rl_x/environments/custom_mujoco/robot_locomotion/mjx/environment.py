@@ -119,6 +119,11 @@ class LocomotionEnv:
                 xml_handle,
                 env_config["terrain"],
             )
+            xml_handle.custom.add(
+            "numeric",
+            name="max_contact_points",
+            data=[32],
+            )
             terrain_geom_prefix = TERRAIN_GEOM_PREFIX
         elif terrain_type == HURDLES_BOX_TERRAIN:
             add_hurdle_box_geoms(
