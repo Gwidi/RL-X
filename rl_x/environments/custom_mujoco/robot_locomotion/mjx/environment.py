@@ -93,9 +93,17 @@ class LocomotionEnv:
             material.remove()
         for mesh in xml_handle.asset.find_all("mesh"):
             mesh.remove()
+        training_geom_names_to_keep = set(
+            self.robot_config.get("training_geom_names_to_keep", ())
+        )
         for geom in xml_handle.find_all("geom"):
             is_foot_geom = geom.name and "foot" in geom.name
             is_floor_geom = geom.name == "floor"
+            is_robot_specific_geom = (
+                geom.name in training_geom_names_to_keep
+                if geom.name
+                else False
+            )
             is_calf_geom = (
                 uses_calf_colliders
                 and terrain_supports_calf_colliders
@@ -109,7 +117,7 @@ class LocomotionEnv:
                 and geom.name.endswith("_thigh")
             )
             is_reward_collision_sphere_geom = geom.dclass and geom.dclass.dclass == "reward_collision_sphere"
-            if not is_foot_geom and not is_floor_geom and not is_calf_geom and not is_thigh_geom and not is_reward_collision_sphere_geom:
+            if not is_foot_geom and not is_floor_geom and not is_robot_specific_geom and not is_calf_geom and not is_thigh_geom and not is_reward_collision_sphere_geom:
                 geom.remove()
             if is_floor_geom:
                 geom.material = ""
@@ -200,6 +208,71 @@ class LocomotionEnv:
         self.actuator_joint_mask_qvel = jnp.array([self.initial_mj_model.joint(joint_name).dofadr[0] for joint_name in self.actuator_joint_names])
         self.nr_actuator_joints = len(self.actuator_joint_names)
         self.nr_joints = self.initial_mj_model.njnt
+
+        self.spine_design_config = robot_config.get("spine_design")
+        self.spine_design_randomization_enabled = bool(
+            env_config.get("spine_design_randomization_enabled", False)
+        )
+        if self.spine_design_randomization_enabled and self.spine_design_config is None:
+            raise ValueError(
+                "spine_design_randomization_enabled requires a configurable robot."
+            )
+        if self.spine_design_config is not None and self.spine_locked:
+            raise ValueError(
+                "The configurable spine cannot be combined with spine_locked."
+            )
+
+        if self.spine_design_config is None:
+            self.spine_design_parameter_names = ()
+            self.spine_design_default = jnp.zeros(0, dtype=jnp.float32)
+            self.spine_design_randomization_min = self.spine_design_default
+            self.spine_design_randomization_max = self.spine_design_default
+            self.spine_design_center = self.spine_design_default
+            self.spine_design_half_range = self.spine_design_default
+            self.spine_design_size = 0
+        else:
+            self.spine_design_parameter_names = tuple(
+                self.spine_design_config["parameter_names"]
+            )
+            self.spine_design_default = jnp.asarray(
+                self.spine_design_config["default"], dtype=jnp.float32
+            )
+            self.spine_design_randomization_min = jnp.asarray(
+                self.spine_design_config["randomization_min"], dtype=jnp.float32
+            )
+            self.spine_design_randomization_max = jnp.asarray(
+                self.spine_design_config["randomization_max"], dtype=jnp.float32
+            )
+            self.spine_design_center = 0.5 * (
+                self.spine_design_randomization_min
+                + self.spine_design_randomization_max
+            )
+            self.spine_design_half_range = 0.5 * (
+                self.spine_design_randomization_max
+                - self.spine_design_randomization_min
+            ) + 1e-8
+            self.spine_design_size = len(self.spine_design_parameter_names)
+            if self.spine_design_size != 10:
+                raise ValueError("The Silver Badger spine design must have 10 parameters.")
+
+            self.spine_actuator_id = spine_actuator_id
+            self.spine_dof_id = self.initial_mj_model.jnt_dofadr[self.spine_joint_id]
+            self.spine_qpos_id = self.initial_mj_model.jnt_qposadr[self.spine_joint_id]
+            self.rear_body_id = mujoco.mj_name2id(
+                self.initial_mj_model, mujoco.mjtObj.mjOBJ_BODY, "rear"
+            )
+            self.rear_leg_body_ids = jnp.asarray([
+                mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
+                for name in ("rl_l0", "rr_l0")
+            ])
+            self.trunk_geom_ids = jnp.asarray([
+                mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, f"trunk_{index}")
+                for index in range(1, 5)
+            ])
+            self.rear_geom_ids = jnp.asarray([
+                mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_GEOM, f"rear_{index}")
+                for index in range(1, 5)
+            ])
 
         imu_angular_velocity_sensor_id = self.initial_mj_model.sensor("imu_angular_velocity").id
         self.imu_angular_velocity_sensor_adr = self.initial_mj_model.sensor_adr[imu_angular_velocity_sensor_id]
@@ -455,6 +528,7 @@ class LocomotionEnv:
             "last_action": jnp.zeros(self.nr_actuator_joints),
             "second_last_action": jnp.zeros(self.nr_actuator_joints),
             "joint_dropout_mask": jnp.ones(self.nr_actuator_joints, dtype=bool),
+            "spine_design": self.spine_design_default,
             "robot_dimensions_mean": self.robot_dimensions_mean,
             "max_command_velocity": max_command_velocity,
             "max_command_velocities": max_command_velocities,
@@ -480,6 +554,11 @@ class LocomotionEnv:
         info["env_curriculum/success_rate"] = internal_state["env_curriculum_success_rate"]
         info["env_curriculum/last_episode_success"] = internal_state["env_curriculum_last_episode_success"]
         info["env_curriculum/outside_start_zone_fraction"] = 0.0
+        for parameter_name, parameter_value in zip(
+            self.spine_design_parameter_names,
+            self.spine_design_default,
+        ):
+            info[f"spine_design/{parameter_name}"] = parameter_value
         if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
@@ -506,8 +585,24 @@ class LocomotionEnv:
 
     @partial(jax.jit, static_argnums=(0,))
     def _reset(self, state):
-        key, initial_state_key, terrain_key, domain_randomization_key, observation_key = jax.random.split(state.key, 5)
+        key, initial_state_key, terrain_key, domain_randomization_key, spine_design_key, observation_key = jax.random.split(state.key, 6)
         state = state.replace(key=key)
+
+        if self.spine_design_size > 0:
+            spine_design = self.spine_design_default
+            if self.spine_design_randomization_enabled:
+                spine_design = jax.random.uniform(
+                    spine_design_key,
+                    shape=(self.spine_design_size,),
+                    minval=self.spine_design_randomization_min,
+                    maxval=self.spine_design_randomization_max,
+                )
+            state.internal_state["spine_design"] = spine_design
+            for parameter_name, parameter_value in zip(
+                self.spine_design_parameter_names,
+                spine_design,
+            ):
+                state.info[f"spine_design/{parameter_name}"] = parameter_value
 
         mjx_model = self.terrain_function.sample(state.mjx_model, state.internal_state, terrain_key)
 
@@ -658,6 +753,26 @@ class LocomotionEnv:
         self.reward_function.setup(new_state.internal_state)
         self.domain_randomization_action_delay_function.setup(new_state.internal_state)
         data, mjx_model = self.handle_domain_randomization(new_state.internal_state, mjx_model, data, domain_randomization_key, is_episode_start=True)
+
+        if self.spine_design_size > 0:
+            data = data.replace(
+                qpos=data.qpos.at[self.spine_qpos_id].set(
+                    new_state.internal_state["actuator_joint_nominal_positions"][
+                        self.spine_actuator_id
+                    ]
+                )
+            )
+            data = mjx.forward(mjx_model, data)
+            min_feet_z_pos = jnp.min(data.geom_xpos[self.foot_geom_indices, 2])
+            height_offset = new_state.internal_state["center_height"] - min_feet_z_pos
+            new_state.internal_state["robot_nominal_qpos_height_over_ground"] = (
+                data.qpos[2] - new_state.internal_state["center_height"] + height_offset
+            )
+            new_state.internal_state["robot_nominal_imu_height_over_ground"] = (
+                data.site_xpos[self.imu_site_id, 2]
+                - new_state.internal_state["center_height"]
+                + height_offset
+            )
 
         next_observation = self.get_observation(data, mjx_model, new_state.internal_state, observation_key, jnp.zeros(self.nr_actuator_joints))
         reward = 0.0
@@ -869,6 +984,9 @@ class LocomotionEnv:
             local_goal_linear_velocity[1],
             internal_state["goal_velocities"][2],
         ])
+        normalized_spine_design = (
+            internal_state["spine_design"] - self.spine_design_center
+        ) / self.spine_design_half_range
         observation = jnp.concatenate([
             data.qpos[self.actuator_joint_mask_qpos],
             data.qvel[self.actuator_joint_mask_qvel],
@@ -882,6 +1000,7 @@ class LocomotionEnv:
             internal_state["imu_orientation_rotation_inverse"].apply(jnp.array([0.0, 0.0, -1.0])),
             jnp.array([self.policy_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),
             jnp.array([self.critic_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),
+            normalized_spine_design,
         ])
 
         # Add noise
@@ -945,6 +1064,206 @@ class LocomotionEnv:
         observation = jnp.clip(observation, -10.0, 10.0)
 
         return observation
+
+
+    def _apply_spine_design(self, mjx_model, internal_state):
+        design = internal_state["spine_design"]
+
+        dof_armature = mjx_model.dof_armature.at[self.spine_dof_id].set(
+            design[0]
+        )
+        dof_frictionloss = mjx_model.dof_frictionloss.at[self.spine_dof_id].set(
+            design[1]
+        )
+
+        ctrl_lower = jnp.minimum(design[2], design[3])
+        ctrl_upper = jnp.maximum(design[2], design[3])
+        jnt_range = mjx_model.jnt_range.at[self.spine_joint_id].set(
+            jnp.asarray([ctrl_lower, ctrl_upper])
+        )
+        effective_epsilon = jnp.minimum(
+            0.1,
+            0.5 * jnp.maximum(ctrl_upper - ctrl_lower, 0.0),
+        )
+        nominal_position = jnp.clip(
+            0.0,
+            ctrl_lower + effective_epsilon,
+            ctrl_upper - effective_epsilon,
+        )
+        internal_state["actuator_joint_nominal_positions"] = internal_state[
+            "actuator_joint_nominal_positions"
+        ].at[self.spine_actuator_id].set(nominal_position)
+
+        actuator_forcerange = mjx_model.actuator_forcerange.at[
+            self.spine_actuator_id
+        ].set(jnp.asarray([-design[4], design[4]]))
+        internal_state["actuator_joint_max_velocities"] = internal_state[
+            "actuator_joint_max_velocities"
+        ].at[self.spine_actuator_id].set(design[5])
+
+        initial_model = self.initial_mjx_model
+        trunk_1, trunk_2, trunk_3, trunk_4 = self.trunk_geom_ids
+        rear_1, rear_2, rear_3, rear_4 = self.rear_geom_ids
+        max_spine_position = (
+            initial_model.geom_pos[trunk_1, 0]
+            - initial_model.geom_size[trunk_1, 1]
+        )
+        min_spine_position = (
+            initial_model.body_pos[self.rear_body_id, 0]
+            - initial_model.geom_pos[rear_1, 1]
+            + initial_model.geom_size[rear_1, 1]
+        )
+        desired_spine_position = min_spine_position + design[6] * (
+            max_spine_position - min_spine_position
+        )
+
+        body_pos = mjx_model.body_pos.at[self.rear_body_id, 0].set(
+            desired_spine_position
+        )
+        spine_position_delta = (
+            desired_spine_position
+            - initial_model.body_pos[self.rear_body_id, 0]
+        )
+        body_pos = body_pos.at[self.rear_leg_body_ids, 1].set(
+            initial_model.body_pos[self.rear_leg_body_ids, 1]
+            + spine_position_delta
+        )
+
+        geom_pos = mjx_model.geom_pos
+        geom_size = mjx_model.geom_size
+        new_trunk_center_x = 0.5 * (
+            max_spine_position + desired_spine_position
+        )
+        new_trunk_half_length = 0.5 * (
+            max_spine_position - desired_spine_position
+        )
+        geom_pos = geom_pos.at[trunk_2, 0].set(new_trunk_center_x)
+        geom_size = geom_size.at[trunk_2, 0].set(new_trunk_half_length)
+        geom_pos = geom_pos.at[jnp.asarray([trunk_3, trunk_4]), 0].set(
+            new_trunk_center_x
+        )
+        geom_size = geom_size.at[jnp.asarray([trunk_3, trunk_4]), 1].set(
+            new_trunk_half_length
+        )
+
+        new_rear_half_length = 0.5 * (
+            desired_spine_position - min_spine_position
+        )
+        geom_pos = geom_pos.at[rear_1, 1].set(
+            desired_spine_position
+            - min_spine_position
+            + initial_model.geom_size[rear_1, 1]
+        )
+        rear_resizable_geoms = jnp.asarray([rear_2, rear_3, rear_4])
+        geom_pos = geom_pos.at[rear_resizable_geoms, 1].set(
+            new_rear_half_length
+        )
+        geom_size = geom_size.at[rear_resizable_geoms, 1].set(
+            new_rear_half_length
+        )
+
+        def volumes_for(sizes, geom_ids):
+            geom_1, geom_2, geom_3, geom_4 = geom_ids
+            return jnp.asarray([
+                8.0 * jnp.prod(sizes[geom_1]),
+                8.0 * jnp.prod(sizes[geom_2]),
+                2.0 * jnp.pi * sizes[geom_3, 0] ** 2 * sizes[geom_3, 1],
+                2.0 * jnp.pi * sizes[geom_4, 0] ** 2 * sizes[geom_4, 1],
+            ])
+
+        def center_of_volume(positions, geom_ids, volumes):
+            return jnp.sum(
+                positions[geom_ids] * volumes[:, None],
+                axis=0,
+            ) / jnp.sum(volumes)
+
+        trunk_volumes = volumes_for(geom_size, self.trunk_geom_ids)
+        rear_volumes = volumes_for(geom_size, self.rear_geom_ids)
+        initial_trunk_volumes = volumes_for(
+            initial_model.geom_size, self.trunk_geom_ids
+        )
+        initial_rear_volumes = volumes_for(
+            initial_model.geom_size, self.rear_geom_ids
+        )
+        trunk_volume = jnp.sum(trunk_volumes)
+        rear_volume = jnp.sum(rear_volumes)
+        initial_trunk_volume = jnp.sum(initial_trunk_volumes)
+        initial_rear_volume = jnp.sum(initial_rear_volumes)
+
+        trunk_center_delta = center_of_volume(
+            geom_pos, self.trunk_geom_ids, trunk_volumes
+        ) - center_of_volume(
+            initial_model.geom_pos,
+            self.trunk_geom_ids,
+            initial_trunk_volumes,
+        )
+        rear_center_delta = center_of_volume(
+            geom_pos, self.rear_geom_ids, rear_volumes
+        ) - center_of_volume(
+            initial_model.geom_pos,
+            self.rear_geom_ids,
+            initial_rear_volumes,
+        )
+        body_ipos = mjx_model.body_ipos.at[self.trunk_body_id].set(
+            initial_model.body_ipos[self.trunk_body_id] + trunk_center_delta
+        )
+        body_ipos = body_ipos.at[self.rear_body_id].set(
+            initial_model.body_ipos[self.rear_body_id] + rear_center_delta
+        )
+
+        current_trunk_mass = mjx_model.body_mass[self.trunk_body_id]
+        current_rear_mass = mjx_model.body_mass[self.rear_body_id]
+        trunk_mass_candidate = (
+            initial_model.body_mass[self.trunk_body_id]
+            * trunk_volume
+            / initial_trunk_volume
+        )
+        rear_mass_candidate = (
+            initial_model.body_mass[self.rear_body_id]
+            * rear_volume
+            / initial_rear_volume
+        )
+        mass_scale = (
+            current_trunk_mass + current_rear_mass
+        ) / (trunk_mass_candidate + rear_mass_candidate)
+        new_trunk_mass = trunk_mass_candidate * mass_scale
+        new_rear_mass = rear_mass_candidate * mass_scale
+        body_mass = mjx_model.body_mass.at[self.trunk_body_id].set(
+            new_trunk_mass
+        )
+        body_mass = body_mass.at[self.rear_body_id].set(new_rear_mass)
+        body_inertia = mjx_model.body_inertia.at[self.trunk_body_id].set(
+            mjx_model.body_inertia[self.trunk_body_id]
+            * new_trunk_mass
+            / current_trunk_mass
+        )
+        body_inertia = body_inertia.at[self.rear_body_id].set(
+            mjx_model.body_inertia[self.rear_body_id]
+            * new_rear_mass
+            / current_rear_mass
+        )
+
+        rotation_axis = design[7:10]
+        rotation_axis = rotation_axis / (
+            jnp.linalg.norm(rotation_axis) + 1e-8
+        )
+        jnt_axis = mjx_model.jnt_axis.at[self.spine_joint_id].set(
+            rotation_axis
+        )
+
+        return mjx_model.tree_replace({
+            "dof_armature": dof_armature,
+            "dof_frictionloss": dof_frictionloss,
+            "jnt_range": jnt_range,
+            "actuator_forcerange": actuator_forcerange,
+            "body_pos": body_pos,
+            "geom_pos": geom_pos,
+            "geom_size": geom_size,
+            "body_mass": body_mass,
+            "body_ipos": body_ipos,
+            "body_inertia": body_inertia,
+            "jnt_axis": jnt_axis,
+        })
     
 
     def handle_domain_randomization(self, internal_state, mjx_model, data, key, is_episode_start=False):
@@ -963,6 +1282,16 @@ class LocomotionEnv:
         self.domain_randomization_action_delay_function.sample(internal_state, should_randomize_domain, action_delay_key)
         mjx_model = self.joint_dropout_function.sample(internal_state, mjx_model, should_randomize_domain, joint_dropout_key)
         self.reward_function.handle_model_change(internal_state, mjx_model, should_randomize_domain)
+
+        # Morphology is the final writer for every overlapping model field.
+        # Keep this after all model-domain randomizers and joint dropout.
+        if self.spine_design_size > 0:
+            mjx_model = self._apply_spine_design(mjx_model, internal_state)
+            self.reward_function.handle_model_change(
+                internal_state,
+                mjx_model,
+                True,
+            )
 
         data = self.domain_randomization_perturbation_function.sample(internal_state, mjx_model, data, should_randomize_domain_perturbation, perturbation_key)
 
@@ -996,6 +1325,11 @@ class LocomotionEnv:
         current_observation_idx += self.policy_exteroceptive_observation_function.nr_exteroceptive_observations
         self.critic_exteroception_obs_idx = jnp.array([current_observation_idx + i for i in range(self.critic_exteroceptive_observation_function.nr_exteroceptive_observations)])
         current_observation_idx += self.critic_exteroceptive_observation_function.nr_exteroceptive_observations
+        self.spine_design_obs_idx = jnp.array([
+            current_observation_idx + i
+            for i in range(self.spine_design_size)
+        ])
+        current_observation_idx += self.spine_design_size
 
         self.policy_observation_indices = jnp.concatenate([
             self.joint_positions_obs_idx,
@@ -1005,6 +1339,7 @@ class LocomotionEnv:
             self.goal_velocities_obs_idx,
             self.gravity_vector_obs_idx,
             self.policy_exteroception_obs_idx,
+            self.spine_design_obs_idx,
         ], dtype=int)
 
         self.critic_observation_indices = jnp.concatenate([
@@ -1019,6 +1354,7 @@ class LocomotionEnv:
             self.goal_velocities_obs_idx,
             self.gravity_vector_obs_idx,
             self.critic_exteroception_obs_idx,
+            self.spine_design_obs_idx,
         ], dtype=int)
 
         return BoxSpace(low=-jnp.inf, high=jnp.inf, shape=(current_observation_idx,), dtype=jnp.float32)

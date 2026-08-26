@@ -28,6 +28,17 @@ class DefaultDRJointDropout:
             internal_state["joint_dropout_lock_mask"]
         )
 
+        # The configurable spine is a morphology parameter, not a failure
+        # randomization target.  Keep it actuated and unlocked so joint
+        # dropout cannot functionally replace the sampled spine design.
+        if self.env.spine_design_size > 0:
+            internal_state["joint_dropout_open_mask"] = internal_state[
+                "joint_dropout_open_mask"
+            ].at[self.env.spine_actuator_id].set(True)
+            internal_state["joint_dropout_lock_mask"] = internal_state[
+                "joint_dropout_lock_mask"
+            ].at[self.env.spine_actuator_id].set(True)
+
         internal_state["joint_dropout_mask"] = internal_state["joint_dropout_open_mask"] | internal_state["joint_dropout_lock_mask"]
 
         actuator_gainprm = internal_state["partial_actuator_gainprm_without_dropout"] * internal_state["joint_dropout_open_mask"]

@@ -11,6 +11,7 @@ def get_config(environment_name):
         "copy_train_env_for_eval": True,
         "train_robot": "silver_badger",
         "spine_locked": False,
+        "spine_design_randomization_enabled": False,
         "control_type": "pd",
         "command": {
             "type": "random",
