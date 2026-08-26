@@ -19,43 +19,47 @@ class EnergyDissipationCurriculumInitialState:
 
         self.is_energy_curriculum = initial_state_config.get("type") == "energy_dissipation_curriculum"
 
-    def _get_curriculum_schedule(self, coeff):
-        
-        # Domyślne wartości bazowe
-        height = self.start_height
-        angle_multiplier = 0.0
-        velocity_multiplier = 0.0
-        
-        if coeff <= 0.4:
-            # Skalujemy coeff na przedział [0, 1] dla tej konkretnej fazy
-            phase_progress = coeff / 0.4
-            
-            height = self.start_height + (self.target_height - self.start_height) * phase_progress
-            angle_multiplier = 0.0
-            velocity_multiplier = 0.0
+    def _get_curriculum_schedule(self):
+        # Inicjalizacja trwałego stanu w środowisku
+        if "curriculum_levels" not in self.env.internal_state:
+            self.env.internal_state["curriculum_levels"] = {"height": 0.0, "angle": 0.0, "vel": 0.0}
+            self.env.internal_state["curriculum_history"] = []
 
-        elif coeff <= 0.7:
-            height = self.target_height  # Wysokość jest już na maksa (np. 3 metry)
-            
-            phase_progress = (coeff - 0.4) / 0.3
-            angle_multiplier = phase_progress
-            velocity_multiplier = 0.0
+        history = self.env.internal_state["curriculum_history"]
+        levels = self.env.internal_state["curriculum_levels"]
 
-        else:
-            height = self.target_height
-            angle_multiplier = 1.0       # Rotacja jest już na maksa
-            
-            phase_progress = (coeff - 0.7) / 0.3
-            velocity_multiplier = phase_progress
+        # Ocena i aktualizacja trudności po 10 próbach
+        if len(history) >= 10:
+            win_rate = sum(history) / len(history)
+            step = 0.05
 
-        return height, angle_multiplier, velocity_multiplier
+            if win_rate > 0.8:  # Idzie dobrze -> podbijamy
+                if levels["height"] < 1.0:
+                    levels["height"] = min(1.0, levels["height"] + step)
+                elif levels["angle"] < 1.0:
+                    levels["angle"] = min(1.0, levels["angle"] + step)
+                elif levels["vel"] < 1.0:
+                    levels["vel"] = min(1.0, levels["vel"] + step)
+                self.env.internal_state["curriculum_history"] = [] 
+
+            elif win_rate < 0.4:  # Idzie źle -> obniżamy
+                if levels["vel"] > 0.0:
+                    levels["vel"] = max(0.0, levels["vel"] - step)
+                elif levels["angle"] > 0.0:
+                    levels["angle"] = max(0.0, levels["angle"] - step)
+                elif levels["height"] > 0.0:
+                    levels["height"] = max(0.0, levels["height"] - step)
+                self.env.internal_state["curriculum_history"] = [] 
+
+        actual_height = self.start_height + (self.target_height - self.start_height) * levels["height"]
+        return actual_height, levels["angle"], levels["vel"]
 
     def setup(self):
         if not self.is_energy_curriculum:
             return None
 
-        curriculum_coeff = self.env.internal_state["env_curriculum_coeff"]
-        height, angle_mult, vel_mult = self._get_curriculum_schedule(curriculum_coeff)
+        # curriculum_coeff = self.env.internal_state["env_curriculum_coeff"]
+        height, angle_mult, vel_mult = self._get_curriculum_schedule()
 
         # 1. NAPRAWA ORIENTACJI: Roll i Pitch lekko losowe, ale YAW ZAWSZE ZERO (patrzy prosto)
         roll_angle = self.env.np_rng.uniform(low=-self.max_roll_angle * angle_mult, high=self.max_roll_angle * angle_mult)
@@ -119,6 +123,6 @@ class EnergyDissipationCurriculumInitialState:
         self.env.internal_state["info"]["curriculum/initial_height"] = height
         self.env.internal_state["info"]["curriculum/angle_multiplier"] = angle_mult
         self.env.internal_state["info"]["curriculum/velocity_multiplier"] = vel_mult
-        self.env.internal_state["info"]["curriculum/coeff"] = curriculum_coeff
+        # self.env.internal_state["info"]["curriculum/coeff"] = curriculum_coeff
 
         return qpos, qvel
