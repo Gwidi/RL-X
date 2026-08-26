@@ -43,6 +43,8 @@ class SimplifiedLandingReward:
         self.env.internal_state["previous_imu_linear_velocity"] = np.zeros(self.env.imu_linear_velocity_sensor_dim)
         self.env.internal_state["sum_tracking_performance_percentage"] = 0.0
         self.env.internal_state["previous_actuator_joint_velocities"] = np.zeros(self.env.nr_actuator_joints)
+        self.env.internal_state["landing_evaluated"] = False
+        self.env.internal_state["landing_success"] = False
         
         self.env.internal_state["has_touched_ground"] = False
         self.env.internal_state["time_since_touchdown"] = 0.0
@@ -61,6 +63,50 @@ class SimplifiedLandingReward:
         if self.env.internal_state.get("has_touched_ground", False):
             self.env.internal_state["time_since_touchdown"] += self.env.dt
 
+    def _evaluate_landing(
+        self,
+        height,
+        euler,
+        lin_vel,
+        ang_vel,
+    ):
+        """
+        Ocena jakości lądowania ~0.3 s po touchdown.
+
+        Zwraca True tylko wtedy, gdy robot:
+        - nie leży na brzuchu,
+        - jest względnie pionowy,
+        - ma małą prędkość liniową,
+        - ma małą prędkość kątową.
+        """
+
+        max_roll_pitch = np.deg2rad(15.0)
+
+        max_linear_velocity = 1.5
+        max_angular_velocity = 3.0
+
+        height_ok = height > 0.18
+
+        orientation_ok = (
+            abs(euler[0]) < max_roll_pitch
+            and abs(euler[1]) < max_roll_pitch
+        )
+
+        linear_velocity_ok = (
+            np.linalg.norm(lin_vel) < max_linear_velocity
+        )
+
+        angular_velocity_ok = (
+            np.linalg.norm(ang_vel) < max_angular_velocity
+        )
+
+        return bool(
+            height_ok
+            and orientation_ok
+            and linear_velocity_ok
+            and angular_velocity_ok
+        )
+
     def reward_and_info(self, action):
         qpos = self.env.internal_state["data"].qpos[self.env.actuator_joint_mask_qpos]
         qvel = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
@@ -74,46 +120,224 @@ class SimplifiedLandingReward:
         height = self.env.internal_state["robot_imu_height_over_ground"]
         target_height = self.nominal_landing_height
 
+        landing_evaluated = self.env.internal_state.get(
+            "landing_evaluated",
+            False,
+        )
+
+        if (
+            has_touched
+            and time_since_touch >= 0.30
+            and not landing_evaluated
+        ):
+
+            landing_success = self._evaluate_landing(
+                height=height,
+                euler=euler,
+                lin_vel=lin_vel,
+                ang_vel=ang_vel,
+            )
+
+            self.env.internal_state[
+                "landing_evaluated"
+            ] = True
+
+            self.env.internal_state[
+                "landing_success"
+            ] = landing_success
+
+            # ----------------------------------------------------------
+            # UPDATE CURRICULUM
+            # ----------------------------------------------------------
+            #
+            # Curriculum state jest przechowywany w internal_state,
+            # więc nie musimy mieć bezpośredniego reference do klasy
+            # initial-state curriculum.
+            #
+
+            curriculum = self.env.internal_state.get(
+                "landing_curriculum"
+            )
+
+            if curriculum is not None:
+
+                success = float(landing_success)
+
+                alpha = curriculum.get(
+                    "ema_alpha",
+                    0.05,
+                )
+
+                curriculum["success_ema"] = (
+                    (1.0 - alpha)
+                    * curriculum["success_ema"]
+                    + alpha * success
+                )
+
+                curriculum["last_success"] = success
+
+                curriculum["nr_evaluated_landings"] += 1
+
+                ema = curriculum["success_ema"]
+
+                if ema > 0.85:
+
+                    curriculum["difficulty"] = min(
+                        1.0,
+                        curriculum["difficulty"]
+                        + 0.01,
+                    )
+
+                    curriculum["last_update"] = "increase"
+
+                elif ema < 0.55:
+
+                    curriculum["difficulty"] = max(
+                        0.0,
+                        curriculum["difficulty"]
+                        - 0.005,
+                    )
+
+                    curriculum["last_update"] = "decrease"
+
+                else:
+
+                    curriculum["last_update"] = "hold"
+
         if height < 0.15:
             base_crash_reward = -20.0 * self.env.dt
         else:
             base_crash_reward = 0.0
 
-        base_vel_xy_reward = self.base_vel_coeff * -(np.sum(np.square(lin_vel[:2])) + np.sum(np.square(ang_vel)))
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
         
         if not has_touched:
-            # W POWIETRZU: Dyscyplina zapobiegająca eksplozji fizyki
-            nominal_joint_pos = self.env.internal_state["actuator_joint_nominal_positions"]
-            joint_pos_reward = self.joint_pos_coeff * -np.mean(np.square(qpos - nominal_joint_pos))
-            base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2])
-            joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
-            
-            base_height_reward = self.base_height_coeff * -np.square(height - target_height) if height < target_height else 0.0
+
+            # ----------------------------------------------------------
+            # FREE FALL
+            # ----------------------------------------------------------
+            #
+            # Nie karzemy robota za prędkość XY/Z ani angular velocity.
+            # Jest to naturalna część spadania.
+            #
+
+            base_vel_xy_reward = 0.0
+            base_vel_z_reward = 0.0
+
+            # Stabilność orientacji nadal jest ważna.
+            angular_position_reward = (
+                self.roll_pitch_pos_coeff
+                * -np.sum(np.square(euler[:2]))
+            )
+
+            # Pozwalamy nogom bardziej się poruszać.
+            nominal_joint_pos = (
+                self.env.internal_state[
+                    "actuator_joint_nominal_positions"
+                ]
+            )
+
+            joint_pos_reward = (
+                0.1
+                * self.joint_pos_coeff
+                * -np.mean(
+                    np.square(
+                        qpos - nominal_joint_pos
+                    )
+                )
+            )
+
+            # Mała kara za ekstremalne prędkości stawów.
+            joint_vel_reward = (
+                0.25
+                * self.joint_vel_coeff
+                * -np.mean(np.square(qvel))
+            )
+
+            # Nie próbujemy utrzymywać wysokości podczas lotu.
+            base_height_reward = 0.0
 
         else:
-            # NA ZIEMI: Swoboda pozycji nóg
+
+            # ----------------------------------------------------------
+            # POST TOUCHDOWN
+            # ----------------------------------------------------------
+
+            base_vel_xy_reward = (
+                self.base_vel_coeff
+                * -(
+                    np.sum(np.square(lin_vel[:2]))
+                    + np.sum(np.square(ang_vel))
+                )
+            )
+
+            angular_position_reward = (
+                self.roll_pitch_pos_coeff
+                * -np.sum(np.square(euler[:2]))
+            )
+
             joint_pos_reward = 0.0
-            
+
+            # ----------------------------------------------------------
+            # FIRST 0.3 s = ENERGY ABSORPTION
+            # ----------------------------------------------------------
+
             if time_since_touch < 0.3:
-                # ZMIANA 2: Asymetryczna prędkość w osi Z podczas Deep Squata
-                # Jeśli leci w dół (amortyzacja) -> zero kary. Jeśli odbija w górę -> silna kara.
-                if lin_vel[2] > 0:
-                    base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2]) * 2.0
+
+                # Podczas amortyzacji nie karzemy za ruch w dół.
+                if lin_vel[2] > 0.0:
+                    base_vel_z_reward = (
+                        self.base_vel_coeff
+                        * -np.square(lin_vel[2])
+                        * 2.0
+                    )
                 else:
                     base_vel_z_reward = 0.0
-                    
-                joint_vel_reward = 0.0
-                
-                squat_penalty_weight = np.clip((time_since_touch) / 0.3, 0.0, 1.0) if height < target_height else 1.0
-                base_height_reward = squat_penalty_weight * self.base_height_coeff * -np.square(height - target_height)
-            else:
-                # PO AMORTYZACJI: Wymuszony bezruch
-                base_vel_z_reward = self.base_vel_coeff * -np.square(lin_vel[2])
-                joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(qvel))
-                base_height_reward = self.base_height_coeff * -np.square(height - target_height)
 
-        base_vel_reward = base_vel_xy_reward + base_vel_z_reward
+                # Pozwalamy nogom szybko pracować podczas amortyzacji.
+                joint_vel_reward = 0.0
+
+                squat_penalty_weight = np.clip(
+                    time_since_touch / 0.3,
+                    0.0,
+                    1.0,
+                )
+
+                base_height_reward = (
+                    squat_penalty_weight
+                    * self.base_height_coeff
+                    * -np.square(
+                        height - target_height
+                    )
+                )
+
+            else:
+
+                # ------------------------------------------------------
+                # STABILIZATION
+                # ------------------------------------------------------
+
+                base_vel_z_reward = (
+                    self.base_vel_coeff
+                    * -np.square(lin_vel[2])
+                )
+
+                joint_vel_reward = (
+                    self.joint_vel_coeff
+                    * -np.mean(np.square(qvel))
+                )
+
+                base_height_reward = (
+                    self.base_height_coeff
+                    * -np.square(
+                        height - target_height
+                    )
+                )
+
+        base_vel_reward = (
+            base_vel_xy_reward
+            + base_vel_z_reward
+        )
 
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
@@ -169,6 +393,30 @@ class SimplifiedLandingReward:
         info["reward/action_rate"] = action_rate_reward
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
+        info["curriculum/landing_success"] = float(
+            self.env.internal_state.get(
+                "landing_success",
+                False,
+            )
+        )
+
+        curriculum = self.env.internal_state.get(
+            "landing_curriculum"
+        )
+
+        if curriculum is not None:
+
+            info["curriculum/difficulty"] = (
+                curriculum["difficulty"]
+            )
+
+            info["curriculum/success_ema"] = (
+                curriculum["success_ema"]
+            )
+
+            info["curriculum/nr_evaluated_landings"] = (
+                curriculum["nr_evaluated_landings"]
+            )
 
         desired_imu_linear_velocity_xy = self.env.internal_state["goal_velocities"][:2]
         xy_difference = desired_imu_linear_velocity_xy - lin_vel[:2]
