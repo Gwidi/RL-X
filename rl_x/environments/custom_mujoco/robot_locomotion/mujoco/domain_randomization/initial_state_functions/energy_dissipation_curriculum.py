@@ -125,7 +125,7 @@ class EnergyDissipationCurriculumInitialState:
 
         # Height
         actual_height = (
-            self.start_height
+             self.start_height
             + difficulty * (
                 self.target_height - self.start_height
             )
@@ -134,7 +134,7 @@ class EnergyDissipationCurriculumInitialState:
         # Roll / pitch
         angle_deg = (
             self.min_angle_deg
-            + difficulty * (
+            + difficulty**2 * (
                 self.max_angle_deg - self.min_angle_deg
             )
         )
