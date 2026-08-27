@@ -18,6 +18,10 @@ import wandb
 from rl_x.algorithms.ppo.flax_full_jit.general_properties import GeneralProperties
 from rl_x.algorithms.ppo.flax_full_jit.policy import get_policy
 from rl_x.algorithms.ppo.flax_full_jit.critic import get_critic
+from rl_x.algorithms.ppo.flax_full_jit.spine_codesign import (
+    collect_nominal_state_bank,
+    search_spine_design,
+)
 from rl_x.algorithms.flax_full_jit_logging import aggregate_metrics
 
 rlx_logger = logging.getLogger("rl_x")
@@ -463,6 +467,38 @@ class PPO:
 
 
     def test(self, episodes):
+        spine_codesign_operation = self.config.algorithm.spine_codesign_operation
+        if spine_codesign_operation == "collect_state_bank":
+            self.key, _ = collect_nominal_state_bank(
+                env=self.train_env,
+                policy_apply=self.policy.apply,
+                policy_params=self.policy_state.params,
+                get_processed_action=self.get_processed_action,
+                key=self.key,
+                target_size=self.config.algorithm.spine_state_bank_size,
+                output_path=self.config.algorithm.spine_state_bank_path,
+            )
+            return
+        if spine_codesign_operation == "search":
+            search_spine_design(
+                env=self.train_env,
+                critic_apply=self.critic.apply,
+                critic_params=self.critic_state.params,
+                state_bank_path=self.config.algorithm.spine_state_bank_path,
+                output_path=self.config.algorithm.spine_search_output_path,
+                nr_steps=self.config.algorithm.spine_search_steps,
+                minibatch_size=self.config.algorithm.spine_search_minibatch_size,
+                learning_rate=self.config.algorithm.spine_search_learning_rate,
+                max_step=self.config.algorithm.spine_search_max_step,
+                l2_weight=self.config.algorithm.spine_search_l2_weight,
+                seed=self.config.algorithm.spine_search_seed,
+            )
+            return
+        if spine_codesign_operation:
+            raise ValueError(
+                "Unknown spine_codesign_operation: "
+                f"{spine_codesign_operation!r}."
+            )
         rlx_logger.info("Testing runs infinitely. The episodes parameter is ignored.")
 
         @jax.jit

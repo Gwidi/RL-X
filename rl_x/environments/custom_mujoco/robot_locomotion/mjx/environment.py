@@ -230,6 +230,7 @@ class LocomotionEnv:
             self.spine_design_center = self.spine_design_default
             self.spine_design_half_range = self.spine_design_default
             self.spine_design_size = 0
+            self.spine_design_observation_size = 0
         else:
             self.spine_design_parameter_names = tuple(
                 self.spine_design_config["parameter_names"]
@@ -252,8 +253,16 @@ class LocomotionEnv:
                 - self.spine_design_randomization_min
             ) + 1e-8
             self.spine_design_size = len(self.spine_design_parameter_names)
-            if self.spine_design_size != 10:
-                raise ValueError("The Silver Badger spine design must have 10 parameters.")
+            self.spine_design_observation_size = 10
+            if self.spine_design_size != 9:
+                raise ValueError("The Silver Badger spine design must have 9 parameters.")
+            self.spine_axis_max_tilt_rad = float(
+                self.spine_design_config["axis_max_tilt_rad"]
+            )
+            if not 0.0 < self.spine_axis_max_tilt_rad <= np.pi / 2.0:
+                raise ValueError(
+                    "axis_max_tilt_rad must be in the interval (0, pi/2]."
+                )
 
             self.spine_actuator_id = spine_actuator_id
             self.spine_dof_id = self.initial_mj_model.jnt_dofadr[self.spine_joint_id]
@@ -559,6 +568,12 @@ class LocomotionEnv:
             self.spine_design_default,
         ):
             info[f"spine_design/{parameter_name}"] = parameter_value
+        if self.spine_design_size > 0:
+            for axis_name, axis_value in zip(
+                ("rotationaxisx", "rotationaxisy", "rotationaxisz"),
+                self.spine_axis_from_design(self.spine_design_default),
+            ):
+                info[f"spine_design/{axis_name}"] = axis_value
         if self.terrain_uses_curriculum:
             self.terrain_function.add_curriculum_info(internal_state, info)
         info_episode_store = {
@@ -591,18 +606,45 @@ class LocomotionEnv:
         if self.spine_design_size > 0:
             spine_design = self.spine_design_default
             if self.spine_design_randomization_enabled:
-                spine_design = jax.random.uniform(
-                    spine_design_key,
-                    shape=(self.spine_design_size,),
-                    minval=self.spine_design_randomization_min,
-                    maxval=self.spine_design_randomization_max,
+                scalar_key, axis_key = jax.random.split(spine_design_key)
+                scalar_design = jax.random.uniform(
+                    scalar_key,
+                    shape=(self.spine_design_size - 2,),
+                    minval=self.spine_design_randomization_min[:-2],
+                    maxval=self.spine_design_randomization_max[:-2],
                 )
+                cap_key, azimuth_key = jax.random.split(axis_key)
+                cos_tilt = jax.random.uniform(
+                    cap_key,
+                    shape=(),
+                    minval=jnp.cos(self.spine_axis_max_tilt_rad),
+                    maxval=1.0,
+                )
+                tilt = jnp.arccos(cos_tilt)
+                azimuth = jax.random.uniform(
+                    azimuth_key,
+                    shape=(),
+                    minval=-jnp.pi,
+                    maxval=jnp.pi,
+                )
+                spine_design = jnp.concatenate((
+                    scalar_design,
+                    jnp.asarray([
+                        tilt * jnp.cos(azimuth),
+                        tilt * jnp.sin(azimuth),
+                    ]),
+                ))
             state.internal_state["spine_design"] = spine_design
             for parameter_name, parameter_value in zip(
                 self.spine_design_parameter_names,
                 spine_design,
             ):
                 state.info[f"spine_design/{parameter_name}"] = parameter_value
+            for axis_name, axis_value in zip(
+                ("rotationaxisx", "rotationaxisy", "rotationaxisz"),
+                self.spine_axis_from_design(spine_design),
+            ):
+                state.info[f"spine_design/{axis_name}"] = axis_value
 
         mjx_model = self.terrain_function.sample(state.mjx_model, state.internal_state, terrain_key)
 
@@ -984,9 +1026,9 @@ class LocomotionEnv:
             local_goal_linear_velocity[1],
             internal_state["goal_velocities"][2],
         ])
-        normalized_spine_design = (
-            internal_state["spine_design"] - self.spine_design_center
-        ) / self.spine_design_half_range
+        spine_design_observation = self.spine_design_observation(
+            internal_state["spine_design"]
+        )
         observation = jnp.concatenate([
             data.qpos[self.actuator_joint_mask_qpos],
             data.qvel[self.actuator_joint_mask_qvel],
@@ -1000,7 +1042,7 @@ class LocomotionEnv:
             internal_state["imu_orientation_rotation_inverse"].apply(jnp.array([0.0, 0.0, -1.0])),
             jnp.array([self.policy_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),
             jnp.array([self.critic_exteroceptive_observation_function.get_exteroceptive_observation(data, mjx_model, internal_state)]).reshape(-1),
-            normalized_spine_design,
+            spine_design_observation,
         ])
 
         # Add noise
@@ -1064,6 +1106,63 @@ class LocomotionEnv:
         observation = jnp.clip(observation, -10.0, 10.0)
 
         return observation
+
+
+    def spine_axis_from_design(self, design):
+        """Map the two tangent coordinates to a unique unit-axis hemisphere."""
+        tangent = design[-2:]
+        squared_tilt = jnp.sum(tangent ** 2)
+        safe_tilt = jnp.sqrt(jnp.maximum(squared_tilt, 1e-8))
+        # Explicit series keep the removable singularities differentiable at
+        # the nominal zero tangent; norm/sinc autodiff would otherwise yield
+        # NaNs exactly where the design search starts.
+        small_angle = squared_tilt < 1e-8
+        axis_x = jnp.where(
+            small_angle,
+            1.0 - squared_tilt / 2.0 + squared_tilt ** 2 / 24.0,
+            jnp.cos(safe_tilt),
+        )
+        scale = jnp.where(
+            small_angle,
+            1.0 - squared_tilt / 6.0 + squared_tilt ** 2 / 120.0,
+            jnp.sin(safe_tilt) / safe_tilt,
+        )
+        return jnp.asarray([
+            axis_x,
+            scale * tangent[0],
+            scale * tangent[1],
+        ])
+
+
+    def project_spine_design(self, design):
+        """Clip scalar bounds and project the axis tangent onto its disk."""
+        design = jnp.clip(
+            design,
+            self.spine_design_randomization_min,
+            self.spine_design_randomization_max,
+        )
+        tangent = design[-2:]
+        squared_tangent_norm = jnp.sum(tangent ** 2)
+        safe_tangent_norm = jnp.sqrt(jnp.maximum(squared_tangent_norm, 1e-8))
+        tangent_scale = jnp.where(
+            squared_tangent_norm > self.spine_axis_max_tilt_rad ** 2,
+            self.spine_axis_max_tilt_rad / safe_tangent_norm,
+            1.0,
+        )
+        return design.at[-2:].set(tangent * tangent_scale)
+
+
+    def spine_design_observation(self, design):
+        """Return seven normalized scalars followed by the physical unit axis."""
+        if self.spine_design_size == 0:
+            return jnp.zeros(0, dtype=jnp.float32)
+        normalized_scalars = (
+            design[:-2] - self.spine_design_center[:-2]
+        ) / self.spine_design_half_range[:-2]
+        return jnp.concatenate((
+            normalized_scalars,
+            self.spine_axis_from_design(design),
+        ))
 
 
     def _apply_spine_design(self, mjx_model, internal_state):
@@ -1243,10 +1342,7 @@ class LocomotionEnv:
             / current_rear_mass
         )
 
-        rotation_axis = design[7:10]
-        rotation_axis = rotation_axis / (
-            jnp.linalg.norm(rotation_axis) + 1e-8
-        )
+        rotation_axis = self.spine_axis_from_design(design)
         jnt_axis = mjx_model.jnt_axis.at[self.spine_joint_id].set(
             rotation_axis
         )
@@ -1327,9 +1423,9 @@ class LocomotionEnv:
         current_observation_idx += self.critic_exteroceptive_observation_function.nr_exteroceptive_observations
         self.spine_design_obs_idx = jnp.array([
             current_observation_idx + i
-            for i in range(self.spine_design_size)
+            for i in range(self.spine_design_observation_size)
         ])
-        current_observation_idx += self.spine_design_size
+        current_observation_idx += self.spine_design_observation_size
 
         self.policy_observation_indices = jnp.concatenate([
             self.joint_positions_obs_idx,

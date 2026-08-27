@@ -25,4 +25,18 @@ def get_config(algorithm_name):
     config.evaluation_and_save_frequency = 17301504  # -1 to disable
     config.evaluation_active = True
 
+    # Offline Silver Badger spine co-design. These operations run in test mode
+    # after policy training and use the PPO critic as a differentiable design
+    # surrogate over a separately collected nominal-reference state bank.
+    config.spine_codesign_operation = ""  # "collect_state_bank" or "search"
+    config.spine_state_bank_path = ""
+    config.spine_state_bank_size = 4096
+    config.spine_search_output_path = ""
+    config.spine_search_steps = 200
+    config.spine_search_minibatch_size = 1024
+    config.spine_search_learning_rate = 0.05
+    config.spine_search_max_step = 0.05
+    config.spine_search_l2_weight = 0.01
+    config.spine_search_seed = 0
+
     return config

@@ -1,7 +1,8 @@
 # Configurable Silver Badger
 
-This robot option ports the 10-dimensional Silver Badger spine design from the
-`loco_mjx` `co_design` branch while leaving `silver_badger` unchanged.
+This robot option exposes a 9-dimensional Silver Badger spine design while
+leaving `silver_badger` unchanged. Seven scalar parameters are followed by two
+tangent-plane coordinates for the hinge axis.
 
 Select it with:
 
@@ -18,6 +19,13 @@ Enable independent per-environment sampling over the complete design space:
 
 With randomization disabled, the configurable model uses the default Silver
 Badger spine parameters. The defaults and all bounds live in `robot_config.py`.
+
+The two hinge-axis coordinates form a rotation vector in the tangent plane at
+the nominal local +x axis. Its norm is the tilt angle and its direction is the
+tilt azimuth. Sampling is uniform over the resulting hemisphere-sized spherical
+cap, not over a redundant three-vector cube. The policy and critic observe the
+physical unit axis `(x, y, z)`, so their design-conditioning patch remains ten
+values: seven normalized scalars plus three unit-axis components.
 
 The sampled spine design has precedence over seen/unseen robot and MuJoCo
 domain randomization for the same model fields. Joint dropout still applies to
