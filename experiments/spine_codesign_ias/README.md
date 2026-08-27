@@ -27,8 +27,10 @@ The corrected W&B destination is
 successfully and synced W&B run `89bo8wnw` before the corrected production
 jobs were submitted:
 
-- `139270`: fixed default spine, one RTX 3090 or A5000, three days.
-- `139271`: full spine-design randomization, one RTX 3090 or A5000, three days.
+- `139270`: fixed default spine, one RTX 3090 or A5000, three days; W&B
+  run `ifu116fe`.
+- `139271`: full spine-design randomization, one RTX 3090 or A5000, three
+  days; W&B run `j7k8pfhw`.
 
 The successful smoke was not rerun. Slurm had already purged job `137440` from
 its live dependency table, so the corrected jobs were submitted directly after
