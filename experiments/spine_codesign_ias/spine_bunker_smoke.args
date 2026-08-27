@@ -23,4 +23,4 @@
 --runner.wandb_entity=nico-bohlinger
 --runner.project_name=spine_gym_bunker_ruins_smoke
 --runner.exp_name=spine_codesign_randomized_bunker_smoke
---runner.notes=spine_codesign_abfbf8a_scheduler_smoke
+--runner.notes=spine_codesign_275b949_tangent_axis_scheduler_smoke

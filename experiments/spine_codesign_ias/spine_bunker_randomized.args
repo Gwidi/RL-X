@@ -22,4 +22,4 @@
 --runner.wandb_entity=nico-bohlinger
 --runner.project_name=spine_gym_bunker_ruins
 --runner.exp_name=spine_codesign_randomized_bunker
---runner.notes=spine_codesign_abfbf8a_full_design_randomization
+--runner.notes=spine_codesign_275b949_tangent_axis_full_design_randomization

@@ -17,7 +17,7 @@ if [ "$#" -ne 2 ]; then
 fi
 
 SPINE_ROOT=/home/bohlinger/rlx_spine_codesign_cluster
-SPINE_COMMIT=abfbf8a171d8567b8d4c243308ef834d3e62ebf8
+SPINE_COMMIT=275b9490b7937dbc81882ec1bb1f1a6020a0e256
 RLX_SOURCE="$SPINE_ROOT/software/RL-X-$SPINE_COMMIT"
 PYTHON_BIN="$SPINE_ROOT/env/bin/python"
 RUN_ARGS_FILE="$1"
