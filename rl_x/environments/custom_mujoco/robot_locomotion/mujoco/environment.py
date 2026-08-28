@@ -96,6 +96,10 @@ class LocomotionEnv(gym.Env):
         self.imu_site_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_SITE, "imu")
         self.trunk_body_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
         self.actuator_joint_max_velocities = np.array(robot_config["actuator_joint_max_velocities"])
+        if self.spine_locked:
+            # W Twoim XML siłownik "spine" jest na samej górze listy <actuator>,
+            # więc jego parametry zawsze mają indeks 0. Po prostu go odcinamy.
+            self.actuator_joint_max_velocities = self.actuator_joint_max_velocities[1:]
         self.initial_qpos = np.array(self.initial_mj_model.keyframe("home").qpos)
         self.initial_imu_orientation_rotation_inverse = Rotation.from_matrix(self.c_data.site_xmat[self.imu_site_id].reshape(3, 3)).inv()
         self.initial_imu_height = self.c_data.site_xpos[self.imu_site_id, 2]
@@ -186,6 +190,8 @@ class LocomotionEnv(gym.Env):
         lower_joint_limit, upper_joint_limit = self.initial_mj_model.jnt_range[self.actuator_joint_mask_joints].T
         nominal_joint_positions = self.initial_qpos[self.actuator_joint_mask_qpos]
         action_scale_factor = robot_config["scaling_factor"]
+        if self.spine_locked and isinstance(action_scale_factor, (list, np.ndarray)):
+            action_scale_factor = action_scale_factor[1:]
         # The action space attributes are fixed and do not change with domain randomization, if they are randomized heavily the algorithm using them might need to be adapted
         self.action_space = BoxSpace(low=lower_joint_limit, high=upper_joint_limit, shape=(action_space_size,), dtype=np.float32, center=nominal_joint_positions, scale=action_scale_factor)
 
