@@ -85,6 +85,10 @@ class LocomotionEnv(gym.Env):
 
         self.initial_mj_model = mujoco.MjModel.from_xml_string(xml=xml_handle.to_xml_string(), assets=xml_handle.get_assets())
         self.initial_mj_model.opt.timestep = env_config["timestep"]
+
+        spine_actuator_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, "spine")
+        self.spine_joint_id = self.initial_mj_model.actuator_trnid[spine_actuator_id, 0] if spine_actuator_id != -1 else -1
+        self.spine_joint_range_index = self.spine_joint_id - 1
         
         if not self.spine_locked:
             self.spine_joint_limit = 1.5
