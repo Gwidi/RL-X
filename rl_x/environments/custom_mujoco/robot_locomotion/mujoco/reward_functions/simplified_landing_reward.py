@@ -340,6 +340,20 @@ class SimplifiedLandingReward:
         )
 
         torque_reward = self.joint_torque_coeff * -np.mean(np.square(tau))
+        if getattr(self.env, "spine_locked", False):
+            leg_tau = tau
+            spine_tau = 0.0
+        else:
+            spine_tau = tau[0]
+            leg_tau = tau[1:]
+
+        info = self.env.internal_state["info"]
+        info["metrics/leg_torque_penalty"] = self.joint_torque_coeff * -np.mean(np.square(leg_tau))
+        
+        if getattr(self.env, "spine_locked", False):
+            info["metrics/spine_torque_penalty"] = 0.0
+        else:
+            info["metrics/spine_torque_penalty"] = self.joint_torque_coeff * -np.square(spine_tau)
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
         # =====================================================================
