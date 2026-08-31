@@ -127,7 +127,7 @@ class SimplifiedLandingReward:
 
         if (
             has_touched
-            and time_since_touch >= 0.30
+            and time_since_touch >= 0.50
             and not landing_evaluated
         ):
 
