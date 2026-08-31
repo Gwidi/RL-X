@@ -110,6 +110,12 @@ class SimplifiedLandingReward:
     def reward_and_info(self, action):
         qpos = self.env.internal_state["data"].qpos[self.env.actuator_joint_mask_qpos]
         qvel = self.env.internal_state["data"].qvel[self.env.actuator_joint_mask_qvel]
+
+        if getattr(self.env, "spine_locked", False):
+            leg_qvel = qvel
+        else:
+            leg_qvel = qvel[1:]
+
         tau = self.env.internal_state["data"].qfrc_actuator[self.env.actuator_joint_mask_qvel]
         lin_vel = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
         ang_vel = self.env.internal_state["data"].sensordata[self.env.imu_angular_velocity_sensor_adr:self.env.imu_angular_velocity_sensor_adr + self.env.imu_angular_velocity_sensor_dim]
@@ -247,14 +253,8 @@ class SimplifiedLandingReward:
                 )
             )
 
-            # Mała kara za ekstremalne prędkości stawów.
-            joint_vel_reward = (
-                0.25
-                * self.joint_vel_coeff
-                * -np.mean(np.square(qvel))
-            )
+            joint_vel_reward = 0.25 * self.joint_vel_coeff * -np.mean(np.square(leg_qvel))
 
-            # Nie próbujemy utrzymywać wysokości podczas lotu.
             base_height_reward = 0.0
 
         else:
@@ -282,7 +282,7 @@ class SimplifiedLandingReward:
             # FIRST 0.3 s = ENERGY ABSORPTION
             # ----------------------------------------------------------
 
-            if time_since_touch < 0.3:
+            if time_since_touch < 0.5:
 
                 # Podczas amortyzacji nie karzemy za ruch w dół.
                 if lin_vel[2] > 0.0:
@@ -298,7 +298,7 @@ class SimplifiedLandingReward:
                 joint_vel_reward = 0.0
 
                 squat_penalty_weight = np.clip(
-                    time_since_touch / 0.3,
+                    time_since_touch / 0.5,
                     0.0,
                     1.0,
                 )
@@ -322,10 +322,7 @@ class SimplifiedLandingReward:
                     * -np.square(lin_vel[2])
                 )
 
-                joint_vel_reward = (
-                    self.joint_vel_coeff
-                    * -np.mean(np.square(qvel))
-                )
+                joint_vel_reward = self.joint_vel_coeff * -np.mean(np.square(leg_qvel))
 
                 base_height_reward = (
                     self.base_height_coeff
