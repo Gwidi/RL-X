@@ -4,6 +4,8 @@ import numpy as np
 
 
 TERRAIN_TYPE = "hfield_inverted_pyramid_stairs"
+UNBOUNDED_TERRAIN_TYPE = "hfield_inverted_pyramid_stairs_unbounded"
+TERRAIN_TYPES = frozenset({TERRAIN_TYPE, UNBOUNDED_TERRAIN_TYPE})
 TERRAIN_GEOM_PREFIX = "inverted_pyramid_step_"
 DEFAULT_HALF_WIDTH_M = 4.0
 
@@ -54,13 +56,50 @@ def maximum_number_of_steps(terrain_config):
             0.85,
         )
     )
+    terrain_type = config_value(terrain_config, "type", TERRAIN_TYPE)
+    difficulty_decay = float(
+        config_value(
+            terrain_config,
+            "inverted_pyramid_tread_depth_difficulty_decay",
+            0.1,
+        )
+    )
+    difficulty_min_scale = float(
+        config_value(
+            terrain_config,
+            "inverted_pyramid_tread_depth_difficulty_min_scale",
+            0.6,
+        )
+    )
+
+    if not math.isfinite(difficulty_decay) or difficulty_decay < 0.0:
+        raise ValueError(
+            "terrain.inverted_pyramid_tread_depth_difficulty_decay must be "
+            "finite and non-negative."
+        )
+    if (
+        not math.isfinite(difficulty_min_scale)
+        or not 0.0 < difficulty_min_scale <= 1.0
+    ):
+        raise ValueError(
+            "terrain.inverted_pyramid_tread_depth_difficulty_min_scale must "
+            "be finite and between 0.0 (exclusive) and 1.0."
+        )
 
     # Curriculum interpolation starts at scale 1.0, which can be smaller
     # than a user-provided scale_min greater than one.
+    randomization_min_scale = (
+        min(1.0, min_scale) if randomize_tread_depth else 1.0
+    )
+    curriculum_min_scale = (
+        difficulty_min_scale
+        if terrain_type == UNBOUNDED_TERRAIN_TYPE and difficulty_decay > 0.0
+        else 1.0
+    )
     minimum_tread_depth_m = (
-        tread_depth_m * min(1.0, min_scale)
-        if randomize_tread_depth
-        else tread_depth_m
+        tread_depth_m
+        * randomization_min_scale
+        * curriculum_min_scale
     )
     if half_width_m <= 0.0:
         raise ValueError(

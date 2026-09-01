@@ -191,8 +191,8 @@ def get_config(environment_name):
             "block_length_in_meters": 0.5,
             "block_height_max_per_m_factor": 0.3,
             "block_slope_height_max_per_m_factor": 0.2,
-            # Used by unbounded terrain variants. Difficulty 1.0 matches the
-            # corresponding bounded terrain at env_curriculum_coeff == 1.0.
+            # Used by unbounded terrain variants; each terrain defines how
+            # this independent difficulty changes its geometry.
             "curriculum_initial_difficulty": 2.0,
             "curriculum_eval_difficulty": 1.0,
             "curriculum_step_scale": 1.0,
@@ -208,6 +208,10 @@ def get_config(environment_name):
             "inverted_pyramid_randomize_tread_depth": True,
             "inverted_pyramid_step_height_m": 0.15,
             "inverted_pyramid_use_curriculum": True,
+            # hfield_inverted_pyramid_stairs_unbounded reuses this geometry
+            # and makes steps taller and narrower with increasing difficulty.
+            "inverted_pyramid_tread_depth_difficulty_decay": 0.1,
+            "inverted_pyramid_tread_depth_difficulty_min_scale": 0.6,
             # Used by hfield_bowl. The center is a flat spawn area and the
             # height rises quadratically up to the circular rim.
             "bowl_radius_m": 4.0,

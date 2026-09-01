@@ -6,6 +6,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.h
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_bunker_ruins_unbounded import HFieldBunkerRuinsUnboundedTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_bunker_stairs import HFieldBunkerStairsTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_inverted_pyramid_stairs import HFieldInvertedPyramidStairsTerrainGeneration
+from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_inverted_pyramid_stairs_unbounded import HFieldInvertedPyramidStairsUnboundedTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_bowl import HFieldBowlTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_truncated_pyramid import HFieldTruncatedPyramidTerrainGeneration
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.hfield_inverted_truncated_pyramid import HFieldInvertedTruncatedPyramidTerrainGeneration
@@ -29,6 +30,8 @@ def get_terrain_function(name, env, **kwargs):
         return HFieldBunkerStairsTerrainGeneration(env, **kwargs)
     elif name == "hfield_inverted_pyramid_stairs":
         return HFieldInvertedPyramidStairsTerrainGeneration(env, **kwargs)
+    elif name == "hfield_inverted_pyramid_stairs_unbounded":
+        return HFieldInvertedPyramidStairsUnboundedTerrainGeneration(env, **kwargs)
     elif name == "hfield_bowl":
         return HFieldBowlTerrainGeneration(env, **kwargs)
     elif name == "hfield_truncated_pyramid":
