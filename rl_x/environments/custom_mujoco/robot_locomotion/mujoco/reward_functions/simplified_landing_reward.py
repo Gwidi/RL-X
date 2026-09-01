@@ -152,14 +152,6 @@ class SimplifiedLandingReward:
                 "landing_success"
             ] = landing_success
 
-            # ----------------------------------------------------------
-            # UPDATE CURRICULUM
-            # ----------------------------------------------------------
-            #
-            # Curriculum state jest przechowywany w internal_state,
-            # więc nie musimy mieć bezpośredniego reference do klasy
-            # initial-state curriculum.
-            #
 
             curriculum = self.env.internal_state.get(
                 "landing_curriculum"
@@ -337,13 +329,27 @@ class SimplifiedLandingReward:
         )
 
         if getattr(self.env, "spine_locked", False):
-            leg_tau = tau
+            max_tau = np.full(12, 16.0)
             spine_tau = 0.0
+            leg_tau = tau
         else:
+            max_tau = np.array([48.0] + [16.0] * 12)
             spine_tau = tau[0]
             leg_tau = tau[1:]
 
-        torque_reward = self.joint_torque_coeff * -np.mean(np.square(leg_tau))
+        safe_margin = 0.80
+        safe_limits = max_tau * safe_margin
+        
+        excess_tau = np.maximum(0.0, np.abs(tau) - safe_limits)
+        
+        if getattr(self.env, "spine_locked", False):
+            spine_excess = 0.0
+            leg_excess = excess_tau
+        else:
+            spine_excess = excess_tau[0]
+            leg_excess = excess_tau[1:]
+
+        torque_reward = self.joint_torque_coeff * -np.mean(np.square(leg_excess))
 
         info = self.env.internal_state["info"]
         info["metrics/leg_torque_penalty"] = torque_reward
@@ -351,7 +357,7 @@ class SimplifiedLandingReward:
         if getattr(self.env, "spine_locked", False):
             info["metrics/spine_torque_penalty"] = 0.0
         else:
-            info["metrics/spine_torque_penalty"] = self.joint_torque_coeff * -np.square(spine_tau)
+            info["metrics/spine_torque_penalty"] = self.joint_torque_coeff * -np.square(spine_excess)
             
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
