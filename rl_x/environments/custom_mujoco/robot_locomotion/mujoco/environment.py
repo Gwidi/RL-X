@@ -26,12 +26,12 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.exteroceptive_obser
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.terrain_functions.handler import get_terrain_function
 from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes import (
     TERRAIN_GEOM_PREFIX,
-    TERRAIN_TYPE as INVERTED_PYRAMID_BOX_TERRAIN,
+    TERRAIN_TYPES as INVERTED_PYRAMID_BOX_TERRAINS,
     add_inverted_pyramid_box_geoms,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
     TERRAIN_GEOM_PREFIX as HURDLES_GEOM_PREFIX,
-    TERRAIN_TYPE as HURDLES_BOX_TERRAIN,
+    TERRAIN_TYPES as HURDLES_BOX_TERRAINS,
     add_hurdle_box_geoms,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
@@ -84,13 +84,13 @@ class LocomotionEnv(gym.Env):
                 True,
             )
         )
-        if terrain_type == INVERTED_PYRAMID_BOX_TERRAIN:
+        if terrain_type in INVERTED_PYRAMID_BOX_TERRAINS:
             add_inverted_pyramid_box_geoms(
                 xml_handle,
                 env_config["terrain"],
             )
             terrain_geom_prefix = TERRAIN_GEOM_PREFIX
-        elif terrain_type == HURDLES_BOX_TERRAIN:
+        elif terrain_type in HURDLES_BOX_TERRAINS:
             add_hurdle_box_geoms(
                 xml_handle,
                 env_config["terrain"],

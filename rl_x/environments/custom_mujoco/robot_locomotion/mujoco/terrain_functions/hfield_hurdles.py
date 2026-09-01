@@ -1,5 +1,8 @@
 import numpy as np
 
+from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes import (
+    update_mujoco_static_box_bvh,
+)
 from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
     DEFAULT_HALF_WIDTH_M,
     number_of_walls,
@@ -169,6 +172,7 @@ class HFieldHurdlesTerrainGeneration:
         model.geom_pos[self.terrain_geom_ids] = positions
         model.geom_size[self.terrain_geom_ids] = sizes
         model.geom_rbound[self.terrain_geom_ids] = rbounds
+        update_mujoco_static_box_bvh(model, self.terrain_geom_ids)
         self.env.internal_state["terrain/hurdles_height_m"] = (
             float(curriculum_coeff) * self.wall_height_m
         )

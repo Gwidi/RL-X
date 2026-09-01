@@ -234,12 +234,14 @@ def get_config(environment_name):
             # above and scales its height with curriculum_*_difficulty.
             # Used by hfield_hurdles. Thin square walls surround the spawn
             # area, so the robot encounters them in every travel direction.
-            "hurdles_first_wall_distance_m": 1.0,
+            "hurdles_first_wall_distance_m": 0.6,
             "hurdles_wall_spacing_m": 0.8,
             "hurdles_wall_count": 4,
             "hurdles_wall_thickness_m": 0.025,
             "hurdles_wall_height_m": 0.20,
             "hurdles_use_curriculum": True,
+            # hfield_hurdles_unbounded reuses this geometry and scales wall
+            # height with curriculum_*_difficulty.
         },
         "add_goal_arrow": False,
         "timestep": 0.005,

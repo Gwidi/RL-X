@@ -37,7 +37,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
     TERRAIN_GEOM_PREFIX as HURDLES_GEOM_PREFIX,
-    TERRAIN_TYPE as HURDLES_BOX_TERRAIN,
+    TERRAIN_TYPES as HURDLES_BOX_TERRAINS,
     add_hurdle_box_geoms,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.bunker_ruins_colliders import (
@@ -77,12 +77,12 @@ class LocomotionEnv:
         )
         terrain_supports_calf_colliders = (
             terrain_type in INVERTED_PYRAMID_BOX_TERRAINS
-            or terrain_type == HURDLES_BOX_TERRAIN
+            or terrain_type in HURDLES_BOX_TERRAINS
             or terrain_type in CALF_FLOOR_COLLIDER_TERRAIN_TYPES
         )
         terrain_supports_thigh_colliders = (
             terrain_type in INVERTED_PYRAMID_BOX_TERRAINS
-            or terrain_type == HURDLES_BOX_TERRAIN
+            or terrain_type in HURDLES_BOX_TERRAINS
             or terrain_type in THIGH_FLOOR_COLLIDER_TERRAIN_TYPES
         )
 
@@ -127,7 +127,7 @@ class LocomotionEnv:
             data=[32],
             )
             terrain_geom_prefix = TERRAIN_GEOM_PREFIX
-        elif terrain_type == HURDLES_BOX_TERRAIN:
+        elif terrain_type in HURDLES_BOX_TERRAINS:
             add_hurdle_box_geoms(
                 xml_handle,
                 env_config["terrain"],

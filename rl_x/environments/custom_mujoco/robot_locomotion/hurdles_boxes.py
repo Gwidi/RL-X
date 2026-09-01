@@ -6,6 +6,8 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
 
 
 TERRAIN_TYPE = "hfield_hurdles"
+UNBOUNDED_TERRAIN_TYPE = "hfield_hurdles_unbounded"
+TERRAIN_TYPES = frozenset({TERRAIN_TYPE, UNBOUNDED_TERRAIN_TYPE})
 TERRAIN_GEOM_PREFIX = "hurdle_wall_"
 DEFAULT_HALF_WIDTH_M = 4.0
 
@@ -117,8 +119,20 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
         + (wall_count - 1) * wall_spacing_m
         + wall_thickness_m / 2.0
     )
+    half_width_m = float(
+        config_value(
+            terrain_config,
+            "hurdles_half_width_m",
+            DEFAULT_HALF_WIDTH_M,
+        )
+    )
+    if not math.isfinite(half_width_m) or half_width_m <= 0.0:
+        raise ValueError(
+            "terrain.hurdles_half_width_m must be finite and positive."
+        )
     max_half_height_m = max(0.001, wall_height_m / 2.0)
     broad_phase_center_z_m = max_half_height_m
+    broad_phase_half_width_m = max(outer_edge_m, half_width_m)
 
     collision_geoms = [
         geom
@@ -183,7 +197,8 @@ def add_hurdle_box_geoms(xml_handle, terrain_config):
                 type="box",
                 pos=f"0 0 {broad_phase_center_z_m}",
                 size=(
-                    f"{outer_edge_m} {outer_edge_m} "
+                    f"{broad_phase_half_width_m} "
+                    f"{broad_phase_half_width_m} "
                     f"{max_half_height_m}"
                 ),
                 contype="2",

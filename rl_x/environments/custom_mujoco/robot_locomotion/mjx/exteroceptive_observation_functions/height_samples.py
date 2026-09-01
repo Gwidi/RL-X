@@ -5,7 +5,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.inverted_pyramid_boxes imp
     TERRAIN_TYPES as INVERTED_PYRAMID_BOX_TERRAINS,
 )
 from rl_x.environments.custom_mujoco.robot_locomotion.hurdles_boxes import (
-    TERRAIN_TYPE as HURDLES_BOX_TERRAIN,
+    TERRAIN_TYPES as HURDLES_BOX_TERRAINS,
 )
 
 
@@ -45,7 +45,7 @@ class HeightSamplesExteroceptiveObservation:
             self.env.env_config["terrain"]["type"]
             in INVERTED_PYRAMID_BOX_TERRAINS
             or self.env.env_config["terrain"]["type"]
-            == HURDLES_BOX_TERRAIN
+            in HURDLES_BOX_TERRAINS
         )
 
         if self.floor_is_hfield or self.floor_has_box_terrain:
