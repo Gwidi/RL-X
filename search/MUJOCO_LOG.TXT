@@ -1,0 +1,2 @@
+WARNING Wed Sep  2 16:57:00 2026: EPA: out of memory for faces on expanding polytope
+
