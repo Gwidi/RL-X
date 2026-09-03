@@ -40,8 +40,6 @@ SPINE_KP = 40.0
 SPINE_KD = 3.0
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
-LEG_EFFORT_WEIGHT = 1.0
-SHIN_CONTACT_PENALTY = 1_000_000.0
 
 SIM_DURATION = 2.2
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
@@ -58,7 +56,6 @@ PARAMETER_BOUNDS = np.array([
     (0.2, 8.0),
 ], dtype=float)
 MAX_GP_POINTS = 400
-
 _WORKER_MODEL = None
 _WORKER_DATA = None
 _WORKER_JMAP = None
@@ -76,6 +73,9 @@ def configure_spine(model, lock_spine):
     # A tiny symmetric range gives MuJoCo a bilateral-like joint-limit lock
     # without rebuilding a second XML model.
     model.jnt_range[spine_joint.id] = [-1e-6, 1e-6]
+    # A mechanical lock does not consume actuator current.
+    spine_actuator = model.actuator("sp_j0")
+    model.actuator_ctrlrange[spine_actuator.id] = [0.0, 0.0]
 
 
 class JointMap:
@@ -146,13 +146,15 @@ class ContactMap:
                 foot_normal_force += normal_force
             if pair & self.shin_geom_ids:
                 shin_normal_force += normal_force
-        body_contact = any(
+        non_foot_contact = any(
             self.ground_geom_id in {data.contact[i].geom1, data.contact[i].geom2}
-            and not ({data.contact[i].geom1, data.contact[i].geom2} & self.foot_geom_ids)
-            and not ({data.contact[i].geom1, data.contact[i].geom2} & self.shin_geom_ids)
+            and not bool(
+                {data.contact[i].geom1, data.contact[i].geom2}
+                & self.foot_geom_ids
+            )
             for i in range(data.ncon)
         )
-        return foot_normal_force, shin_normal_force, body_contact
+        return foot_normal_force, shin_normal_force, non_foot_contact
 
 
 def reset_drop(data, model, jmap, start_height):
@@ -237,10 +239,12 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
     peak_shin_force = 0.0
     peak_body_acceleration = 0.0
     total_leg_effort = 0.0
+    total_spine_effort = 0.0
     peak_leg_current_proxy = 0.0
+    peak_spine_current_proxy = 0.0
     foot_contact = False
     shin_contact = False
-    body_contact = False
+    non_foot_contact = False
     crashed = False
 
     for _ in range(steps):
@@ -257,11 +261,14 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
             data.ctrl[jmap.act_id[name]]
             for name in jmap.names if name != "sp_j0"
         ])
+        spine_ctrl = float(data.ctrl[jmap.act_id["sp_j0"]])
         total_leg_effort += float(np.sum(np.square(leg_ctrl))) * model.opt.timestep
+        total_spine_effort += spine_ctrl**2 * model.opt.timestep
         peak_leg_current_proxy = max(peak_leg_current_proxy, float(np.max(np.abs(leg_ctrl))))
+        peak_spine_current_proxy = max(peak_spine_current_proxy, abs(spine_ctrl))
         peak_leg_torque = max(peak_leg_torque, float(np.max(np.abs(joint_torque))))
-        foot_force, shin_force, current_body_contact = contact_map.ground_contact_forces(model, data)
-        body_contact = body_contact or current_body_contact
+        foot_force, shin_force, current_non_foot_contact = contact_map.ground_contact_forces(model, data)
+        non_foot_contact = non_foot_contact or current_non_foot_contact
         peak_foot_force = max(peak_foot_force, foot_force)
         peak_shin_force = max(peak_shin_force, shin_force)
         if foot_force > 0.0:
@@ -274,14 +281,12 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
         if shin_force > 0.0:
             shin_contact = True
 
-    # Emergency-drop objective: do not reward upright posture or low
-    # acceleration; minimize leg effort among physically successful landings.
-    cost = LEG_EFFORT_WEIGHT * total_leg_effort
+    # Minimize total motor-current proxy subject to survival. Including the
+    # spine prevents the unlocked model from shifting load there for free.
+    cost = total_leg_effort + total_spine_effort
     if not foot_contact:
         cost += 1_000_000.0
-    if shin_contact:
-        cost += SHIN_CONTACT_PENALTY
-    if body_contact:
+    if non_foot_contact:
         cost += 1_000_000.0
     if crashed:
         penetration = max(0.0, 0.05 - min_body_height)
@@ -291,7 +296,7 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
         cost,
         crashed,
         foot_contact,
-        body_contact,
+        non_foot_contact,
         min_body_height,
         peak_leg_torque,
         shin_contact,
@@ -299,7 +304,9 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
         peak_shin_force,
         peak_body_acceleration,
         total_leg_effort,
+        total_spine_effort,
         peak_leg_current_proxy,
+        peak_spine_current_proxy,
     )
 
 
@@ -331,7 +338,7 @@ def result_from_params(
         cost,
         crashed,
         foot_contact,
-        body_contact,
+        non_foot_contact,
         min_height,
         peak_leg_torque,
         shin_contact,
@@ -339,7 +346,9 @@ def result_from_params(
         peak_shin_force,
         peak_body_acceleration,
         total_leg_effort,
+        total_spine_effort,
         peak_leg_current_proxy,
+        peak_spine_current_proxy,
     ) = evaluate_drop(
         model, data, jmap, contact_map, params, steps, start_height,
     )
@@ -347,7 +356,7 @@ def result_from_params(
         "cost": cost,
         "crashed": crashed,
         "foot_contact": foot_contact,
-        "body_contact": body_contact,
+        "non_foot_contact": non_foot_contact,
         "min_height": min_height,
         "peak_leg_torque": peak_leg_torque,
         "shin_contact": shin_contact,
@@ -355,7 +364,10 @@ def result_from_params(
         "peak_shin_force": peak_shin_force,
         "peak_body_acceleration": peak_body_acceleration,
         "total_leg_effort": total_leg_effort,
+        "total_spine_effort": total_spine_effort,
+        "total_motor_effort": total_leg_effort + total_spine_effort,
         "peak_leg_current_proxy": peak_leg_current_proxy,
+        "peak_spine_current_proxy": peak_spine_current_proxy,
         "params": params,
     }
 
@@ -402,15 +414,10 @@ def select_gp_training_data(x_values, y_values, rng):
 def propose_candidates(
     x_values, costs, count, candidate_pool, rng, exploration_fraction, xi
 ):
-    from scipy.stats import norm
-    from sklearn.exceptions import ConvergenceWarning
-    from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
-
     lower = PARAMETER_BOUNDS[:, 0]
     span = PARAMETER_BOUNDS[:, 1] - lower
     x_normalized = (np.asarray(x_values) - lower) / span
-    # The log transform makes million-point safety penalties less hostile to a GP.
+    # The log transform separates hard failure penalties from feasible costs.
     y = np.log1p(np.asarray(costs))
     train_x, train_y = select_gp_training_data(x_normalized, y, rng)
     kernel = (
@@ -440,15 +447,17 @@ def propose_candidates(
     random_count = exploration_count - uncertainty_count
     exploitation_count = count - exploration_count
 
-    # Greedy diversity prevents a parallel batch from containing near-duplicates.
     selected = []
+
     def add_ranked(ranking, target_count):
         if target_count <= 0:
             return
         added = 0
         for index in ranking:
             point = pool[index]
-            if not selected or min(np.linalg.norm(point - other) for other in selected) > 0.05:
+            if not selected or min(
+                np.linalg.norm(point - other) for other in selected
+            ) > 0.05:
                 selected.append(point)
                 added += 1
             if added == target_count:
@@ -467,33 +476,35 @@ def run_search(
     trials, workers, seed, initial_trials, candidate_pool, batch_size,
     exploration_fraction, xi, lock_spine, start_height,
 ):
+    """Bayesian optimization of total actuator effort under survival constraints."""
     workers = min(workers, trials)
     rng = np.random.default_rng(seed)
     initial_trials = min(initial_trials, trials)
     x_values = []
     costs = []
     best = None
+    safe_trials = 0
     stagnant_batches = 0
+    batch = [sample_params(rng) for _ in range(initial_trials)]
 
-    init_points = [sample_params(rng) for _ in range(initial_trials)]
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=init_worker,
         initargs=(lock_spine, start_height),
     ) as executor:
         completed = 0
-        batch = init_points
         while completed < trials:
             previous_best_cost = float("inf") if best is None else best["cost"]
-            remaining = trials - completed
-            batch = batch[:remaining]
+            batch = batch[:trials - completed]
             futures = [executor.submit(evaluate_candidate, point) for point in batch]
             # Consume in submission order so process scheduling and --workers
-            # cannot change GP training order or the next candidate batch.
+            # cannot change the result.
             for future in futures:
                 result = future.result()
                 x_values.append(result["params"])
                 costs.append(result["cost"])
+                result_safe = is_safe(result)
+                safe_trials += int(result_safe)
                 if best is None or result["cost"] < best["cost"]:
                     best = result
             completed += len(batch)
@@ -505,21 +516,24 @@ def run_search(
                 0.80, exploration_fraction + 0.10 * stagnant_batches
             )
             print(
-                f"Ukonczono {completed}/{trials} prob | najlepszy koszt: {best['cost']:.2f} "
-                f"| eksploracja: {current_exploration:.0%}",
+                f"Ukonczono {completed}/{trials} prob | "
+                f"najlepszy koszt: {best['cost']:.3f} | "
+                f"bezpieczne: {safe_trials} | eksploracja: {current_exploration:.0%}",
                 flush=True,
             )
             if completed < trials:
-                batch_count = min(batch_size, trials - completed)
                 batch = propose_candidates(
-                    np.asarray(x_values), costs, batch_count, candidate_pool,
+                    np.asarray(x_values), costs,
+                    min(batch_size, trials - completed), candidate_pool,
                     rng, current_exploration, xi,
                 )
+    best["safe_trials"] = safe_trials
+    best["evaluated_trials"] = trials
     return best
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Bayesian optimization of HB40 drop PD gains")
+    parser = argparse.ArgumentParser(description="Bayesian optimization of HB40 emergency-drop PD gains")
     parser.add_argument("--trials", type=int, default=300, help="total evaluation budget")
     parser.add_argument("--seed", type=int, default=None, help="random seed for repeatable results")
     parser.add_argument(
@@ -562,7 +576,7 @@ def parse_args():
     spine_mode.add_argument(
         "--lock-spine",
         action="store_true",
-        help="lock sp_j0 at its nominal position; only leg effort is optimized",
+        help="lock sp_j0 at its nominal position",
     )
     spine_mode.add_argument(
         "--compare-spine",
@@ -615,16 +629,19 @@ def validate_args(args):
 def print_result(best, model):
     print(
         f"TOP WYNIK - Koszt: {best['cost']:.2f} | "
-        f"Wysokosc bazy: {best['min_height']:.3f}m | Crashed: {best['crashed']} | "
-        f"Kontakt lydki: {best['shin_contact']}"
+        f"Wysokosc bazy: {best['min_height']:.3f}m | Safe: {is_safe(best)} | "
+        f"Kontakt inny niz stopa: {best['non_foot_contact']}"
     )
     print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
     print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
     print(f"Szczytowa sila stop: {best['peak_foot_force']:.1f} N")
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
+    print(f"Calka kwadratu komend wszystkich silnikow: {best['total_motor_effort']:.3f}")
     print(f"Calka kwadratu komend silnikow nog: {best['total_leg_effort']:.3f}")
+    print(f"Calka kwadratu komendy kregoslupa: {best['total_spine_effort']:.3f}")
     print(f"Szczytowa komenda silnika nogi: {best['peak_leg_current_proxy']:.3f}")
+    print(f"Szczytowa komenda silnika kregoslupa: {best['peak_spine_current_proxy']:.3f}")
     print(
         f"Szczytowe przyspieszenie korpusu: {best['peak_body_acceleration']:.1f} m/s^2 "
         f"({best['peak_body_acceleration'] / abs(model.opt.gravity[2]):.1f} g)"
@@ -660,28 +677,39 @@ def is_safe(result):
     return (
         result["foot_contact"]
         and not result["crashed"]
-        and not result["shin_contact"]
-        and not result["body_contact"]
+        and not result["non_foot_contact"]
     )
 
 
+def comparison_winner(unlocked, locked):
+    unlocked_safe = is_safe(unlocked)
+    locked_safe = is_safe(locked)
+    if not unlocked_safe and not locked_safe:
+        return "NO SAFE"
+    if unlocked_safe != locked_safe:
+        return "UNLOCKED" if unlocked_safe else "LOCKED"
+    if np.isclose(unlocked["cost"], locked["cost"], rtol=1e-6):
+        return "TIE"
+    return "UNLOCKED" if unlocked["cost"] < locked["cost"] else "LOCKED"
+
+
 def print_comparison(results):
-    print("\nPOROWNANIE KREGOSLUPA (nizszy koszt jest lepszy)")
+    print("\nPOROWNANIE: minimalny prad przy zachowaniu przezycia")
     print(
-        "height | unlocked: cost / safe / leg effort / peak ctrl | "
-        "locked: cost / safe / leg effort / peak ctrl | winner"
+        "height | unlocked: safe / total / legs / spine | "
+        "locked: safe / total / legs / spine | result"
     )
     print("-" * 112)
     for height, modes in results.items():
         unlocked = modes[False]
         locked = modes[True]
-        winner = "LOCKED" if locked["cost"] < unlocked["cost"] else "UNLOCKED"
+        winner = comparison_winner(unlocked, locked)
         print(
             f"{height:6.2f} | "
-            f"{unlocked['cost']:10.1f} / {str(is_safe(unlocked)):5s} / "
-            f"{unlocked['total_leg_effort']:10.2f} / {unlocked['peak_leg_current_proxy']:5.2f} | "
-            f"{locked['cost']:10.1f} / {str(is_safe(locked)):5s} / "
-            f"{locked['total_leg_effort']:10.2f} / {locked['peak_leg_current_proxy']:5.2f} | "
+            f"{str(is_safe(unlocked)):5s} / {unlocked['total_motor_effort']:6.3f} / "
+            f"{unlocked['total_leg_effort']:6.3f} / {unlocked['total_spine_effort']:6.3f} | "
+            f"{str(is_safe(locked)):5s} / {locked['total_motor_effort']:6.3f} / "
+            f"{locked['total_leg_effort']:6.3f} / {locked['total_spine_effort']:6.3f} | "
             f"{winner}"
         )
 
@@ -714,12 +742,22 @@ def main():
                 )
         print_comparison(results)
         viewer_height = heights[-1]
-        viewer_lock = min(
-            (False, True), key=lambda locked: results[viewer_height][locked]["cost"]
-        )
+        highest_modes = results[viewer_height]
+        winner = comparison_winner(highest_modes[False], highest_modes[True])
+        if winner in ("NO SAFE", "TIE"):
+            viewer_lock = min(
+                (False, True),
+                key=lambda locked: (
+                    not is_safe(highest_modes[locked]),
+                    highest_modes[locked]["cost"],
+                ),
+            )
+        else:
+            viewer_lock = winner == "LOCKED"
         best = results[viewer_height][viewer_lock]
         print(
-            f"\nHighest-height winner details ({viewer_height:g} m, "
+            f"\nHighest-height {'best candidate' if winner in ('NO SAFE', 'TIE') else 'winner'} details "
+            f"({viewer_height:g} m, "
             f"{'LOCKED' if viewer_lock else 'UNLOCKED'}):"
         )
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
