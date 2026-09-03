@@ -1,5 +1,5 @@
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 import os
 from pathlib import Path
 import time
@@ -40,26 +40,14 @@ SPINE_KP = 40.0
 SPINE_KD = 3.0
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
-FOOT_IMPACT_WEIGHT = 10.0
 LEG_EFFORT_WEIGHT = 1.0
 SHIN_CONTACT_PENALTY = 1_000_000.0
-SHIN_IMPACT_WEIGHT = 10.0
-POSE_OFFSET_RANGES = {
-    "hip": (-0.2, 0.6),
-    # Front thighs start at |q|=1.0 and are limited to |q|=1.57.
-    "thigh": (-0.20, 0.50),
-    # In this model, decreasing |q| bends the calf and increasing |q|
-    # straightens it. Search farther toward flexion while retaining the old
-    # extension range for comparison.
-    "calf": (-1.20, 0.60),
-}
 
 SIM_DURATION = 2.2
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
 PARAMETER_NAMES = (
     "kp_hip", "kp_thigh", "kp_calf",
     "kd_hip", "kd_thigh", "kd_calf",
-    "offset_hip", "offset_thigh", "offset_calf",
 )
 PARAMETER_BOUNDS = np.array([
     (5.0, 60.0),
@@ -68,9 +56,6 @@ PARAMETER_BOUNDS = np.array([
     (0.2, 5.0),
     (0.2, 8.0),
     (0.2, 8.0),
-    POSE_OFFSET_RANGES["hip"],
-    POSE_OFFSET_RANGES["thigh"],
-    POSE_OFFSET_RANGES["calf"],
 ], dtype=float)
 MAX_GP_POINTS = 400
 
@@ -170,31 +155,15 @@ class ContactMap:
         return foot_normal_force, shin_normal_force, body_contact
 
 
-def reset_drop(data, model, jmap, pose_offsets, start_height):
+def reset_drop(data, model, jmap, start_height):
     """Reset to the exact initial state used by every optimization episode."""
     mujoco.mj_resetData(model, data)
     data.qpos[0:3] = [0.0, 0.0, start_height]
     data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 
     targets = {}
-    joint_group = {
-        name: group for group, names in LEG_JOINTS.items() for name in names
-    }
     for name, nominal in NOMINAL_POSE.items():
-        if name == "sp_j0":
-            target = nominal
-        else:
-            # One symmetric offset per joint group. Positive values increase
-            # the absolute nominal angle; negative values move it toward zero.
-            direction = 1.0 if nominal >= 0.0 else -1.0
-            target = nominal + direction * pose_offsets[joint_group[name]]
-            joint = model.joint(name)
-            if model.jnt_limited[joint.id]:
-                low, high = model.jnt_range[joint.id]
-                if not low <= target <= high:
-                    raise ValueError(
-                        f"Target {target:.3f} for {name} is outside [{low:.3f}, {high:.3f}]"
-                    )
+        target = nominal
         targets[name] = target
         # Spawn without an artificial initial position error/impulse.
         data.qpos[jmap.qpos_adr[name]] = target
@@ -245,10 +214,6 @@ def controlled_step(model, data, jmap, targets, kp, kd):
     mujoco.mj_step2(model, data)
 
 
-def pose_offsets_from_params(params):
-    return dict(zip(("hip", "thigh", "calf"), params[6:9]))
-
-
 def episode_steps(model, start_height):
     """Allow enough time to fall from the requested height and settle."""
     gravity = abs(float(model.opt.gravity[2]))
@@ -258,9 +223,7 @@ def episode_steps(model, start_height):
 
 
 def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
-    targets = reset_drop(
-        data, model, jmap, pose_offsets_from_params(params), start_height
-    )
+    targets = reset_drop(data, model, jmap, start_height)
     kp, kd = build_gains(params)
     leg_dof_idx = np.array([
         jmap.dof_adr[name]
@@ -311,21 +274,13 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
         if shin_force > 0.0:
             shin_contact = True
 
-    gravity = abs(float(model.opt.gravity[2]))
-    robot_weight = float(np.sum(model.body_mass)) * gravity
     # Emergency-drop objective: do not reward upright posture or low
-    # acceleration; only actuator effort and hard safety failures matter.
-    cost = (
-        LEG_EFFORT_WEIGHT * total_leg_effort
-        + FOOT_IMPACT_WEIGHT * (peak_foot_force / robot_weight) ** 2
-    )
+    # acceleration; minimize leg effort among physically successful landings.
+    cost = LEG_EFFORT_WEIGHT * total_leg_effort
     if not foot_contact:
         cost += 1_000_000.0
     if shin_contact:
-        cost += (
-            SHIN_CONTACT_PENALTY
-            + SHIN_IMPACT_WEIGHT * (peak_shin_force / robot_weight) ** 2
-        )
+        cost += SHIN_CONTACT_PENALTY
     if body_contact:
         cost += 1_000_000.0
     if crashed:
@@ -352,9 +307,7 @@ def show_best(model, data, jmap, params, steps, start_height):
     kp, kd = build_gains(params)
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
-            targets = reset_drop(
-                data, model, jmap, pose_offsets_from_params(params), start_height
-            )
+            targets = reset_drop(data, model, jmap, start_height)
             for _ in range(steps):
                 if not viewer.is_running():
                     return
@@ -516,7 +469,7 @@ def run_search(
 ):
     workers = min(workers, trials)
     rng = np.random.default_rng(seed)
-    initial_trials = min(max(initial_trials, workers), trials)
+    initial_trials = min(initial_trials, trials)
     x_values = []
     costs = []
     best = None
@@ -535,7 +488,9 @@ def run_search(
             remaining = trials - completed
             batch = batch[:remaining]
             futures = [executor.submit(evaluate_candidate, point) for point in batch]
-            for future in as_completed(futures):
+            # Consume in submission order so process scheduling and --workers
+            # cannot change GP training order or the next candidate batch.
+            for future in futures:
                 result = future.result()
                 x_values.append(result["params"])
                 costs.append(result["cost"])
@@ -564,7 +519,7 @@ def run_search(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Bayesian optimization of HB40 drop posture and PD gains")
+    parser = argparse.ArgumentParser(description="Bayesian optimization of HB40 drop PD gains")
     parser.add_argument("--trials", type=int, default=300, help="total evaluation budget")
     parser.add_argument("--seed", type=int, default=None, help="random seed for repeatable results")
     parser.add_argument(
@@ -588,8 +543,8 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=0,
-        help="candidates proposed per GP fit (default: 4 times --workers)",
+        default=128,
+        help="candidates proposed per GP fit (default: 128; independent of --workers)",
     )
     parser.add_argument(
         "--exploration",
@@ -607,7 +562,7 @@ def parse_args():
     spine_mode.add_argument(
         "--lock-spine",
         action="store_true",
-        help="lock sp_j0 at its nominal position; its torque is not penalized",
+        help="lock sp_j0 at its nominal position; only leg effort is optimized",
     )
     spine_mode.add_argument(
         "--compare-spine",
@@ -639,7 +594,7 @@ def validate_args(args):
         raise ValueError("--workers must be at least 1")
     if args.initial_trials < 1:
         raise ValueError("--initial-trials must be at least 1")
-    batch_size = args.batch_size or 4 * args.workers
+    batch_size = args.batch_size
     if batch_size < 1:
         raise ValueError("--batch-size must be at least 1")
     if args.candidate_pool < batch_size:
@@ -665,10 +620,6 @@ def print_result(best, model):
     )
     print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
     print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
-    print(
-        "Odchylenia |q| od pozycji nominalnej [rad] (Hip, Thigh, Calf): "
-        f"{best['params'][6]:+.3f}, {best['params'][7]:+.3f}, {best['params'][8]:+.3f}"
-    )
     print(f"Szczytowa sila stop: {best['peak_foot_force']:.1f} N")
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
