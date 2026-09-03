@@ -53,26 +53,31 @@ class EnergyDissipationCurriculumInitialState:
     # ------------------------------------------------------------------
 
     def _get_curriculum_state(self):
-
         state = self.env.internal_state
 
         if "landing_curriculum" not in state:
             state["landing_curriculum"] = {
                 "difficulty": 0.0,
+
                 "success_ema": 0.0,
                 "nr_evaluated_landings": 0,
                 "last_success": 0.0,
                 "last_update": "none",
 
-                # NEW
+                # Curriculum parameters
                 "ema_alpha": self.ema_alpha,
+                "success_threshold_up":
+                    self.success_threshold_up,
+                "success_threshold_down":
+                    self.success_threshold_down,
+                "difficulty_step_up":
+                    self.difficulty_step_up,
+                "difficulty_step_down":
+                    self.difficulty_step_down,
             }
 
         return state["landing_curriculum"]
 
-    # ------------------------------------------------------------------
-    # CURRICULUM UPDATE
-    # ------------------------------------------------------------------
 
     def update_landing_result(self, success):
 

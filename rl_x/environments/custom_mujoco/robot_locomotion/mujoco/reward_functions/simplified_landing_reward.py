@@ -49,6 +49,16 @@ class SimplifiedLandingReward:
         self.env.internal_state["has_touched_ground"] = False
         self.env.internal_state["time_since_touchdown"] = 0.0
 
+        self.env.internal_state["base_crash_detected"] = False
+
+        self.env.internal_state["actuator_overload_detected"] = False
+
+        self.env.internal_state["peak_leg_torque"] = 0.0
+        self.env.internal_state["peak_spine_torque"] = 0.0
+
+        self.env.internal_state["leg_tau_squared_integral"] = 0.0
+        self.env.internal_state["spine_tau_squared_integral"] = 0.0
+
     def step(self):
         feet_floor_contacts = self.env.terrain_function.check_feet_floor_contact()
         
@@ -63,49 +73,34 @@ class SimplifiedLandingReward:
         if self.env.internal_state.get("has_touched_ground", False):
             self.env.internal_state["time_since_touchdown"] += self.env.dt
 
-    def _evaluate_landing(
-        self,
-        height,
-        euler,
-        lin_vel,
-        ang_vel,
-    ):
+    def _evaluate_landing(self):
         """
-        Ocena jakości lądowania ~0.3 s po touchdown.
+        Emergency landing success.
 
-        Zwraca True tylko wtedy, gdy robot:
-        - nie leży na brzuchu,
-        - jest względnie pionowy,
-        - ma małą prędkość liniową,
-        - ma małą prędkość kątową.
+        Sukces oznacza, że robot przeżył uderzenie bez:
+        - krytycznego uderzenia bazą o podłoże,
+        - przekroczenia limitów momentu aktuatorów.
+
+        Orientacja, pitch, roll i końcowa prędkość NIE decydują
+        o sukcesie. Są tylko metrykami diagnostycznymi.
         """
 
-        max_roll_pitch = np.deg2rad(15.0)
-
-        max_linear_velocity = 1.5
-        max_angular_velocity = 3.0
-
-        height_ok = height > 0.18
-
-        orientation_ok = (
-            abs(euler[0]) < max_roll_pitch
-            and abs(euler[1]) < max_roll_pitch
+        base_crash = self.env.internal_state.get(
+            "base_crash_detected",
+            False,
         )
 
-        linear_velocity_ok = (
-            np.linalg.norm(lin_vel) < max_linear_velocity
+        actuator_overload = self.env.internal_state.get(
+            "actuator_overload_detected",
+            False,
         )
 
-        angular_velocity_ok = (
-            np.linalg.norm(ang_vel) < max_angular_velocity
+        success = (
+            not base_crash
+            and not actuator_overload
         )
 
-        return bool(
-            height_ok
-            and orientation_ok
-            and linear_velocity_ok
-            and angular_velocity_ok
-        )
+        return bool(success)
 
     def reward_and_info(self, action):
         qpos = self.env.internal_state["data"].qpos[self.env.actuator_joint_mask_qpos]
@@ -126,23 +121,118 @@ class SimplifiedLandingReward:
         height = self.env.internal_state["robot_imu_height_over_ground"]
         target_height = self.nominal_landing_height
 
+        # ==============================================================
+        # EMERGENCY LANDING SAFETY MONITORING
+        # ==============================================================
+
+        if getattr(self.env, "spine_locked", False):
+            max_tau = np.full_like(tau, 16.0)
+
+            leg_tau = tau
+            spine_tau = np.array([], dtype=float)
+
+        else:
+            max_tau = np.array(
+                [48.0] + [16.0] * (len(tau) - 1),
+                dtype=float,
+            )
+
+            spine_tau = tau[:1]
+            leg_tau = tau[1:]
+
+
+        # --------------------------------------------------------------
+        # Peak torque
+        # --------------------------------------------------------------
+
+        if leg_tau.size > 0:
+            current_peak_leg_tau = float(
+                np.max(np.abs(leg_tau))
+            )
+
+            self.env.internal_state["peak_leg_torque"] = max(
+                self.env.internal_state.get(
+                    "peak_leg_torque",
+                    0.0,
+                ),
+                current_peak_leg_tau,
+            )
+
+
+        if spine_tau.size > 0:
+            current_peak_spine_tau = float(
+                np.max(np.abs(spine_tau))
+            )
+
+            self.env.internal_state["peak_spine_torque"] = max(
+                self.env.internal_state.get(
+                    "peak_spine_torque",
+                    0.0,
+                ),
+                current_peak_spine_tau,
+            )
+
+
+        # --------------------------------------------------------------
+        # Integral tau^2
+        #
+        # Przybliżona metryka obciążenia cieplnego silników:
+        #
+        #   integral(tau^2 dt)
+        #
+        # --------------------------------------------------------------
+
+        if leg_tau.size > 0:
+            self.env.internal_state[
+                "leg_tau_squared_integral"
+            ] += (
+                float(np.sum(np.square(leg_tau)))
+                * self.env.dt
+            )
+
+
+        if spine_tau.size > 0:
+            self.env.internal_state[
+                "spine_tau_squared_integral"
+            ] += (
+                float(np.sum(np.square(spine_tau)))
+                * self.env.dt
+            )
+
+
+        # --------------------------------------------------------------
+        # Hard actuator overload
+        #
+        # Curriculum interesuje awaria / przekroczenie limitu,
+        # a nie normalne wykorzystanie silnika.
+        # --------------------------------------------------------------
+
+        if np.any(np.abs(tau) > max_tau):
+            self.env.internal_state[
+                "actuator_overload_detected"
+            ] = True
+
+        if height < 0.15:
+            base_crash_reward = -30.0 * self.env.dt
+
+            if has_touched:
+                self.env.internal_state[
+                    "base_crash_detected"
+                ] = True
+        else:
+            base_crash_reward = 0.0
+
         landing_evaluated = self.env.internal_state.get(
-            "landing_evaluated",
-            False,
-        )
+                "landing_evaluated",
+                False,
+            )
 
         if (
             has_touched
-            and time_since_touch >= 0.50
+            and time_since_touch >= 1.0
             and not landing_evaluated
         ):
-
-            landing_success = self._evaluate_landing(
-                height=height,
-                euler=euler,
-                lin_vel=lin_vel,
-                ang_vel=ang_vel,
-            )
+            landing_success = self._evaluate_landing()
 
             self.env.internal_state[
                 "landing_evaluated"
@@ -152,19 +242,18 @@ class SimplifiedLandingReward:
                 "landing_success"
             ] = landing_success
 
+            # ==========================================================
+            # UPDATE CURRICULUM ONLY ONCE, WHEN LANDING IS EVALUATED
+            # ==========================================================
 
             curriculum = self.env.internal_state.get(
                 "landing_curriculum"
             )
 
             if curriculum is not None:
-
                 success = float(landing_success)
 
-                alpha = curriculum.get(
-                    "ema_alpha",
-                    0.05,
-                )
+                alpha = curriculum["ema_alpha"]
 
                 curriculum["success_ema"] = (
                     (1.0 - alpha)
@@ -173,39 +262,30 @@ class SimplifiedLandingReward:
                 )
 
                 curriculum["last_success"] = success
-
                 curriculum["nr_evaluated_landings"] += 1
 
                 ema = curriculum["success_ema"]
 
-                if ema > 0.85:
-
+                if ema > curriculum["success_threshold_up"]:
                     curriculum["difficulty"] = min(
                         1.0,
                         curriculum["difficulty"]
-                        + 0.01,
+                        + curriculum["difficulty_step_up"],
                     )
 
                     curriculum["last_update"] = "increase"
 
-                elif ema < 0.55:
-
+                elif ema < curriculum["success_threshold_down"]:
                     curriculum["difficulty"] = max(
                         0.0,
                         curriculum["difficulty"]
-                        - 0.005,
+                        - curriculum["difficulty_step_down"],
                     )
 
                     curriculum["last_update"] = "decrease"
 
                 else:
-
                     curriculum["last_update"] = "hold"
-
-        if height < 0.15:
-            base_crash_reward = -20.0 * self.env.dt
-        else:
-            base_crash_reward = 0.0
 
         angular_position_reward = self.roll_pitch_pos_coeff * -np.sum(np.square(euler[:2]))
         
@@ -361,13 +441,9 @@ class SimplifiedLandingReward:
             
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
-        # =====================================================================
-        # ZMIANA 3: ROZDZIELONE KOLIZJE
-        # =====================================================================
         all_geom_xpos = self.env.internal_state["data"].geom_xpos[self.env.reward_collision_sphere_geom_ids]
         all_geom_sizes = self.env.internal_state["mj_model"].geom_size[self.env.reward_collision_sphere_geom_ids, 0]
         
-        # A) Zderzenia ciała ze sobą -> Ogromna kara (np. 20.0 z basha)
         distance_between_geoms = np.linalg.norm(all_geom_xpos[:, None] - all_geom_xpos[None], axis=-1)
         contact_between_geoms = distance_between_geoms <= (all_geom_sizes[:, None] + all_geom_sizes[None])
         nr_self_collisions = (np.sum(contact_between_geoms) - len(self.env.reward_collision_sphere_geom_ids)) // 2
@@ -412,13 +488,54 @@ class SimplifiedLandingReward:
         info["reward/action_rate"] = action_rate_reward
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
+        info["metrics/peak_leg_torque"] = (
+            self.env.internal_state.get(
+                "peak_leg_torque",
+                0.0,
+            )
+        )
+
+        info["metrics/peak_spine_torque"] = (
+            self.env.internal_state.get(
+                "peak_spine_torque",
+                0.0,
+            )
+        )
+
+        info["metrics/leg_tau_squared_integral"] = (
+            self.env.internal_state.get(
+                "leg_tau_squared_integral",
+                0.0,
+            )
+        )
+
+        info["metrics/spine_tau_squared_integral"] = (
+            self.env.internal_state.get(
+                "spine_tau_squared_integral",
+                0.0,
+            )
+        )
+
+        info["metrics/base_crash_detected"] = float(
+            self.env.internal_state.get(
+                "base_crash_detected",
+                False,
+            )
+        )
+
+        info["metrics/actuator_overload_detected"] = float(
+            self.env.internal_state.get(
+                "actuator_overload_detected",
+                False,
+            )
+        )
+        
         info["curriculum/landing_success"] = float(
             self.env.internal_state.get(
                 "landing_success",
                 False,
             )
         )
-
         curriculum = self.env.internal_state.get(
             "landing_curriculum"
         )

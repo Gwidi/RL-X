@@ -51,16 +51,21 @@ def get_config(environment_name):
                 #     "max_pitch_angle_deg": 15,
                 #     "max_lateral_velocity": 2.0,
                 # },
-                "energy_dissipation_curriculum": {
+            "energy_dissipation_curriculum": {
                 "start_height": 0.5,
-                "target_height": 2.0,
+                "target_height": 5.0,
+
                 "min_angle_deg": 0.0,
                 "max_angle_deg": 3.0,
+
                 "min_lateral_velocity": 0.0,
                 "max_lateral_velocity": 3.0,
+
                 "ema_alpha": 0.05,
+
                 "success_threshold_up": 0.85,
                 "success_threshold_down": 0.60,
+
                 "difficulty_step_up": 0.005,
                 "difficulty_step_down": 0.01,
                 },
