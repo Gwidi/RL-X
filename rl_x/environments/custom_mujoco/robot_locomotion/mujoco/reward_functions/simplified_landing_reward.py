@@ -10,6 +10,13 @@ class SimplifiedLandingReward:
         self.roll_pitch_pos_coeff = env.env_config["reward"].get("roll_pitch_pos_coeff", 3.0) * dt
         self.base_vel_coeff = env.env_config["reward"].get("base_vel_coeff", 2.0) * dt 
         self.joint_torque_coeff = env.env_config["reward"].get("joint_torque_coeff", 0.05) * dt
+        # One-off penalty for crossing a hard actuator limit.  This is not
+        # multiplied by dt: curriculum treats even a single crossing as a
+        # failed landing, so the policy should receive a similarly explicit
+        # event-level signal.
+        self.actuator_overload_coeff = env.env_config["reward"].get(
+            "actuator_overload_coeff", 25.0
+        )
         self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
         
@@ -207,10 +214,25 @@ class SimplifiedLandingReward:
         # a nie normalne wykorzystanie silnika.
         # --------------------------------------------------------------
 
-        if np.any(np.abs(tau) > max_tau):
+        actuator_overload_now = bool(np.any(np.abs(tau) > max_tau))
+        actuator_overload_event = (
+            actuator_overload_now
+            and not self.env.internal_state.get(
+                "actuator_overload_detected",
+                False,
+            )
+        )
+
+        if actuator_overload_now:
             self.env.internal_state[
                 "actuator_overload_detected"
             ] = True
+
+        actuator_overload_reward = (
+            -self.actuator_overload_coeff
+            if actuator_overload_event
+            else 0.0
+        )
 
         if height < 0.15:
             base_crash_reward = -30.0 * self.env.dt
@@ -470,6 +492,7 @@ class SimplifiedLandingReward:
             + joint_pos_reward
             + joint_vel_reward
             + torque_reward
+            + actuator_overload_reward
             + action_rate_reward
             + collision_reward
         )
@@ -485,6 +508,7 @@ class SimplifiedLandingReward:
         info["reward/joint_pos"] = joint_pos_reward
         info["reward/joint_vel"] = joint_vel_reward
         info["reward/joint_torque"] = torque_reward
+        info["reward/actuator_overload"] = actuator_overload_reward
         info["reward/action_rate"] = action_rate_reward
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
@@ -528,6 +552,9 @@ class SimplifiedLandingReward:
                 "actuator_overload_detected",
                 False,
             )
+        )
+        info["metrics/actuator_overload_event"] = float(
+            actuator_overload_event
         )
         
         info["curriculum/landing_success"] = float(

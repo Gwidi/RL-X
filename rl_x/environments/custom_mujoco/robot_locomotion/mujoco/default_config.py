@@ -201,6 +201,7 @@ def get_config(environment_name):
             "joint_pos_coeff": 10.0,
             "joint_vel_coeff": 0.5,       # Zamiast śledzenia prądu i falownika
             "joint_torque_coeff": 0.05,
+            "actuator_overload_coeff": 25.0,
             "action_rate_coeff": 1.0,
             "collision_coeff": 5.0,
         },
