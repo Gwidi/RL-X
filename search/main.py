@@ -54,7 +54,6 @@ POSE_OFFSET_RANGES = {
     "calf": (-1.20, 0.60),
 }
 
-SAFE_TORQUE_LIMIT = 16.0 * 0.80
 SIM_DURATION = 2.2
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
 PARAMETER_NAMES = (
@@ -258,9 +257,7 @@ def episode_steps(model, start_height):
     return int(np.ceil(duration / model.opt.timestep))
 
 
-def evaluate_drop(
-    model, data, jmap, contact_map, params, safe_torque_limit, steps, start_height
-):
+def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
     targets = reset_drop(
         data, model, jmap, pose_offsets_from_params(params), start_height
     )
@@ -272,7 +269,6 @@ def evaluate_drop(
     ])
 
     min_body_height = float("inf")
-    total_torque_penalty = 0.0
     peak_leg_torque = 0.0
     peak_foot_force = 0.0
     peak_shin_force = 0.0
@@ -301,9 +297,6 @@ def evaluate_drop(
         total_leg_effort += float(np.sum(np.square(leg_ctrl))) * model.opt.timestep
         peak_leg_current_proxy = max(peak_leg_current_proxy, float(np.max(np.abs(leg_ctrl))))
         peak_leg_torque = max(peak_leg_torque, float(np.max(np.abs(joint_torque))))
-        excess = np.maximum(0.0, np.abs(joint_torque) - safe_torque_limit)
-        total_torque_penalty += np.sum(np.square(excess)) * model.opt.timestep
-
         foot_force, shin_force, current_body_contact = contact_map.ground_contact_forces(model, data)
         body_contact = body_contact or current_body_contact
         peak_foot_force = max(peak_foot_force, foot_force)
@@ -323,7 +316,7 @@ def evaluate_drop(
     # Emergency-drop objective: do not reward upright posture or low
     # acceleration; only actuator effort and hard safety failures matter.
     cost = (
-        total_torque_penalty + LEG_EFFORT_WEIGHT * total_leg_effort
+        LEG_EFFORT_WEIGHT * total_leg_effort
         + FOOT_IMPACT_WEIGHT * (peak_foot_force / robot_weight) ** 2
     )
     if not foot_contact:
@@ -345,7 +338,6 @@ def evaluate_drop(
         foot_contact,
         body_contact,
         min_body_height,
-        total_torque_penalty,
         peak_leg_torque,
         shin_contact,
         peak_foot_force,
@@ -388,7 +380,6 @@ def result_from_params(
         foot_contact,
         body_contact,
         min_height,
-        torque_penalty,
         peak_leg_torque,
         shin_contact,
         peak_foot_force,
@@ -397,8 +388,7 @@ def result_from_params(
         total_leg_effort,
         peak_leg_current_proxy,
     ) = evaluate_drop(
-        model, data, jmap, contact_map, params, SAFE_TORQUE_LIMIT, steps,
-        start_height,
+        model, data, jmap, contact_map, params, steps, start_height,
     )
     return {
         "cost": cost,
@@ -406,7 +396,6 @@ def result_from_params(
         "foot_contact": foot_contact,
         "body_contact": body_contact,
         "min_height": min_height,
-        "torque_penalty": torque_penalty,
         "peak_leg_torque": peak_leg_torque,
         "shin_contact": shin_contact,
         "peak_foot_force": peak_foot_force,
@@ -683,7 +672,8 @@ def print_result(best, model):
     print(f"Szczytowa sila stop: {best['peak_foot_force']:.1f} N")
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
-    print(f"Kara za przekroczenie momentu nog: {best['torque_penalty']:.2f}")
+    print(f"Calka kwadratu komend silnikow nog: {best['total_leg_effort']:.3f}")
+    print(f"Szczytowa komenda silnika nogi: {best['peak_leg_current_proxy']:.3f}")
     print(
         f"Szczytowe przyspieszenie korpusu: {best['peak_body_acceleration']:.1f} m/s^2 "
         f"({best['peak_body_acceleration'] / abs(model.opt.gravity[2]):.1f} g)"
@@ -727,8 +717,8 @@ def is_safe(result):
 def print_comparison(results):
     print("\nPOROWNANIE KREGOSLUPA (nizszy koszt jest lepszy)")
     print(
-        "height | unlocked: cost / safe / foot N / accel | "
-        "locked: cost / safe / foot N / accel | winner"
+        "height | unlocked: cost / safe / leg effort / peak ctrl | "
+        "locked: cost / safe / leg effort / peak ctrl | winner"
     )
     print("-" * 112)
     for height, modes in results.items():
@@ -738,9 +728,9 @@ def print_comparison(results):
         print(
             f"{height:6.2f} | "
             f"{unlocked['cost']:10.1f} / {str(is_safe(unlocked)):5s} / "
-            f"{unlocked['peak_foot_force']:7.1f} / {unlocked['peak_body_acceleration']:7.1f} | "
+            f"{unlocked['total_leg_effort']:10.2f} / {unlocked['peak_leg_current_proxy']:5.2f} | "
             f"{locked['cost']:10.1f} / {str(is_safe(locked)):5s} / "
-            f"{locked['peak_foot_force']:7.1f} / {locked['peak_body_acceleration']:7.1f} | "
+            f"{locked['total_leg_effort']:10.2f} / {locked['peak_leg_current_proxy']:5.2f} | "
             f"{winner}"
         )
 
