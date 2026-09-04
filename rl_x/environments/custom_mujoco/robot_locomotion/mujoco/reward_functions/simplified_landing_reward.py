@@ -52,6 +52,9 @@ class SimplifiedLandingReward:
         self.env.internal_state["previous_actuator_joint_velocities"] = np.zeros(self.env.nr_actuator_joints)
         self.env.internal_state["landing_evaluated"] = False
         self.env.internal_state["landing_success"] = False
+
+        self.env.internal_state["leg_saturation_time"] = 0.0
+        self.env.internal_state["spine_saturation_time"] = 0.0
         
         self.env.internal_state["has_touched_ground"] = False
         self.env.internal_state["time_since_touchdown"] = 0.0
@@ -119,6 +122,7 @@ class SimplifiedLandingReward:
             leg_qvel = qvel[1:]
 
         tau = self.env.internal_state["data"].qfrc_actuator[self.env.actuator_joint_mask_qvel]
+        actuator_force = np.asarray(self.env.internal_state["data"].actuator_force)
         lin_vel = self.env.internal_state["data"].sensordata[self.env.imu_linear_velocity_sensor_adr:self.env.imu_linear_velocity_sensor_adr + self.env.imu_linear_velocity_sensor_dim]
         ang_vel = self.env.internal_state["data"].sensordata[self.env.imu_angular_velocity_sensor_adr:self.env.imu_angular_velocity_sensor_adr + self.env.imu_angular_velocity_sensor_dim]
         euler = self.env.internal_state["imu_orientation_euler"]
@@ -133,19 +137,18 @@ class SimplifiedLandingReward:
         # ==============================================================
 
         if getattr(self.env, "spine_locked", False):
-            max_tau = np.full_like(tau, 16.0)
-
             leg_tau = tau
             spine_tau = np.array([], dtype=float)
 
-        else:
-            max_tau = np.array(
-                [48.0] + [16.0] * (len(tau) - 1),
-                dtype=float,
-            )
+            leg_actuator_force = actuator_force
+            spine_actuator_force = np.array([], dtype=float)
 
+        else:
             spine_tau = tau[:1]
             leg_tau = tau[1:]
+
+            leg_actuator_force = actuator_force[:-1]
+            spine_actuator_force = actuator_force[-1:]
 
 
         # --------------------------------------------------------------
@@ -214,7 +217,34 @@ class SimplifiedLandingReward:
         # a nie normalne wykorzystanie silnika.
         # --------------------------------------------------------------
 
-        actuator_overload_now = bool(np.any(np.abs(tau) > max_tau))
+        leg_force_ratio = (
+            np.max(np.abs(leg_actuator_force)) / 16.0
+            if leg_actuator_force.size > 0
+            else 0.0
+        )
+
+        spine_force_ratio = (
+            np.max(np.abs(spine_actuator_force)) / 48.0
+            if spine_actuator_force.size > 0
+            else 0.0
+        )
+
+        if leg_force_ratio >= 0.99:
+            self.env.internal_state["leg_saturation_time"] += self.env.dt
+        else:
+            self.env.internal_state["leg_saturation_time"] = 0.0
+
+        if spine_force_ratio >= 0.99:
+            self.env.internal_state["spine_saturation_time"] += self.env.dt
+        else:
+            self.env.internal_state["spine_saturation_time"] = 0.0
+
+
+        actuator_overload_now = bool(
+            self.env.internal_state["leg_saturation_time"] >= 0.10
+            or
+            self.env.internal_state["spine_saturation_time"] >= 0.10
+        )
         actuator_overload_event = (
             actuator_overload_now
             and not self.env.internal_state.get(
@@ -430,36 +460,49 @@ class SimplifiedLandingReward:
             + base_vel_z_reward
         )
 
-        if getattr(self.env, "spine_locked", False):
-            max_tau = np.full(12, 16.0)
-            spine_tau = 0.0
-            leg_tau = tau
-        else:
-            max_tau = np.array([48.0] + [16.0] * 12)
-            spine_tau = tau[0]
-            leg_tau = tau[1:]
-
         safe_margin = 0.80
-        safe_limits = max_tau * safe_margin
-        
-        excess_tau = np.maximum(0.0, np.abs(tau) - safe_limits)
-        
-        if getattr(self.env, "spine_locked", False):
-            spine_excess = 0.0
-            leg_excess = excess_tau
-        else:
-            spine_excess = excess_tau[0]
-            leg_excess = excess_tau[1:]
 
-        torque_reward = self.joint_torque_coeff * -np.mean(np.square(leg_excess))
+        # --------------------------------------------------------------
+        # LEGS
+        # --------------------------------------------------------------
+
+        leg_safe_limit = 16.0 * safe_margin
+
+        leg_excess = np.maximum(
+            0.0,
+            np.abs(leg_actuator_force) - leg_safe_limit,
+        )
+
+        torque_reward = (
+            self.joint_torque_coeff
+            * -np.mean(np.square(leg_excess))
+        )
 
         info = self.env.internal_state["info"]
+
         info["metrics/leg_torque_penalty"] = torque_reward
-        
-        if getattr(self.env, "spine_locked", False):
-            info["metrics/spine_torque_penalty"] = 0.0
+
+
+        # --------------------------------------------------------------
+        # SPINE
+        # --------------------------------------------------------------
+
+        if spine_actuator_force.size > 0:
+
+            spine_safe_limit = 48.0 * safe_margin
+
+            spine_excess = np.maximum(
+                0.0,
+                np.abs(spine_actuator_force[0]) - spine_safe_limit,
+            )
+
+            info["metrics/spine_torque_penalty"] = (
+                self.joint_torque_coeff
+                * -np.square(spine_excess)
+            )
+
         else:
-            info["metrics/spine_torque_penalty"] = self.joint_torque_coeff * -np.square(spine_excess)
+            info["metrics/spine_torque_penalty"] = 0.0
             
         action_rate_reward = self.action_rate_coeff * -np.mean(np.square(action - self.env.internal_state["last_action"]))
 
