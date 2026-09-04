@@ -1,4 +1,5 @@
 import argparse
+import csv
 from concurrent.futures import ProcessPoolExecutor
 import os
 from pathlib import Path
@@ -43,6 +44,7 @@ STATIC_FRICTION = 0.37
 
 SIM_DURATION = 2.2
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
+OUTPUT_DIR = Path(__file__).resolve().with_name("output")
 PARAMETER_NAMES = (
     "kp_hip", "kp_thigh", "kp_calf",
     "kd_hip", "kd_thigh", "kd_calf",
@@ -484,6 +486,7 @@ def run_search(
     costs = []
     best = None
     safe_trials = 0
+    progress = []
     stagnant_batches = 0
     batch = [sample_params(rng) for _ in range(initial_trials)]
 
@@ -521,6 +524,11 @@ def run_search(
                 f"bezpieczne: {safe_trials} | eksploracja: {current_exploration:.0%}",
                 flush=True,
             )
+            progress.append({
+                "completed": completed,
+                "best_cost": best["cost"],
+                "safe_trials": safe_trials,
+            })
             if completed < trials:
                 batch = propose_candidates(
                     np.asarray(x_values), costs,
@@ -529,6 +537,7 @@ def run_search(
                 )
     best["safe_trials"] = safe_trials
     best["evaluated_trials"] = trials
+    best["progress"] = progress
     return best
 
 
@@ -598,6 +607,12 @@ def parse_args():
         help="drop heights for --compare-spine (default: 1 2 3 4 5)",
     )
     parser.add_argument("--no-viewer", action="store_true", help="finish without opening the 3D viewer")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUTPUT_DIR,
+        help=f"directory for plots and CSV summaries (default: {OUTPUT_DIR})",
+    )
     return parser.parse_args()
 
 
@@ -721,6 +736,131 @@ def print_comparison(results):
         print(f"Highest safe tested height ({label}): {maximum}")
 
 
+def save_plots(results, output_dir):
+    """Save comparison plots and a machine-readable summary without showing a GUI."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    heights = sorted(results)
+    modes = {False: "UNLOCKED", True: "LOCKED"}
+    colors = {False: "#1976d2", True: "#d32f2f"}
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
+    metrics = [
+        ("total_motor_effort", "Całkowity wysiłek silników", "Całka u²"),
+        ("total_leg_effort", "Wysiłek nóg", "Całka u²"),
+        ("total_spine_effort", "Wysiłek kręgosłupa", "Całka u²"),
+    ]
+    for axis, (key, title, ylabel) in zip(axes.flat, metrics):
+        for lock_spine, label in modes.items():
+            values = [results[h][lock_spine][key] for h in heights]
+            safe = [is_safe(results[h][lock_spine]) for h in heights]
+            axis.plot(heights, values, color=colors[lock_spine], label=label)
+            axis.scatter(
+                heights, values, c=[colors[lock_spine] if ok else "white" for ok in safe],
+                edgecolors=colors[lock_spine], s=55, zorder=3,
+            )
+        axis.set_title(title)
+        axis.set_xlabel("Wysokość [m]")
+        axis.set_ylabel(ylabel)
+        axis.grid(alpha=0.25)
+        axis.legend()
+
+    axis = axes[1, 1]
+    for lock_spine, label in modes.items():
+        safe = [is_safe(results[h][lock_spine]) for h in heights]
+        axis.plot(
+            heights, [int(value) for value in safe], marker="o",
+            color=colors[lock_spine], label=label,
+        )
+    axis.set_title("Przeżycie / bezpieczeństwo")
+    axis.set_xlabel("Wysokość [m]")
+    axis.set_ylabel("Bezpieczne (1 = tak, 0 = nie)")
+    axis.set_yticks([0, 1], ["NIE", "TAK"])
+    axis.set_ylim(-0.1, 1.1)
+    axis.grid(alpha=0.25)
+    axis.legend()
+    fig.suptitle("Porównanie kręgosłupa: odblokowany vs zablokowany")
+    comparison_path = output_dir / "porownanie_kregoslupa.png"
+    fig.savefig(comparison_path, dpi=150)
+    plt.close(fig)
+
+    fig, axis = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    for height in heights:
+        for lock_spine, label in modes.items():
+            history = results[height][lock_spine].get("progress", [])
+            if not history:
+                continue
+            axis.plot(
+                [item["completed"] for item in history],
+                [item["best_cost"] for item in history],
+                label=f"{height:g} m, {label}", color=colors[lock_spine],
+                alpha=0.45 if len(heights) > 1 else 1.0,
+                linestyle="--" if lock_spine else "-",
+            )
+    axis.set_title("Zbieżność optymalizacji")
+    axis.set_xlabel("Liczba prób")
+    axis.set_ylabel("Najlepszy koszt")
+    axis.grid(alpha=0.25)
+    axis.legend(ncol=2, fontsize="small")
+    convergence_path = output_dir / "zbieznosc_optymalizacji.png"
+    fig.savefig(convergence_path, dpi=150)
+    plt.close(fig)
+
+    with (output_dir / "porownanie_kregoslupa.csv").open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow([
+            "height", "spine", "safe", "cost", "total_motor_effort",
+            "total_leg_effort", "total_spine_effort", "peak_body_acceleration",
+        ])
+        for height in heights:
+            for lock_spine, label in modes.items():
+                result = results[height][lock_spine]
+                writer.writerow([
+                    height, label, is_safe(result), result["cost"],
+                    result["total_motor_effort"], result["total_leg_effort"],
+                    result["total_spine_effort"], result["peak_body_acceleration"],
+                ])
+    print(f"Wykresy i dane zapisano w: {output_dir}")
+
+
+def save_single_run_plot(best, output_dir, lock_spine, height):
+    """Save the convergence chart for a regular single-mode invocation."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    history = best.get("progress", [])
+    if not history:
+        return
+    fig, axis = plt.subplots(figsize=(10, 5), constrained_layout=True)
+    axis.plot(
+        [item["completed"] for item in history],
+        [item["best_cost"] for item in history],
+        color="#1976d2",
+    )
+    axis.set_title(
+        f"Zbieżność optymalizacji — {height:g} m, "
+        f"{'zablokowany' if lock_spine else 'odblokowany'} kręgosłup"
+    )
+    axis.set_xlabel("Liczba prób")
+    axis.set_ylabel("Najlepszy koszt")
+    axis.grid(alpha=0.25)
+    path = output_dir / (
+        f"zbieznosc_{height:g}m_{'locked' if lock_spine else 'unlocked'}.png"
+    )
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Wykres zapisano w: {path}")
+
+
 def main():
     args = parse_args()
     batch_size = validate_args(args)
@@ -741,6 +881,7 @@ def main():
                     args, batch_size, lock_spine, height, seed
                 )
         print_comparison(results)
+        save_plots(results, args.output_dir)
         viewer_height = heights[-1]
         highest_modes = results[viewer_height]
         winner = comparison_winner(highest_modes[False], highest_modes[True])
@@ -772,6 +913,7 @@ def main():
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, args.lock_spine)
         print_result(best, model)
+        save_single_run_plot(best, args.output_dir, args.lock_spine, start_height)
 
     if not args.no_viewer:
         print("\nOtwieram symulacje 3D... Zamknij okno, by zakonczyc skrypt.")
