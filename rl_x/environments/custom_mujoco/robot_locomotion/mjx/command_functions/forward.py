@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 
 class ForwardCommands:
-    """Random forward and yaw commands without lateral velocity."""
+    """Random non-negative X commands with zero lateral and yaw rates."""
 
     def __init__(self, env):
         self.env = env
@@ -38,16 +38,13 @@ class ForwardCommands:
         )
 
         max_velocities = internal_state["max_command_velocities"]
-        goal_velocities = jax.random.uniform(
+        goal_x_velocity = jax.random.uniform(
             velocity_sampling_key,
-            (3,),
-            minval=-max_velocities,
-            maxval=max_velocities,
+            (),
+            minval=0.0,
+            maxval=max_velocities[0],
         )
-        goal_velocities = goal_velocities.at[0].set(
-            jnp.abs(goal_velocities[0])
-        )
-        goal_velocities = goal_velocities.at[1].set(0.0)
+        goal_velocities = jnp.array([goal_x_velocity, 0.0, 0.0])
         goal_velocities = jnp.where(
             jnp.abs(goal_velocities)
             < self.zero_clip_threshold_percentage * max_velocities,
@@ -60,9 +57,10 @@ class ForwardCommands:
             goal_velocities,
         )
         goal_velocities = jnp.where(
-            jax.random.uniform(single_zeroing_key, (3,))
-            < self.single_zero_chance,
-            0.0,
+            jax.random.bernoulli(
+                single_zeroing_key, self.single_zero_chance
+            ),
+            jnp.zeros(3),
             goal_velocities,
         )
 

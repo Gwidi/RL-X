@@ -2,7 +2,7 @@ import numpy as np
 
 
 class ForwardCommands:
-    """Random forward and yaw commands without lateral velocity."""
+    """Random non-negative X commands with zero lateral and yaw rates."""
 
     def __init__(self, env):
         self.env = env
@@ -31,11 +31,11 @@ class ForwardCommands:
 
     def get_next_command(self):
         max_velocities = self.env.internal_state["max_command_velocities"]
-        goal_velocities = self.env.np_rng.uniform(
-            size=(3,), low=-max_velocities, high=max_velocities
-        )
-        goal_velocities[0] = abs(goal_velocities[0])
-        goal_velocities[1] = 0.0
+        goal_velocities = np.array([
+            self.env.np_rng.uniform(low=0.0, high=max_velocities[0]),
+            0.0,
+            0.0,
+        ])
         goal_velocities = np.where(
             np.abs(goal_velocities)
             < self.zero_clip_threshold_percentage * max_velocities,
@@ -48,8 +48,8 @@ class ForwardCommands:
             goal_velocities,
         )
         goal_velocities = np.where(
-            self.env.np_rng.uniform(size=(3,)) < self.single_zero_chance,
-            0.0,
+            self.env.np_rng.binomial(n=1, p=self.single_zero_chance),
+            np.zeros(3),
             goal_velocities,
         )
 
