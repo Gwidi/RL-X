@@ -36,7 +36,7 @@ LEG_JOINTS = {
     "calf": ["rl_j2", "rr_j2", "fr_j2", "fl_j2"],
 }
 
-START_HEIGHT = 4.5
+START_HEIGHT = 1.2
 SPINE_KP = 40.0
 SPINE_KD = 3.0
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
@@ -46,8 +46,8 @@ STATIC_FRICTION = 0.37
 # or foot-load ratings.  Use conservative research screening limits: 15 g at
 # the floating base and 2 kN total normal force across all feet.  For the
 # 13.12 kg model these are consistent (m * (15 g + g) ~= 2.06 kN).
-MAX_LANDING_FOOT_FORCE = 3_000.0              # total normal force, N
-MAX_LANDING_BODY_ACCELERATION = 15.0 * 9.81   # m/s^2 (15 g)
+MAX_LANDING_FOOT_FORCE = 10_000.0              # total normal force, N
+MAX_LANDING_BODY_ACCELERATION = 20.0 * 9.81   # m/s^2 (15 g)
 LANDING_QUALITY_PENALTY = 1_000_000.0
 NOMINAL_POSITION_REGULARIZATION = 2.0
 
