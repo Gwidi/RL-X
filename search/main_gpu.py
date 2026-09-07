@@ -20,6 +20,11 @@ import numpy as np
 import main as cpu
 
 
+GPU_SOLVER_ITERATIONS = 30
+GPU_LINESEARCH_ITERATIONS = 15
+_EVALUATOR_CACHE = {}
+
+
 RESULT_KEYS = (
     "cost",
     "crashed",
@@ -57,6 +62,14 @@ def _prepare_model(lock_spine):
     model = mujoco.MjModel.from_xml_path(str(cpu.XML_PATH))
     cpu.configure_spine(model, lock_spine)
 
+    # The C solver exits as soon as it converges, while MJX benefits greatly
+    # from tight static limits.  Profiling this model showed at most 17 Newton
+    # iterations; 30/15 retained the CPU results in the validation set.
+    model.opt.iterations = min(model.opt.iterations, GPU_SOLVER_ITERATIONS)
+    model.opt.ls_iterations = min(
+        model.opt.ls_iterations, GPU_LINESEARCH_ITERATIONS
+    )
+
     # MJX builds all collision pairs ahead of time and cannot compile the
     # cylinder-box self-collision pairs present in this XML.  Separate just
     # those two groups while retaining their ground and supported self
@@ -89,24 +102,26 @@ class GpuBatchEvaluator:
     """Compile and evaluate fixed-size batches of complete drop episodes."""
 
     def __init__(
-        self, lock_spine, start_height, optimize_nominal_position,
-        gpu_batch_size, device,
+        self, lock_spine, steps, optimize_nominal_position, gpu_batch_size,
+        device,
     ):
         self.batch_size = gpu_batch_size
         self.cpu_model = _prepare_model(lock_spine)
         self.jmap = cpu.JointMap(self.cpu_model, cpu.NOMINAL_POSE)
         self.contact_map = cpu.ContactMap(self.cpu_model)
-        self.steps = cpu.episode_steps(self.cpu_model, start_height)
+        self.steps = steps
         self.timestep = float(self.cpu_model.opt.timestep)
         self.lock_spine = lock_spine
         self.optimize_nominal_position = optimize_nominal_position
 
         self.model = mjx.put_model(self.cpu_model, device=device)
         self.empty_data = mjx.make_data(self.model, device=device)
-        evaluate_one = self._build_episode(start_height)
-        self.evaluate_batch = jax.jit(jax.vmap(evaluate_one), device=device)
+        evaluate_one = self._build_episode()
+        self.evaluate_batch = jax.jit(
+            jax.vmap(evaluate_one, in_axes=(0, None)), device=device
+        )
 
-    def _build_episode(self, start_height):
+    def _build_episode(self):
         model = self.model
         empty_data = self.empty_data
         jmap = self.jmap
@@ -165,7 +180,7 @@ class GpuBatchEvaluator:
                 jnp.any(valid & ~foot),
             )
 
-        def episode(params):
+        def episode(params, start_height):
             targets = nominal
             if optimize_positions:
                 targets = targets.at[position_target_idx].add(params[position_start:])
@@ -180,7 +195,9 @@ class GpuBatchEvaluator:
                 kd = kd.at[spine_index].set(params[7])
 
             qpos = jnp.asarray(self.cpu_model.qpos0)
-            qpos = qpos.at[0:3].set(jnp.asarray([0.0, 0.0, start_height]))
+            qpos = qpos.at[0].set(0.0)
+            qpos = qpos.at[1].set(0.0)
+            qpos = qpos.at[2].set(start_height)
             qpos = qpos.at[3:7].set(jnp.asarray([1.0, 0.0, 0.0, 0.0]))
             qpos = qpos.at[qpos_idx].set(targets)
             data = empty_data.replace(
@@ -280,7 +297,7 @@ class GpuBatchEvaluator:
 
         return episode
 
-    def __call__(self, params):
+    def __call__(self, params, start_height):
         """Evaluate a possibly short batch while retaining one compiled shape."""
         params = np.asarray(params, dtype=np.float64)
         count = len(params)
@@ -289,7 +306,9 @@ class GpuBatchEvaluator:
         if count < self.batch_size:
             padding = np.repeat(params[-1:, :], self.batch_size - count, axis=0)
             params = np.concatenate((params, padding), axis=0)
-        values = np.asarray(self.evaluate_batch(jnp.asarray(params)))[:count]
+        values = np.asarray(
+            self.evaluate_batch(jnp.asarray(params), jnp.asarray(start_height))
+        )[:count]
         results = []
         for point, row in zip(params[:count], values):
             result = dict(zip(RESULT_KEYS, row))
@@ -302,6 +321,29 @@ class GpuBatchEvaluator:
             result["params"] = tuple(float(value) for value in point)
             results.append(result)
         return results
+
+
+def get_evaluator(
+    lock_spine, start_height, optimize_nominal_position, batch_size, device,
+):
+    """Reuse expensive JIT compilations across equal-length drop episodes."""
+    reference_model = _prepare_model(lock_spine)
+    steps = cpu.episode_steps(reference_model, start_height)
+    key = (
+        lock_spine,
+        optimize_nominal_position,
+        batch_size,
+        steps,
+        device.platform,
+        device.id,
+    )
+    evaluator = _EVALUATOR_CACHE.get(key)
+    if evaluator is None:
+        evaluator = GpuBatchEvaluator(
+            lock_spine, steps, optimize_nominal_position, batch_size, device
+        )
+        _EVALUATOR_CACHE[key] = evaluator
+    return evaluator
 
 
 def run_search_gpu(
@@ -319,22 +361,30 @@ def run_search_gpu(
     safe_trials = 0
     stagnant_batches = 0
     batch = [cpu.sample_params(rng, bounds) for _ in range(initial_trials)]
-    gpu_batch_size = max(initial_trials, min(batch_size, trials))
-    evaluator = GpuBatchEvaluator(
+    device = require_gpu()
+    initial_evaluator = get_evaluator(
+        lock_spine, start_height, optimize_nominal_position, initial_trials,
+        device,
+    )
+    regular_batch_size = min(batch_size, trials)
+    regular_evaluator = get_evaluator(
         lock_spine, start_height, optimize_nominal_position,
-        gpu_batch_size, require_gpu(),
+        regular_batch_size, device,
     )
 
     completed = 0
     while completed < trials:
         previous_best_cost = float("inf") if best is None else best["cost"]
         batch = batch[:trials - completed]
-        for result in evaluator(batch):
+        evaluator = initial_evaluator if completed == 0 else regular_evaluator
+        evaluation_start = time.perf_counter()
+        for result in evaluator(batch, start_height):
             x_values.append(result["params"])
             costs.append(result["cost"])
             safe_trials += int(cpu.is_safe(result))
             if best is None or result["cost"] < best["cost"]:
                 best = result
+        evaluation_seconds = time.perf_counter() - evaluation_start
         completed += len(batch)
         if best["cost"] < previous_best_cost * (1.0 - 1e-6):
             stagnant_batches = 0
@@ -346,7 +396,8 @@ def run_search_gpu(
         print(
             f"Ukonczono {completed}/{trials} prob | "
             f"najlepszy koszt: {best['cost']:.3f} | "
-            f"bezpieczne: {safe_trials} | eksploracja: {current_exploration:.0%}",
+            f"bezpieczne: {safe_trials} | eksploracja: {current_exploration:.0%} | "
+            f"GPU: {evaluation_seconds:.2f}s",
             flush=True,
         )
         progress.append({
@@ -355,10 +406,16 @@ def run_search_gpu(
             "safe_trials": safe_trials,
         })
         if completed < trials:
+            proposal_start = time.perf_counter()
             batch = cpu.propose_candidates(
                 np.asarray(x_values), costs,
                 min(batch_size, trials - completed), candidate_pool,
                 rng, current_exploration, xi, bounds,
+            )
+            print(
+                f"Dopasowanie GP i wybor kandydatow: "
+                f"{time.perf_counter() - proposal_start:.2f}s",
+                flush=True,
             )
     best["safe_trials"] = safe_trials
     best["evaluated_trials"] = trials
