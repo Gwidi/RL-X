@@ -36,20 +36,29 @@ LEG_JOINTS = {
     "calf": ["rl_j2", "rr_j2", "fr_j2", "fl_j2"],
 }
 
-START_HEIGHT = 4.0
+START_HEIGHT = 4.5
 SPINE_KP = 40.0
 SPINE_KD = 3.0
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
 
-SIM_DURATION = 2.2
+# Public HB4.0 / Silver Badger specifications do not provide certified shock
+# or foot-load ratings.  Use conservative research screening limits: 15 g at
+# the floating base and 2 kN total normal force across all feet.  For the
+# 13.12 kg model these are consistent (m * (15 g + g) ~= 2.06 kN).
+MAX_LANDING_FOOT_FORCE = 3_000.0              # total normal force, N
+MAX_LANDING_BODY_ACCELERATION = 15.0 * 9.81   # m/s^2 (15 g)
+LANDING_QUALITY_PENALTY = 1_000_000.0
+NOMINAL_POSITION_REGULARIZATION = 2.0
+
+SIM_DURATION = 2.0
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
 OUTPUT_DIR = Path(__file__).resolve().with_name("output")
 PARAMETER_NAMES = (
     "kp_hip", "kp_thigh", "kp_calf",
     "kd_hip", "kd_thigh", "kd_calf",
 )
-PARAMETER_BOUNDS = np.array([
+GAIN_BOUNDS = np.array([
     (5.0, 60.0),
     (5.0, 100.0),
     (5.0, 100.0),
@@ -57,6 +66,13 @@ PARAMETER_BOUNDS = np.array([
     (0.2, 8.0),
     (0.2, 8.0),
 ], dtype=float)
+# Nominal leg positions are optimized as offsets from NOMINAL_POSE. Keeping
+# the bounds relative makes the flag safe to use if the nominal pose changes.
+LEG_NOMINAL_POSITION_NAMES = tuple(
+    name for group in ("hip", "thigh", "calf") for name in LEG_JOINTS[group]
+)
+NOMINAL_POSITION_DELTA_BOUNDS = (-0.5, 0.5)
+PARAMETER_BOUNDS = GAIN_BOUNDS
 MAX_GP_POINTS = 400
 _WORKER_MODEL = None
 _WORKER_DATA = None
@@ -64,6 +80,7 @@ _WORKER_JMAP = None
 _WORKER_CONTACT_MAP = None
 _WORKER_STEPS = None
 _WORKER_START_HEIGHT = None
+_WORKER_OPTIMIZE_NOMINAL_POSITION = False
 
 
 def configure_spine(model, lock_spine):
@@ -159,14 +176,14 @@ class ContactMap:
         return foot_normal_force, shin_normal_force, non_foot_contact
 
 
-def reset_drop(data, model, jmap, start_height):
+def reset_drop(data, model, jmap, start_height, nominal_pose):
     """Reset to the exact initial state used by every optimization episode."""
     mujoco.mj_resetData(model, data)
     data.qpos[0:3] = [0.0, 0.0, start_height]
     data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
 
     targets = {}
-    for name, nominal in NOMINAL_POSE.items():
+    for name, nominal in nominal_pose.items():
         target = nominal
         targets[name] = target
         # Spawn without an artificial initial position error/impulse.
@@ -191,6 +208,38 @@ def build_gains(params):
             kp[name] = group_kp
             kd[name] = group_kd
     return kp, kd
+
+
+def nominal_position_names(optimize_nominal_position, lock_spine):
+    if not optimize_nominal_position:
+        return ()
+    names = list(LEG_NOMINAL_POSITION_NAMES)
+    if not lock_spine:
+        names.append("sp_j0")
+    return tuple(names)
+
+
+def nominal_pose_from_params(params, optimize_nominal_position, lock_spine):
+    """Build the episode pose from the optional nominal-position parameters."""
+    if not optimize_nominal_position:
+        return NOMINAL_POSE
+    pose = dict(NOMINAL_POSE)
+    for name, delta in zip(
+        nominal_position_names(optimize_nominal_position, lock_spine), params[6:]
+    ):
+        pose[name] += delta
+    return pose
+
+
+def parameter_bounds(optimize_nominal_position, lock_spine):
+    if not optimize_nominal_position:
+        return GAIN_BOUNDS
+    position_names = nominal_position_names(optimize_nominal_position, lock_spine)
+    position_bounds = np.full(
+        (len(position_names), 2), NOMINAL_POSITION_DELTA_BOUNDS,
+        dtype=float,
+    )
+    return np.vstack((GAIN_BOUNDS, position_bounds))
 
 
 def apply_position_pd(model, data, jmap, targets, kp, kd):
@@ -226,8 +275,14 @@ def episode_steps(model, start_height):
     return int(np.ceil(duration / model.opt.timestep))
 
 
-def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
-    targets = reset_drop(data, model, jmap, start_height)
+def evaluate_drop(
+    model, data, jmap, contact_map, params, steps, start_height,
+    optimize_nominal_position, lock_spine,
+):
+    nominal_pose = nominal_pose_from_params(
+        params, optimize_nominal_position, lock_spine
+    )
+    targets = reset_drop(data, model, jmap, start_height, nominal_pose)
     kp, kd = build_gains(params)
     leg_dof_idx = np.array([
         jmap.dof_adr[name]
@@ -286,13 +341,24 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
     # Minimize total motor-current proxy subject to survival. Including the
     # spine prevents the unlocked model from shifting load there for free.
     cost = total_leg_effort + total_spine_effort
+    if optimize_nominal_position:
+        # Avoid using a highly asymmetric, boundary pose as a free impact
+        # brace.  The position variables are deltas from NOMINAL_POSE.
+        position_deltas = np.asarray(params[6:], dtype=float)
+        cost += NOMINAL_POSITION_REGULARIZATION * float(np.sum(position_deltas**2))
     if not foot_contact:
-        cost += 1_000_000.0
+        cost += LANDING_QUALITY_PENALTY
     if non_foot_contact:
-        cost += 1_000_000.0
+        cost += LANDING_QUALITY_PENALTY
     if crashed:
         penetration = max(0.0, 0.05 - min_body_height)
-        cost += 1_000_000.0 + penetration * 1_000_000.0
+        cost += LANDING_QUALITY_PENALTY + penetration * LANDING_QUALITY_PENALTY
+    if peak_foot_force > MAX_LANDING_FOOT_FORCE:
+        excess = peak_foot_force / MAX_LANDING_FOOT_FORCE - 1.0
+        cost += LANDING_QUALITY_PENALTY * (1.0 + excess)
+    if peak_body_acceleration > MAX_LANDING_BODY_ACCELERATION:
+        excess = peak_body_acceleration / MAX_LANDING_BODY_ACCELERATION - 1.0
+        cost += LANDING_QUALITY_PENALTY * (1.0 + excess)
 
     return (
         cost,
@@ -312,11 +378,17 @@ def evaluate_drop(model, data, jmap, contact_map, params, steps, start_height):
     )
 
 
-def show_best(model, data, jmap, params, steps, start_height):
+def show_best(
+    model, data, jmap, params, steps, start_height, optimize_nominal_position,
+    lock_spine,
+):
     kp, kd = build_gains(params)
+    nominal_pose = nominal_pose_from_params(
+        params, optimize_nominal_position, lock_spine
+    )
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
-            targets = reset_drop(data, model, jmap, start_height)
+            targets = reset_drop(data, model, jmap, start_height, nominal_pose)
             for _ in range(steps):
                 if not viewer.is_running():
                     return
@@ -329,12 +401,13 @@ def show_best(model, data, jmap, params, steps, start_height):
             time.sleep(1.0)
 
 
-def sample_params(rng):
-    return tuple(rng.uniform(PARAMETER_BOUNDS[:, 0], PARAMETER_BOUNDS[:, 1]))
+def sample_params(rng, bounds):
+    return tuple(rng.uniform(bounds[:, 0], bounds[:, 1]))
 
 
 def result_from_params(
-    model, data, jmap, contact_map, params, steps, start_height
+    model, data, jmap, contact_map, params, steps, start_height,
+    optimize_nominal_position, lock_spine,
 ):
     (
         cost,
@@ -353,6 +426,7 @@ def result_from_params(
         peak_spine_current_proxy,
     ) = evaluate_drop(
         model, data, jmap, contact_map, params, steps, start_height,
+        optimize_nominal_position, lock_spine,
     )
     return {
         "cost": cost,
@@ -374,9 +448,10 @@ def result_from_params(
     }
 
 
-def init_worker(lock_spine, start_height):
+def init_worker(lock_spine, start_height, optimize_nominal_position):
     global _WORKER_MODEL, _WORKER_DATA, _WORKER_JMAP
     global _WORKER_CONTACT_MAP, _WORKER_STEPS, _WORKER_START_HEIGHT
+    global _WORKER_OPTIMIZE_NOMINAL_POSITION, _WORKER_LOCK_SPINE
     _WORKER_MODEL = mujoco.MjModel.from_xml_path(str(XML_PATH))
     configure_spine(_WORKER_MODEL, lock_spine)
     _WORKER_DATA = mujoco.MjData(_WORKER_MODEL)
@@ -384,6 +459,8 @@ def init_worker(lock_spine, start_height):
     _WORKER_CONTACT_MAP = ContactMap(_WORKER_MODEL)
     _WORKER_STEPS = episode_steps(_WORKER_MODEL, start_height)
     _WORKER_START_HEIGHT = start_height
+    _WORKER_OPTIMIZE_NOMINAL_POSITION = optimize_nominal_position
+    _WORKER_LOCK_SPINE = lock_spine
 
 
 def evaluate_candidate(params):
@@ -396,6 +473,8 @@ def evaluate_candidate(params):
         tuple(params),
         _WORKER_STEPS,
         _WORKER_START_HEIGHT,
+        _WORKER_OPTIMIZE_NOMINAL_POSITION,
+        _WORKER_LOCK_SPINE,
     )
 
 
@@ -414,17 +493,18 @@ def select_gp_training_data(x_values, y_values, rng):
 
 
 def propose_candidates(
-    x_values, costs, count, candidate_pool, rng, exploration_fraction, xi
+    x_values, costs, count, candidate_pool, rng, exploration_fraction, xi,
+    parameter_bounds,
 ):
-    lower = PARAMETER_BOUNDS[:, 0]
-    span = PARAMETER_BOUNDS[:, 1] - lower
+    lower = parameter_bounds[:, 0]
+    span = parameter_bounds[:, 1] - lower
     x_normalized = (np.asarray(x_values) - lower) / span
     # The log transform separates hard failure penalties from feasible costs.
     y = np.log1p(np.asarray(costs))
     train_x, train_y = select_gp_training_data(x_normalized, y, rng)
     kernel = (
         ConstantKernel(1.0, (1e-2, 1e2))
-        * Matern(length_scale=np.ones(PARAMETER_BOUNDS.shape[0]), nu=2.5)
+        * Matern(length_scale=np.ones(parameter_bounds.shape[0]), nu=2.5)
         + WhiteKernel(noise_level=1e-5, noise_level_bounds=(1e-8, 1e-2))
     )
     gp = GaussianProcessRegressor(
@@ -437,7 +517,7 @@ def propose_candidates(
         warnings.simplefilter("ignore", ConvergenceWarning)
         gp.fit(train_x, train_y)
 
-    pool = rng.random((candidate_pool, PARAMETER_BOUNDS.shape[0]))
+    pool = rng.random((candidate_pool, parameter_bounds.shape[0]))
     mean, std = gp.predict(pool, return_std=True)
     std = np.maximum(std, 1e-12)
     improvement = np.min(train_y) - mean - xi
@@ -468,32 +548,34 @@ def propose_candidates(
     add_ranked(np.argsort(expected_improvement)[::-1], exploitation_count)
     add_ranked(np.argsort(std)[::-1], uncertainty_count)
     for _ in range(random_count):
-        selected.append(rng.random(PARAMETER_BOUNDS.shape[0]))
+        selected.append(rng.random(parameter_bounds.shape[0]))
     while len(selected) < count:
-        selected.append(rng.random(PARAMETER_BOUNDS.shape[0]))
+        selected.append(rng.random(parameter_bounds.shape[0]))
     return lower + np.asarray(selected) * span
 
 
 def run_search(
     trials, workers, seed, initial_trials, candidate_pool, batch_size,
     exploration_fraction, xi, lock_spine, start_height,
+    optimize_nominal_position,
 ):
     """Bayesian optimization of total actuator effort under survival constraints."""
     workers = min(workers, trials)
     rng = np.random.default_rng(seed)
     initial_trials = min(initial_trials, trials)
+    bounds = parameter_bounds(optimize_nominal_position, lock_spine)
     x_values = []
     costs = []
     best = None
     safe_trials = 0
     progress = []
     stagnant_batches = 0
-    batch = [sample_params(rng) for _ in range(initial_trials)]
+    batch = [sample_params(rng, bounds) for _ in range(initial_trials)]
 
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=init_worker,
-        initargs=(lock_spine, start_height),
+        initargs=(lock_spine, start_height, optimize_nominal_position),
     ) as executor:
         completed = 0
         while completed < trials:
@@ -534,6 +616,7 @@ def run_search(
                     np.asarray(x_values), costs,
                     min(batch_size, trials - completed), candidate_pool,
                     rng, current_exploration, xi,
+                    bounds,
                 )
     best["safe_trials"] = safe_trials
     best["evaluated_trials"] = trials
@@ -580,6 +663,15 @@ def parse_args():
         type=float,
         default=0.01,
         help="expected-improvement exploration margin in log-cost space",
+    )
+    parser.add_argument(
+        "--optimize-nominal-position",
+        action="store_true",
+        help=(
+            "also optimize nominal leg positions; each joint may move by "
+            f"{NOMINAL_POSITION_DELTA_BOUNDS[0]:g} to "
+            f"{NOMINAL_POSITION_DELTA_BOUNDS[1]:g} rad"
+        ),
     )
     spine_mode = parser.add_mutually_exclusive_group()
     spine_mode.add_argument(
@@ -641,7 +733,7 @@ def validate_args(args):
     return batch_size
 
 
-def print_result(best, model):
+def print_result(best, model, optimize_nominal_position, lock_spine):
     print(
         f"TOP WYNIK - Koszt: {best['cost']:.2f} | "
         f"Wysokosc bazy: {best['min_height']:.3f}m | Safe: {is_safe(best)} | "
@@ -649,6 +741,13 @@ def print_result(best, model):
     )
     print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
     print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
+    if optimize_nominal_position:
+        nominal_pose = nominal_pose_from_params(
+            best["params"], True, lock_spine
+        )
+        print("Najlepsza pozycja nominalna:")
+        for name in nominal_position_names(True, lock_spine):
+            print(f"  {name}: {nominal_pose[name]:.4f} rad")
     print(f"Szczytowa sila stop: {best['peak_foot_force']:.1f} N")
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
@@ -663,11 +762,14 @@ def print_result(best, model):
     )
 
 
-def optimize_configuration(args, batch_size, lock_spine, start_height, seed):
+def optimize_configuration(
+    args, batch_size, lock_spine, start_height, seed, optimize_nominal_position,
+):
     active_workers = min(args.workers, args.trials)
     label = "zablokowany" if lock_spine else "aktywny"
     print(
         f"\nWysokosc: {start_height:g} m | kregoslup: {label} | "
+        f"pozycja nominalna: {'optymalizowana' if optimize_nominal_position else 'stala'} | "
         f"{args.trials} prob, {active_workers} procesow CPU",
         flush=True,
     )
@@ -683,6 +785,7 @@ def optimize_configuration(args, batch_size, lock_spine, start_height, seed):
         args.xi,
         lock_spine,
         start_height,
+        optimize_nominal_position,
     )
     print(f"Zakonczono konfiguracje w {time.time() - start_time:.2f} s.")
     return best
@@ -693,6 +796,8 @@ def is_safe(result):
         result["foot_contact"]
         and not result["crashed"]
         and not result["non_foot_contact"]
+        and result["peak_foot_force"] <= MAX_LANDING_FOOT_FORCE
+        and result["peak_body_acceleration"] <= MAX_LANDING_BODY_ACCELERATION
     )
 
 
@@ -878,7 +983,8 @@ def main():
             results[height] = {}
             for lock_spine in (False, True):
                 results[height][lock_spine] = optimize_configuration(
-                    args, batch_size, lock_spine, height, seed
+                    args, batch_size, lock_spine, height, seed,
+                    args.optimize_nominal_position,
                 )
         print_comparison(results)
         save_plots(results, args.output_dir)
@@ -903,16 +1009,21 @@ def main():
         )
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, viewer_lock)
-        print_result(best, model)
+        print_result(
+            best, model, args.optimize_nominal_position, viewer_lock
+        )
         start_height = viewer_height
     else:
         start_height = args.height
         best = optimize_configuration(
-            args, batch_size, args.lock_spine, start_height, args.seed
+            args, batch_size, args.lock_spine, start_height, args.seed,
+            args.optimize_nominal_position,
         )
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, args.lock_spine)
-        print_result(best, model)
+        print_result(
+            best, model, args.optimize_nominal_position, args.lock_spine
+        )
         save_single_run_plot(best, args.output_dir, args.lock_spine, start_height)
 
     if not args.no_viewer:
@@ -920,7 +1031,10 @@ def main():
         data = mujoco.MjData(model)
         jmap = JointMap(model, NOMINAL_POSE)
         steps = episode_steps(model, start_height)
-        show_best(model, data, jmap, best["params"], steps, start_height)
+        show_best(
+            model, data, jmap, best["params"], steps, start_height,
+            args.optimize_nominal_position, args.lock_spine,
+        )
 
 
 if __name__ == "__main__":

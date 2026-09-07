@@ -2,6 +2,13 @@ import gymnasium as gym
 
 
 class RLXInfo(gym.Wrapper):
+    EPISODE_ONLY_LOGGING_KEYS = {
+        "metrics/peak_leg_torque",
+        "metrics/peak_spine_torque",
+        "metrics/leg_tau_squared_integral",
+        "metrics/spine_tau_squared_integral",
+    }
+
     def __init__(self, env):
         super(RLXInfo, self).__init__(env)
     
@@ -12,7 +19,11 @@ class RLXInfo(gym.Wrapper):
 
         logging_info = {
             key: info[key][info["_" + key]].tolist()
-                for key in all_keys if key not in keys_to_remove and not key.startswith("_") and len(info[key][info["_" + key]]) > 0
+                for key in all_keys
+                if key not in keys_to_remove
+                and key not in self.EPISODE_ONLY_LOGGING_KEYS
+                and not key.startswith("_")
+                and len(info[key][info["_" + key]]) > 0
         }
         if "final_info" in info:
             for done, final_info in zip(info["_final_info"], info["final_info"]):

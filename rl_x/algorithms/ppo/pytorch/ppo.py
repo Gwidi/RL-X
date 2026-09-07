@@ -67,7 +67,8 @@ class PPO:
         rlx_logger.info(f"Using device: {self.device}")
 
         if self.bf16_mixed_precision_training and self.device.type != "cuda":
-            raise ValueError("bfloat16 mixed precision training is only supported on CUDA devices.")
+            rlx_logger.warning("bfloat16 mixed precision training is only supported on CUDA devices. Disabling it.")
+            self.bf16_mixed_precision_training = False
 
         self.rng = np.random.default_rng(self.seed)
         torch.manual_seed(self.seed)
@@ -454,6 +455,9 @@ class PPO:
     def test(self, episodes):
         with torch.inference_mode():
             self.set_eval_mode()
+            # Set eval env to test curriculum coefficient
+            if hasattr(self.eval_env, 'set_eval_mode'):
+                self.eval_env.set_eval_mode(getattr(self, 'test_curriculum_coeff', 1.0))
             for i in range(episodes):
                 done = False
                 episode_return = 0

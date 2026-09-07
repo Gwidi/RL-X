@@ -69,6 +69,7 @@ class LocomotionEnv(gym.Env):
             dir_vec.add("site", name="dir_arrow", type="cylinder", size=".01", fromto="0 0 -.1 0 0 .1", group="0", rgba="0 1 0 1")
         
         self.spine_locked = robot_config.get("spine_locked", False)
+        locked_spine_joint_name = None
         if self.spine_locked:
             spine_actuator = xml_handle.find("actuator", "spine")
             if spine_actuator is None:
@@ -76,6 +77,7 @@ class LocomotionEnv(gym.Env):
             
             spine_joint = spine_actuator.joint
             if spine_joint is not None:
+                locked_spine_joint_name = spine_joint.name
                 spine_joint.range = [-0.0001, 0.0001]
                 spine_joint.stiffness = 10000.0
                 spine_joint.damping = 1000.0
@@ -86,9 +88,30 @@ class LocomotionEnv(gym.Env):
         self.initial_mj_model = mujoco.MjModel.from_xml_string(xml=xml_handle.to_xml_string(), assets=xml_handle.get_assets())
         self.initial_mj_model.opt.timestep = env_config["timestep"]
 
-        spine_actuator_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, "spine")
-        self.spine_joint_id = self.initial_mj_model.actuator_trnid[spine_actuator_id, 0] if spine_actuator_id != -1 else -1
-        self.spine_joint_range_index = self.spine_joint_id - 1
+        self.spine_actuator_index = mujoco.mj_name2id(
+            self.initial_mj_model,
+            mujoco.mjtObj.mjOBJ_ACTUATOR,
+            "spine",
+        )
+        if self.spine_actuator_index != -1:
+            self.spine_joint_id = self.initial_mj_model.actuator_trnid[
+                self.spine_actuator_index,
+                0,
+            ]
+        elif locked_spine_joint_name is not None:
+            # The actuator has deliberately been removed, but domain
+            # randomization still needs the joint index to keep its range
+            # locked.
+            self.spine_joint_id = mujoco.mj_name2id(
+                self.initial_mj_model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                locked_spine_joint_name,
+            )
+        else:
+            self.spine_joint_id = -1
+        self.spine_joint_range_index = (
+            self.spine_joint_id - 1 if self.spine_joint_id > 0 else None
+        )
         
         if not self.spine_locked:
             self.spine_joint_limit = 1.5
@@ -112,6 +135,14 @@ class LocomotionEnv(gym.Env):
         self.actuator_joint_mask_qpos = np.array([self.initial_mj_model.joint(joint_name).qposadr[0] for joint_name in self.actuator_joint_names])
         self.actuator_joint_mask_qvel = np.array([self.initial_mj_model.joint(joint_name).dofadr[0] for joint_name in self.actuator_joint_names])
         self.nr_actuator_joints = len(self.actuator_joint_names)
+        self.leg_actuator_indices = np.array(
+            [
+                actuator_index
+                for actuator_index in range(self.nr_actuator_joints)
+                if actuator_index != self.spine_actuator_index
+            ],
+            dtype=int,
+        )
         self.nr_joints = self.initial_mj_model.njnt
 
         imu_angular_velocity_sensor_id = self.initial_mj_model.sensor("imu_angular_velocity").id
@@ -211,6 +242,7 @@ class LocomotionEnv(gym.Env):
         self.internal_state = {
             "mj_model": deepcopy(self.initial_mj_model),
             "data": mujoco.MjData(self.initial_mj_model),
+            "actuator_forcerange_used": self.initial_mj_model.actuator_forcerange.copy(),
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
@@ -356,7 +388,11 @@ class LocomotionEnv(gym.Env):
             "episode_total_xy_velocity_diff_abs": 0.0,
         }
 
-        return next_observation, self.internal_state["info"]
+        # Vector autoreset adds final_info/final_observation to the returned
+        # mapping.  Never expose the persistent internal mapping directly,
+        # otherwise Gymnasium can create a self-reference and stale terminal
+        # metrics remain present in later steps.
+        return next_observation, self.internal_state["info"].copy()
 
 
     def step(self, action):
@@ -366,6 +402,12 @@ class LocomotionEnv(gym.Env):
         target_joint_positions = self.control_function.process_action(delayed_action)
 
         self.internal_state["data"].ctrl = target_joint_positions
+        # Domain randomization runs later in this method.  Preserve the
+        # limits that were actually active while this action was simulated,
+        # so reward calculations never compare an old force with new limits.
+        self.internal_state["actuator_forcerange_used"] = (
+            self.internal_state["mj_model"].actuator_forcerange.copy()
+        )
         mujoco.mj_step(self.internal_state["mj_model"], self.internal_state["data"], self.nr_substeps)
         max_qvel = 100 * np.ones(self.initial_mj_model.nv)
         max_qvel[self.actuator_joint_mask_qvel] = self.internal_state["actuator_joint_max_velocities"]
@@ -407,7 +449,13 @@ class LocomotionEnv(gym.Env):
         if self.should_render:
             self.render()
 
-        return next_observation, reward, terminated, truncated, self.internal_state["info"]
+        return (
+            next_observation,
+            reward,
+            terminated,
+            truncated,
+            self.internal_state["info"].copy(),
+        )
 
 
     def get_observation(self, action):
