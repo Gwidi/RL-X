@@ -22,7 +22,7 @@ class SimplifiedLandingReward:
         
         # ZMIANA 1: Rozdzielenie kolizji
         self.self_collision_coeff = env.env_config["reward"].get("collision_coeff", 20.0) * dt
-        self.floor_collision_coeff = 2.0 * dt  # Łagodne ostrzeżenie za łydki na ziemi
+        self.floor_collision_coeff = 0.05 * dt  # Łagodne ostrzeżenie za łydki na ziemi
         
         self.joint_pos_coeff = env.env_config["reward"].get("joint_pos_coeff", 5.0) * dt
 
@@ -253,9 +253,9 @@ class SimplifiedLandingReward:
 
 
         actuator_overload_now = bool(
-            self.env.internal_state["leg_saturation_time"] >= 0.10
+            self.env.internal_state["leg_saturation_time"] >= 0.50
             or
-            self.env.internal_state["spine_saturation_time"] >= 0.10
+            self.env.internal_state["spine_saturation_time"] >= 0.50
         )
         actuator_overload_event = (
             actuator_overload_now
@@ -276,7 +276,7 @@ class SimplifiedLandingReward:
             else 0.0
         )
 
-        if height < 0.15:
+        if height < 0.05:
             base_crash_reward = -30.0 * self.env.dt
 
             if has_touched:
@@ -439,13 +439,7 @@ class SimplifiedLandingReward:
                     1.0,
                 )
 
-                base_height_reward = (
-                    squat_penalty_weight
-                    * self.base_height_coeff
-                    * -np.square(
-                        height - target_height
-                    )
-                )
+                base_height_reward = 0.0
 
             else:
 
@@ -472,7 +466,7 @@ class SimplifiedLandingReward:
             + base_vel_z_reward
         )
 
-        safe_margin = 0.80
+        safe_margin = 1.0
 
         # --------------------------------------------------------------
         # LEGS
