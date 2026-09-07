@@ -36,9 +36,7 @@ LEG_JOINTS = {
     "calf": ["rl_j2", "rr_j2", "fr_j2", "fl_j2"],
 }
 
-START_HEIGHT = 1.2
-SPINE_KP = 40.0
-SPINE_KD = 3.0
+START_HEIGHT = 2.0
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
 
@@ -54,11 +52,11 @@ NOMINAL_POSITION_REGULARIZATION = 2.0
 SIM_DURATION = 2.0
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
 OUTPUT_DIR = Path(__file__).resolve().with_name("output")
-PARAMETER_NAMES = (
+LEG_GAIN_PARAMETER_NAMES = (
     "kp_hip", "kp_thigh", "kp_calf",
     "kd_hip", "kd_thigh", "kd_calf",
 )
-GAIN_BOUNDS = np.array([
+LEG_GAIN_BOUNDS = np.array([
     (5.0, 60.0),
     (5.0, 100.0),
     (5.0, 100.0),
@@ -66,13 +64,16 @@ GAIN_BOUNDS = np.array([
     (0.2, 8.0),
     (0.2, 8.0),
 ], dtype=float)
+SPINE_GAIN_BOUNDS = np.array([
+    (5.0, 100.0),  # kp_spine
+    (0.2, 8.0),    # kd_spine
+], dtype=float)
 # Nominal leg positions are optimized as offsets from NOMINAL_POSE. Keeping
 # the bounds relative makes the flag safe to use if the nominal pose changes.
 LEG_NOMINAL_POSITION_NAMES = tuple(
     name for group in ("hip", "thigh", "calf") for name in LEG_JOINTS[group]
 )
 NOMINAL_POSITION_DELTA_BOUNDS = (-0.5, 0.5)
-PARAMETER_BOUNDS = GAIN_BOUNDS
 MAX_GP_POINTS = 400
 _WORKER_MODEL = None
 _WORKER_DATA = None
@@ -193,15 +194,24 @@ def reset_drop(data, model, jmap, start_height, nominal_pose):
     return targets
 
 
-def build_gains(params):
+def gain_parameter_count(lock_spine):
+    return len(LEG_GAIN_BOUNDS) + (0 if lock_spine else len(SPINE_GAIN_BOUNDS))
+
+
+def build_gains(params, lock_spine):
     kp_h, kp_t, kp_c, kd_h, kd_t, kd_c = params[:6]
     group_gains = {
         "hip": (kp_h, kd_h),
         "thigh": (kp_t, kd_t),
         "calf": (kp_c, kd_c),
     }
-    kp = {"sp_j0": SPINE_KP}
-    kd = {"sp_j0": SPINE_KD}
+    if lock_spine:
+        # Values are immaterial for a mechanically locked, unpowered joint.
+        spine_kp, spine_kd = 0.0, 0.0
+    else:
+        spine_kp, spine_kd = params[6:8]
+    kp = {"sp_j0": spine_kp}
+    kd = {"sp_j0": spine_kd}
     for group, names in LEG_JOINTS.items():
         group_kp, group_kd = group_gains[group]
         for name in names:
@@ -224,22 +234,27 @@ def nominal_pose_from_params(params, optimize_nominal_position, lock_spine):
     if not optimize_nominal_position:
         return NOMINAL_POSE
     pose = dict(NOMINAL_POSE)
+    position_start = gain_parameter_count(lock_spine)
     for name, delta in zip(
-        nominal_position_names(optimize_nominal_position, lock_spine), params[6:]
+        nominal_position_names(optimize_nominal_position, lock_spine),
+        params[position_start:],
     ):
         pose[name] += delta
     return pose
 
 
 def parameter_bounds(optimize_nominal_position, lock_spine):
+    gain_bounds = LEG_GAIN_BOUNDS
+    if not lock_spine:
+        gain_bounds = np.vstack((gain_bounds, SPINE_GAIN_BOUNDS))
     if not optimize_nominal_position:
-        return GAIN_BOUNDS
+        return gain_bounds
     position_names = nominal_position_names(optimize_nominal_position, lock_spine)
     position_bounds = np.full(
         (len(position_names), 2), NOMINAL_POSITION_DELTA_BOUNDS,
         dtype=float,
     )
-    return np.vstack((GAIN_BOUNDS, position_bounds))
+    return np.vstack((gain_bounds, position_bounds))
 
 
 def apply_position_pd(model, data, jmap, targets, kp, kd):
@@ -283,7 +298,7 @@ def evaluate_drop(
         params, optimize_nominal_position, lock_spine
     )
     targets = reset_drop(data, model, jmap, start_height, nominal_pose)
-    kp, kd = build_gains(params)
+    kp, kd = build_gains(params, lock_spine)
     leg_dof_idx = np.array([
         jmap.dof_adr[name]
         for group in ("hip", "thigh", "calf")
@@ -344,7 +359,8 @@ def evaluate_drop(
     if optimize_nominal_position:
         # Avoid using a highly asymmetric, boundary pose as a free impact
         # brace.  The position variables are deltas from NOMINAL_POSE.
-        position_deltas = np.asarray(params[6:], dtype=float)
+        position_start = gain_parameter_count(lock_spine)
+        position_deltas = np.asarray(params[position_start:], dtype=float)
         cost += NOMINAL_POSITION_REGULARIZATION * float(np.sum(position_deltas**2))
     if not foot_contact:
         cost += LANDING_QUALITY_PENALTY
@@ -382,7 +398,7 @@ def show_best(
     model, data, jmap, params, steps, start_height, optimize_nominal_position,
     lock_spine,
 ):
-    kp, kd = build_gains(params)
+    kp, kd = build_gains(params, lock_spine)
     nominal_pose = nominal_pose_from_params(
         params, optimize_nominal_position, lock_spine
     )
@@ -741,6 +757,8 @@ def print_result(best, model, optimize_nominal_position, lock_spine):
     )
     print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
     print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
+    if not lock_spine:
+        print(f"Najlepsze Kp/Kd kregoslupa: {best['params'][6]:.1f}, {best['params'][7]:.1f}")
     if optimize_nominal_position:
         nominal_pose = nominal_pose_from_params(
             best["params"], True, lock_spine
@@ -1002,6 +1020,7 @@ def main():
         else:
             viewer_lock = winner == "LOCKED"
         best = results[viewer_height][viewer_lock]
+        selected_lock_spine = viewer_lock
         print(
             f"\nHighest-height {'best candidate' if winner in ('NO SAFE', 'TIE') else 'winner'} details "
             f"({viewer_height:g} m, "
@@ -1019,6 +1038,7 @@ def main():
             args, batch_size, args.lock_spine, start_height, args.seed,
             args.optimize_nominal_position,
         )
+        selected_lock_spine = args.lock_spine
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, args.lock_spine)
         print_result(
@@ -1033,7 +1053,7 @@ def main():
         steps = episode_steps(model, start_height)
         show_best(
             model, data, jmap, best["params"], steps, start_height,
-            args.optimize_nominal_position, args.lock_spine,
+            args.optimize_nominal_position, selected_lock_spine,
         )
 
 
