@@ -31,17 +31,17 @@ class ForwardCommands:
 
     def get_next_command(self):
         max_velocities = self.env.internal_state["max_command_velocities"]
+        min_x_velocity = (
+            self.zero_clip_threshold_percentage * max_velocities[0]
+        )
         goal_velocities = np.array([
-            self.env.np_rng.uniform(low=0.0, high=max_velocities[0]),
+            self.env.np_rng.uniform(
+                low=min_x_velocity,
+                high=max_velocities[0],
+            ),
             0.0,
             0.0,
         ])
-        goal_velocities = np.where(
-            np.abs(goal_velocities)
-            < self.zero_clip_threshold_percentage * max_velocities,
-            0.0,
-            goal_velocities,
-        )
         goal_velocities = np.where(
             self.env.np_rng.binomial(n=1, p=self.all_zero_chance),
             np.zeros(3),

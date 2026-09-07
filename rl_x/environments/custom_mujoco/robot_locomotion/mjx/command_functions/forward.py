@@ -38,19 +38,16 @@ class ForwardCommands:
         )
 
         max_velocities = internal_state["max_command_velocities"]
+        min_x_velocity = (
+            self.zero_clip_threshold_percentage * max_velocities[0]
+        )
         goal_x_velocity = jax.random.uniform(
             velocity_sampling_key,
             (),
-            minval=0.0,
+            minval=min_x_velocity,
             maxval=max_velocities[0],
         )
         goal_velocities = jnp.array([goal_x_velocity, 0.0, 0.0])
-        goal_velocities = jnp.where(
-            jnp.abs(goal_velocities)
-            < self.zero_clip_threshold_percentage * max_velocities,
-            0.0,
-            goal_velocities,
-        )
         goal_velocities = jnp.where(
             jax.random.bernoulli(all_zeroing_key, self.all_zero_chance),
             jnp.zeros(3),
