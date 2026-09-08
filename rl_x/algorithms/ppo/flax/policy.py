@@ -7,15 +7,36 @@ from flax.linen.initializers import constant, orthogonal
 
 from rl_x.environments.action_space_type import ActionSpaceType
 from rl_x.environments.observation_space_type import ObservationSpaceType
+from rl_x.algorithms.ppo.height_map import (
+    HeightMapObservationEncoder,
+    split_height_map_observation_indices,
+)
 
 
 def get_policy(config, env):
     action_space_type = env.general_properties.action_space_type
     observation_space_type = env.general_properties.observation_space_type
     policy_observation_indices = getattr(env, "policy_observation_indices", jnp.arange(env.single_observation_space.shape[0]))
+    proprioception_indices, height_map_indices = split_height_map_observation_indices(
+        config,
+        policy_observation_indices,
+        "policy",
+    )
+    height_map_cnn_output_dim = getattr(
+        config.algorithm,
+        "height_map_cnn_output_dim",
+        8,
+    )
 
     if action_space_type == ActionSpaceType.CONTINUOUS and observation_space_type == ObservationSpaceType.FLAT_VALUES:
-        return (Policy(env.single_action_space.shape, config.algorithm.std_dev, config.algorithm.nr_hidden_units, policy_observation_indices),
+        return (Policy(
+                    env.single_action_space.shape,
+                    config.algorithm.std_dev,
+                    config.algorithm.nr_hidden_units,
+                    proprioception_indices,
+                    height_map_indices,
+                    height_map_cnn_output_dim,
+                ),
                 get_processed_action_function(
                     config.algorithm.action_clipping_and_rescaling,
                     jnp.array(env.single_action_space.low), jnp.array(env.single_action_space.high)
@@ -26,11 +47,17 @@ class Policy(nn.Module):
     as_shape: Sequence[int]
     std_dev: float
     nr_hidden_units: int
-    policy_observation_indices: Sequence[int]
+    proprioception_indices: Sequence[int]
+    height_map_indices: Sequence[int]
+    height_map_cnn_output_dim: int
 
     @nn.compact
     def __call__(self, x):
-        x = x[..., self.policy_observation_indices]
+        x = HeightMapObservationEncoder(
+            proprioception_indices=self.proprioception_indices,
+            height_map_indices=self.height_map_indices,
+            height_map_output_dim=self.height_map_cnn_output_dim,
+        )(x)
         policy_mean = nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         policy_mean = nn.LayerNorm()(policy_mean)
         policy_mean = nn.elu(policy_mean)

@@ -10,6 +10,10 @@ On how the algorithms works, refer to the [Resources](#resources) section.
 **Implementation Details**
 - Based on the PPO-Clip version: Clipping the ratio of the new and old policy
 - The hyperparameters and network architecture for the ```flax_full_jit``` version are tuned for strong performance on many parallel environments for the custom mjx robot locomotion environment
+- The Flax implementations encode a configured `height_samples` observation
+  with a CNN before concatenating its latent representation with the remaining
+  flat state. The encoder is enabled by `height_map_cnn_enabled` and produces an
+  8-dimensional representation by default (`height_map_cnn_output_dim`).
 
 **Supported frameworks**
 - PyTorch, JAX (Flax)

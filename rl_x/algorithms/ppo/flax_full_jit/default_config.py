@@ -22,6 +22,8 @@ def get_config(algorithm_name):
     config.max_grad_norm = 5.0
     config.std_dev = 1.0
     config.action_clipping_and_rescaling = False
+    config.height_map_cnn_enabled = True
+    config.height_map_cnn_output_dim = 8
     config.evaluation_and_save_frequency = 17301504  # -1 to disable
     config.evaluation_active = True
 

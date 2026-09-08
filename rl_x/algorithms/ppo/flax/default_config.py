@@ -22,6 +22,8 @@ def get_config(algorithm_name):
     config.std_dev = 1.0
     config.action_clipping_and_rescaling = True
     config.nr_hidden_units = 256
+    config.height_map_cnn_enabled = True
+    config.height_map_cnn_output_dim = 8
     config.evaluation_frequency = 204800  # -1 to disable
     config.evaluation_episodes = 10
 
