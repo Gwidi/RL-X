@@ -154,7 +154,7 @@ class GpuBatchEvaluator:
         if np.any(dimensions != 3):
             raise ValueError("Ten wariant GPU wymaga condim=3 dla wszystkich kontaktow.")
         force_idx = jnp.asarray(addresses[:, None] + np.arange(4)[None, :])
-        ground_id = self.contact_map.ground_geom_id
+        support_ids = jnp.asarray(sorted(self.contact_map.support_geom_ids))
         foot_ids = jnp.asarray(sorted(self.contact_map.foot_geom_ids))
         shin_ids = jnp.asarray(sorted(self.contact_map.shin_geom_ids))
 
@@ -167,13 +167,13 @@ class GpuBatchEvaluator:
                 (geoms[:, 0] >= 0)
                 & (data._impl.contact.dist <= data._impl.contact.includemargin)
             )
-            ground = (geoms[:, 0] == ground_id) | (geoms[:, 1] == ground_id)
+            support = jnp.any(geoms[:, :, None] == support_ids, axis=(1, 2))
             foot = jnp.any(geoms[:, :, None] == foot_ids, axis=(1, 2))
             shin = jnp.any(geoms[:, :, None] == shin_ids, axis=(1, 2))
             # Equivalent of abs(mj_contactForce(...)[0]) for the pyramidal
             # condim=3 contacts used by intention.xml.
             normal = jnp.abs(jnp.sum(data._impl.efc_force[force_idx], axis=1))
-            valid = active & ground
+            valid = active & support
             return (
                 jnp.sum(jnp.where(valid & foot, normal, 0.0)),
                 jnp.sum(jnp.where(valid & shin, normal, 0.0)),

@@ -36,7 +36,7 @@ LEG_JOINTS = {
     "calf": ["rl_j2", "rr_j2", "fr_j2", "fl_j2"],
 }
 
-START_HEIGHT = 2.0
+START_HEIGHT = 1.5
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
 
@@ -127,6 +127,10 @@ class ContactMap:
 
     def __init__(self, model):
         self.ground_geom_id = model.geom("ground_2").id
+        self.support_geom_ids = {
+            self.ground_geom_id,
+            model.geom("front_landing_box").id,
+        }
         calf_body_ids = {
             model.body(name).id for name in ("fr_l2", "fl_l2", "rl_l2", "rr_l2")
         }
@@ -151,14 +155,15 @@ class ContactMap:
         if not self.foot_geom_ids:
             raise ValueError("No colliding foot spheres found in the MuJoCo model")
 
-    def ground_contact_forces(self, model, data):
+    def support_contact_forces(self, model, data):
+        """Measure contacts with either the floor or the front landing box."""
         foot_normal_force = 0.0
         shin_normal_force = 0.0
         contact_force = np.zeros(6)
         for contact_id in range(data.ncon):
             contact = data.contact[contact_id]
             pair = {contact.geom1, contact.geom2}
-            if self.ground_geom_id not in pair:
+            if not (pair & self.support_geom_ids):
                 continue
             mujoco.mj_contactForce(model, data, contact_id, contact_force)
             normal_force = abs(contact_force[0])
@@ -167,7 +172,10 @@ class ContactMap:
             if pair & self.shin_geom_ids:
                 shin_normal_force += normal_force
         non_foot_contact = any(
-            self.ground_geom_id in {data.contact[i].geom1, data.contact[i].geom2}
+            bool(
+                {data.contact[i].geom1, data.contact[i].geom2}
+                & self.support_geom_ids
+            )
             and not bool(
                 {data.contact[i].geom1, data.contact[i].geom2}
                 & self.foot_geom_ids
@@ -339,7 +347,7 @@ def evaluate_drop(
         peak_leg_current_proxy = max(peak_leg_current_proxy, float(np.max(np.abs(leg_ctrl))))
         peak_spine_current_proxy = max(peak_spine_current_proxy, abs(spine_ctrl))
         peak_leg_torque = max(peak_leg_torque, float(np.max(np.abs(joint_torque))))
-        foot_force, shin_force, current_non_foot_contact = contact_map.ground_contact_forces(model, data)
+        foot_force, shin_force, current_non_foot_contact = contact_map.support_contact_forces(model, data)
         non_foot_contact = non_foot_contact or current_non_foot_contact
         peak_foot_force = max(peak_foot_force, foot_force)
         peak_shin_force = max(peak_shin_force, shin_force)
