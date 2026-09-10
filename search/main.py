@@ -867,7 +867,7 @@ def print_comparison(results):
         print(f"Highest safe tested height ({label}): {maximum}")
 
 
-def save_plots(results, output_dir):
+def save_plots(results, output_dir, optimize_nominal_position):
     """Save comparison plots and a machine-readable summary without showing a GUI."""
     output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
@@ -942,6 +942,121 @@ def save_plots(results, output_dir):
     fig.savefig(convergence_path, dpi=150)
     plt.close(fig)
 
+    # Parameter plots are kept separate for both spine modes.  Combining all
+    # 12 leg joints and both controller modes in one chart made height trends
+    # difficult to read.
+    leg_labels = {
+        "rl": "tylna lewa",
+        "rr": "tylna prawa",
+        "fr": "przednia prawa",
+        "fl": "przednia lewa",
+    }
+    joint_colors = {
+        "rl": "#1976d2",
+        "rr": "#ef6c00",
+        "fr": "#388e3c",
+        "fl": "#7b1fa2",
+    }
+    gain_colors = {
+        "hip": "#1976d2",
+        "thigh": "#ef6c00",
+        "calf": "#388e3c",
+        "spine": "#7b1fa2",
+    }
+    gain_labels = {
+        "hip": "biodro",
+        "thigh": "udo",
+        "calf": "łydka",
+        "spine": "kręgosłup",
+    }
+
+    for lock_spine in modes:
+        mode_slug = "locked" if lock_spine else "unlocked"
+        mode_title = "zablokowany" if lock_spine else "aktywny"
+        mode_results = [results[h][lock_spine] for h in heights]
+        nominal_poses = [
+            nominal_pose_from_params(
+                result["params"], optimize_nominal_position, lock_spine
+            )
+            for result in mode_results
+        ]
+
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8), constrained_layout=True)
+        for axis, (group, names) in zip(axes.flat[:3], LEG_JOINTS.items()):
+            for name in names:
+                leg = name.split("_", 1)[0]
+                axis.plot(
+                    heights,
+                    [pose[name] for pose in nominal_poses],
+                    marker="o",
+                    color=joint_colors[leg],
+                    label=leg_labels[leg],
+                )
+            axis.set_title(f"Pozycje: {gain_labels[group]}")
+            axis.set_xlabel("Wysokość [m]")
+            axis.set_ylabel("Pozycja nominalna [rad]")
+            axis.grid(alpha=0.25)
+            axis.legend(fontsize="small")
+
+        spine_axis = axes[1, 1]
+        spine_axis.plot(
+            heights,
+            [pose["sp_j0"] for pose in nominal_poses],
+            marker="o",
+            color=gain_colors["spine"],
+        )
+        spine_axis.set_title(
+            "Pozycja: kręgosłup"
+            + (" (blokada mechaniczna)" if lock_spine else "")
+        )
+        spine_axis.set_xlabel("Wysokość [m]")
+        spine_axis.set_ylabel("Pozycja nominalna [rad]")
+        spine_axis.grid(alpha=0.25)
+        fig.suptitle(
+            f"Pozycje nominalne stawów — kręgosłup {mode_title}"
+        )
+        positions_path = output_dir / f"pozycje_stawow_{mode_slug}.png"
+        fig.savefig(positions_path, dpi=150)
+        plt.close(fig)
+
+        fig, (kp_axis, kd_axis) = plt.subplots(
+            1, 2, figsize=(13, 5), constrained_layout=True
+        )
+        gain_series = [
+            ("hip", 0, 3),
+            ("thigh", 1, 4),
+            ("calf", 2, 5),
+        ]
+        if not lock_spine:
+            gain_series.append(("spine", 6, 7))
+        for gain_name, kp_index, kd_index in gain_series:
+            kp_axis.plot(
+                heights,
+                [result["params"][kp_index] for result in mode_results],
+                marker="o",
+                color=gain_colors[gain_name],
+                label=gain_labels[gain_name],
+            )
+            kd_axis.plot(
+                heights,
+                [result["params"][kd_index] for result in mode_results],
+                marker="o",
+                color=gain_colors[gain_name],
+                label=gain_labels[gain_name],
+            )
+        for axis, symbol in ((kp_axis, "Kp"), (kd_axis, "Kd")):
+            axis.set_title(symbol)
+            axis.set_xlabel("Wysokość [m]")
+            axis.set_ylabel("Wartość regulatora")
+            axis.grid(alpha=0.25)
+            axis.legend()
+        fig.suptitle(
+            f"Parametry regulatorów — kręgosłup {mode_title}"
+        )
+        gains_path = output_dir / f"parametry_regulatorow_{mode_slug}.png"
+        fig.savefig(gains_path, dpi=150)
+        plt.close(fig)
+
     with (output_dir / "porownanie_kregoslupa.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow([
@@ -956,6 +1071,34 @@ def save_plots(results, output_dir):
                     result["total_motor_effort"], result["total_leg_effort"],
                     result["total_spine_effort"], result["peak_body_acceleration"],
                 ])
+
+    parameter_columns = [
+        *LEG_GAIN_PARAMETER_NAMES, "kp_spine", "kd_spine", *NOMINAL_POSE,
+    ]
+    with (output_dir / "parametry_wzgledem_wysokosci.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.DictWriter(
+            stream, fieldnames=["height", "spine", "safe", *parameter_columns]
+        )
+        writer.writeheader()
+        for height in heights:
+            for lock_spine, label in modes.items():
+                result = results[height][lock_spine]
+                params = result["params"]
+                pose = nominal_pose_from_params(
+                    params, optimize_nominal_position, lock_spine
+                )
+                row = {
+                    "height": height,
+                    "spine": label,
+                    "safe": is_safe(result),
+                    **dict(zip(LEG_GAIN_PARAMETER_NAMES, params[:6])),
+                    "kp_spine": "" if lock_spine else params[6],
+                    "kd_spine": "" if lock_spine else params[7],
+                    **pose,
+                }
+                writer.writerow(row)
     print(f"Wykresy i dane zapisano w: {output_dir}")
 
 
@@ -1013,7 +1156,7 @@ def main():
                     args.optimize_nominal_position,
                 )
         print_comparison(results)
-        save_plots(results, args.output_dir)
+        save_plots(results, args.output_dir, args.optimize_nominal_position)
         viewer_height = heights[-1]
         highest_modes = results[viewer_height]
         winner = comparison_winner(highest_modes[False], highest_modes[True])
