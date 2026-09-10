@@ -1,6 +1,17 @@
 <mujoco model="intention">
     <compiler angle="radian" meshdir="../meshes/hb40/" />
     <size njmax="500" nconmax="100" />
+    <!--
+        MJX expands all potential collision pairs at compile time.  Limit its
+        broad phase and retain the 32 deepest simultaneous contacts; MuJoCo's
+        CPU backend ignores these MJX-specific numeric options.  A quadruped
+        touching two supports needs far fewer than 32 active contact points,
+        while the uncapped graph for this model reserves 326 slots.
+    -->
+    <custom>
+        <numeric name="max_geom_pairs" data="16" />
+        <numeric name="max_contact_points" data="32" />
+    </custom>
     <asset>
         <mesh name="body" file="body.stl" scale="0.001 0.001 0.001" />
         <mesh name="rear" file="rear.stl" scale="0.001 0.001 0.001" />

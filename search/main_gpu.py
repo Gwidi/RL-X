@@ -5,13 +5,25 @@ Only the batch evaluator is replaced: candidate rollouts are vectorized and
 executed by MuJoCo MJX through JAX on one GPU.
 """
 
+import os
 import time
+
+# XLA's legacy latency estimator does not contain an H100 SoL table and emits
+# the same harmless warning for many kernels.  Keep errors visible while
+# making direct ``python main_gpu.py`` runs as quiet as the Slurm launcher.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
 
 import jax
 
-# main.py and MuJoCo use double precision.  Keep it here as well so changing
-# the backend does not silently reduce the precision of the optimization.
-jax.config.update("jax_enable_x64", True)
+# MJX is designed primarily for float32.  Keeping every contact solve in
+# float64 roughly doubles memory traffic and is significantly slower even on
+# datacenter GPUs.  Float64 remains available for CPU/MJX parity checks with
+# GPU_ENABLE_X64=1.
+GPU_ENABLE_X64 = os.environ.get("GPU_ENABLE_X64", "0").lower() in {
+    "1", "true", "yes", "on",
+}
+jax.config.update("jax_enable_x64", GPU_ENABLE_X64)
 import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
@@ -20,6 +32,7 @@ import numpy as np
 import main as cpu
 
 
+GPU_NUMPY_DTYPE = np.float64 if GPU_ENABLE_X64 else np.float32
 GPU_SOLVER_ITERATIONS = 30
 GPU_LINESEARCH_ITERATIONS = 15
 _EVALUATOR_CACHE = {}
@@ -299,7 +312,7 @@ class GpuBatchEvaluator:
 
     def __call__(self, params, start_height):
         """Evaluate a possibly short batch while retaining one compiled shape."""
-        params = np.asarray(params, dtype=np.float64)
+        params = np.asarray(params, dtype=GPU_NUMPY_DTYPE)
         count = len(params)
         if count > self.batch_size:
             raise ValueError("batch is larger than the compiled GPU batch")
@@ -433,7 +446,8 @@ def optimize_configuration_gpu(
         f"\nWysokosc: {start_height:g} m | kregoslup: {label} | "
         f"pozycja nominalna: "
         f"{'optymalizowana' if optimize_nominal_position else 'stala'} | "
-        f"{args.trials} prob, GPU: {device}",
+        f"{args.trials} prob, GPU: {device}, "
+        f"precyzja: {'float64' if GPU_ENABLE_X64 else 'float32'}",
         flush=True,
     )
     start = time.time()
