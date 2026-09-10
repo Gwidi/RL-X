@@ -17,6 +17,14 @@ class SimplifiedLandingReward:
         self.actuator_overload_coeff = env.env_config["reward"].get(
             "actuator_overload_coeff", 25.0
         )
+        # One-off signal emitted when a landing is evaluated.  This aligns the
+        # PPO objective with the binary outcome used by the landing curriculum.
+        self.landing_success_coeff = env.env_config["reward"].get(
+            "landing_success_coeff", 10.0
+        )
+        self.landing_failure_coeff = env.env_config["reward"].get(
+            "landing_failure_coeff", 10.0
+        )
         self.joint_vel_coeff = env.env_config["reward"].get("joint_vel_coeff", 0.1) * dt 
         self.action_rate_coeff = env.env_config["reward"].get("action_rate_coeff", 0.05) * dt
         
@@ -290,6 +298,7 @@ class SimplifiedLandingReward:
                 "landing_evaluated",
                 False,
             )
+        landing_event_reward = 0.0
 
         if (
             has_touched
@@ -305,6 +314,12 @@ class SimplifiedLandingReward:
             self.env.internal_state[
                 "landing_success"
             ] = landing_success
+
+            landing_event_reward = (
+                self.landing_success_coeff
+                if landing_success
+                else -self.landing_failure_coeff
+            )
 
             # ==========================================================
             # UPDATE CURRICULUM ONLY ONCE, WHEN LANDING IS EVALUATED
@@ -542,6 +557,7 @@ class SimplifiedLandingReward:
             + joint_vel_reward
             + torque_reward
             + actuator_overload_reward
+            + landing_event_reward
             + action_rate_reward
             + collision_reward
         )
@@ -558,6 +574,7 @@ class SimplifiedLandingReward:
         info["reward/joint_vel"] = joint_vel_reward
         info["reward/joint_torque"] = torque_reward
         info["reward/actuator_overload"] = actuator_overload_reward
+        info["reward/landing_event"] = landing_event_reward
         info["reward/action_rate"] = action_rate_reward
         info["reward/collision"] = collision_reward
         info["reward/total"] = reward
