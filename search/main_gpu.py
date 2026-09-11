@@ -463,10 +463,11 @@ def optimize_configuration_gpu(
 def main():
     # Reuse the complete CLI/report/plot/viewer flow.  Python resolves these
     # two replaced globals when cpu.main() invokes the optimization.
+    args = cpu.parse_args()
     require_gpu()
     cpu.run_search = run_search_gpu
     cpu.optimize_configuration = optimize_configuration_gpu
-    cpu.main()
+    cpu.main(args)
 
 
 if __name__ == "__main__":

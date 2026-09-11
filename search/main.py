@@ -725,8 +725,10 @@ def parse_args():
     parser.add_argument("--no-viewer", action="store_true", help="finish without opening the 3D viewer")
     parser.add_argument(
         "--output-dir",
+        "--output-folder",
         type=Path,
         default=OUTPUT_DIR,
+        metavar="FOLDER",
         help=f"directory for plots and CSV summaries (default: {OUTPUT_DIR})",
     )
     return parser.parse_args()
@@ -1135,8 +1137,9 @@ def save_single_run_plot(best, output_dir, lock_spine, height):
     print(f"Wykres zapisano w: {path}")
 
 
-def main():
-    args = parse_args()
+def main(args=None):
+    if args is None:
+        args = parse_args()
     batch_size = validate_args(args)
 
     if args.compare_spine:
