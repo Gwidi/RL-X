@@ -4,15 +4,10 @@ from concurrent.futures import ProcessPoolExecutor
 import os
 from pathlib import Path
 import time
-import warnings
 
 import mujoco
 import mujoco.viewer
 import numpy as np
-from scipy.stats import norm
-from sklearn.exceptions import ConvergenceWarning
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
     # self.nominal_joint_positions = np.array([
     #     -0.1, 0.8, -1.5,
@@ -185,18 +180,40 @@ class ContactMap:
         return foot_normal_force, shin_normal_force, non_foot_contact
 
 
-def reset_drop(data, model, jmap, start_height, nominal_pose):
-    """Reset to the exact initial state used by every optimization episode."""
+def quaternion_from_euler(roll, pitch, yaw):
+    """Return a MuJoCo wxyz quaternion for intrinsic XYZ Euler angles."""
+    cr, sr = np.cos(roll / 2.0), np.sin(roll / 2.0)
+    cp, sp = np.cos(pitch / 2.0), np.sin(pitch / 2.0)
+    cy, sy = np.cos(yaw / 2.0), np.sin(yaw / 2.0)
+    return np.array([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
+
+
+def reset_drop(
+    data, model, jmap, start_height, nominal_pose, initial_state=None,
+):
+    """Reset an episode, optionally applying validation-only disturbances."""
     mujoco.mj_resetData(model, data)
-    data.qpos[0:3] = [0.0, 0.0, start_height]
-    data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    initial_state = initial_state or {}
+    base_xy = initial_state.get("base_xy", (0.0, 0.0))
+    data.qpos[0:3] = [base_xy[0], base_xy[1], start_height]
+    data.qpos[3:7] = initial_state.get(
+        "quaternion", np.array([1.0, 0.0, 0.0, 0.0])
+    )
+    data.qvel[0:3] = initial_state.get("linear_velocity", np.zeros(3))
+    data.qvel[3:6] = initial_state.get("angular_velocity", np.zeros(3))
+    joint_offsets = initial_state.get("joint_offsets", {})
 
     targets = {}
     for name, nominal in nominal_pose.items():
         target = nominal
         targets[name] = target
         # Spawn without an artificial initial position error/impulse.
-        data.qpos[jmap.qpos_adr[name]] = target
+        data.qpos[jmap.qpos_adr[name]] = target + joint_offsets.get(name, 0.0)
 
     mujoco.mj_forward(model, data)
     return targets
@@ -300,12 +317,14 @@ def episode_steps(model, start_height):
 
 def evaluate_drop(
     model, data, jmap, contact_map, params, steps, start_height,
-    optimize_nominal_position, lock_spine,
+    optimize_nominal_position, lock_spine, initial_state=None,
 ):
     nominal_pose = nominal_pose_from_params(
         params, optimize_nominal_position, lock_spine
     )
-    targets = reset_drop(data, model, jmap, start_height, nominal_pose)
+    targets = reset_drop(
+        data, model, jmap, start_height, nominal_pose, initial_state
+    )
     kp, kd = build_gains(params, lock_spine)
     leg_dof_idx = np.array([
         jmap.dof_adr[name]
@@ -431,7 +450,7 @@ def sample_params(rng, bounds):
 
 def result_from_params(
     model, data, jmap, contact_map, params, steps, start_height,
-    optimize_nominal_position, lock_spine,
+    optimize_nominal_position, lock_spine, initial_state=None,
 ):
     (
         cost,
@@ -450,7 +469,7 @@ def result_from_params(
         peak_spine_current_proxy,
     ) = evaluate_drop(
         model, data, jmap, contact_map, params, steps, start_height,
-        optimize_nominal_position, lock_spine,
+        optimize_nominal_position, lock_spine, initial_state,
     )
     return {
         "cost": cost,
@@ -520,6 +539,13 @@ def propose_candidates(
     x_values, costs, count, candidate_pool, rng, exploration_fraction, xi,
     parameter_bounds,
 ):
+    import warnings
+
+    from scipy.stats import norm
+    from sklearn.exceptions import ConvergenceWarning
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
+
     lower = parameter_bounds[:, 0]
     span = parameter_bounds[:, 1] - lower
     x_normalized = (np.asarray(x_values) - lower) / span
@@ -731,6 +757,55 @@ def parse_args():
         metavar="FOLDER",
         help=f"directory for plots and CSV summaries (default: {OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "--validate-best",
+        action="store_true",
+        help="Monte Carlo validation of every best --compare-spine candidate",
+    )
+    parser.add_argument(
+        "--validation-trials", type=int, default=300,
+        help="Monte Carlo episodes per height and spine mode (default: 300)",
+    )
+    parser.add_argument(
+        "--validation-seed", type=int, default=None,
+        help="validation seed (default: search seed plus a fixed offset)",
+    )
+    parser.add_argument(
+        "--validation-height-jitter", type=float, default=0.02, metavar="M",
+        help="maximum uniform drop-height disturbance (default: +/-0.02 m)",
+    )
+    parser.add_argument(
+        "--validation-position-jitter", type=float, default=0.005, metavar="M",
+        help="maximum uniform horizontal base displacement (default: +/-0.005 m)",
+    )
+    parser.add_argument(
+        "--validation-angle-jitter-deg", type=float, default=2.0, metavar="DEG",
+        help="maximum uniform roll/pitch/yaw disturbance (default: +/-2 deg)",
+    )
+    parser.add_argument(
+        "--validation-linear-velocity-jitter", type=float, default=0.10,
+        metavar="M/S", help="maximum uniform initial linear velocity (default: +/-0.10 m/s)",
+    )
+    parser.add_argument(
+        "--validation-angular-velocity-jitter-deg", type=float, default=5.0,
+        metavar="DEG/S", help="maximum uniform initial angular velocity (default: +/-5 deg/s)",
+    )
+    parser.add_argument(
+        "--validation-joint-jitter", type=float, default=0.02, metavar="RAD",
+        help="maximum uniform initial joint-position error (default: +/-0.02 rad)",
+    )
+    parser.add_argument(
+        "--validation-mass-jitter", type=float, default=0.05, metavar="FRACTION",
+        help="maximum relative body mass/inertia disturbance (default: +/-0.05)",
+    )
+    parser.add_argument(
+        "--validation-friction-jitter", type=float, default=0.10, metavar="FRACTION",
+        help="maximum relative contact-friction disturbance (default: +/-0.10)",
+    )
+    parser.add_argument(
+        "--validation-actuator-jitter", type=float, default=0.05, metavar="FRACTION",
+        help="maximum relative actuator-strength disturbance (default: +/-0.05)",
+    )
     return parser.parse_args()
 
 
@@ -756,6 +831,31 @@ def validate_args(args):
         raise ValueError("--heights can only be used with --compare-spine")
     if args.heights is not None and any(height <= 0.0 for height in args.heights):
         raise ValueError("all --heights values must be positive")
+    if args.validate_best and not args.compare_spine:
+        raise ValueError("--validate-best requires --compare-spine")
+    if args.validation_trials < 1:
+        raise ValueError("--validation-trials must be at least 1")
+    validation_jitters = {
+        "--validation-height-jitter": args.validation_height_jitter,
+        "--validation-position-jitter": args.validation_position_jitter,
+        "--validation-angle-jitter-deg": args.validation_angle_jitter_deg,
+        "--validation-linear-velocity-jitter": args.validation_linear_velocity_jitter,
+        "--validation-angular-velocity-jitter-deg": args.validation_angular_velocity_jitter_deg,
+        "--validation-joint-jitter": args.validation_joint_jitter,
+        "--validation-mass-jitter": args.validation_mass_jitter,
+        "--validation-friction-jitter": args.validation_friction_jitter,
+        "--validation-actuator-jitter": args.validation_actuator_jitter,
+    }
+    for option, value in validation_jitters.items():
+        if value < 0.0:
+            raise ValueError(f"{option} must be non-negative")
+    for option in (
+        "--validation-mass-jitter",
+        "--validation-friction-jitter",
+        "--validation-actuator-jitter",
+    ):
+        if validation_jitters[option] >= 1.0:
+            raise ValueError(f"{option} must be less than 1")
     return batch_size
 
 
@@ -827,6 +927,316 @@ def is_safe(result):
         and result["peak_foot_force"] <= MAX_LANDING_FOOT_FORCE
         and result["peak_body_acceleration"] <= MAX_LANDING_BODY_ACCELERATION
     )
+
+
+def wilson_interval(successes, trials, z=1.959963984540054):
+    """Two-sided Wilson score interval for a binomial success probability."""
+    probability = successes / trials
+    denominator = 1.0 + z**2 / trials
+    centre = (probability + z**2 / (2.0 * trials)) / denominator
+    radius = z * np.sqrt(
+        probability * (1.0 - probability) / trials
+        + z**2 / (4.0 * trials**2)
+    ) / denominator
+    lower = 0.0 if successes == 0 else max(0.0, centre - radius)
+    upper = 1.0 if successes == trials else min(1.0, centre + radius)
+    return lower, upper
+
+
+def validation_scenarios(args, model, seed):
+    """Generate disturbances once so locked/unlocked receive paired tests."""
+    rng = np.random.default_rng(seed)
+    angle_limit = np.deg2rad(args.validation_angle_jitter_deg)
+    angular_velocity_limit = np.deg2rad(
+        args.validation_angular_velocity_jitter_deg
+    )
+    scenarios = []
+    for _ in range(args.validation_trials):
+        euler = rng.uniform(-angle_limit, angle_limit, 3)
+        scenarios.append({
+            "height_offset": rng.uniform(
+                -args.validation_height_jitter,
+                args.validation_height_jitter,
+            ),
+            "base_xy": rng.uniform(
+                -args.validation_position_jitter,
+                args.validation_position_jitter,
+                2,
+            ),
+            "euler": euler,
+            "quaternion": quaternion_from_euler(*euler),
+            "linear_velocity": rng.uniform(
+                -args.validation_linear_velocity_jitter,
+                args.validation_linear_velocity_jitter,
+                3,
+            ),
+            "angular_velocity": rng.uniform(
+                -angular_velocity_limit, angular_velocity_limit, 3
+            ),
+            "joint_offset_values": rng.uniform(
+                -args.validation_joint_jitter,
+                args.validation_joint_jitter,
+                len(NOMINAL_POSE),
+            ),
+            "body_scales": rng.uniform(
+                1.0 - args.validation_mass_jitter,
+                1.0 + args.validation_mass_jitter,
+                model.nbody,
+            ),
+            "friction_scales": rng.uniform(
+                1.0 - args.validation_friction_jitter,
+                1.0 + args.validation_friction_jitter,
+                model.ngeom,
+            ),
+            "actuator_scales": rng.uniform(
+                1.0 - args.validation_actuator_jitter,
+                1.0 + args.validation_actuator_jitter,
+                model.nu,
+            ),
+        })
+    return scenarios
+
+
+def validate_candidate(
+    best, height, lock_spine, optimize_nominal_position, scenarios,
+):
+    """Evaluate one optimized candidate under a fixed set of disturbances."""
+    model = mujoco.MjModel.from_xml_path(str(XML_PATH))
+    configure_spine(model, lock_spine)
+    data = mujoco.MjData(model)
+    jmap = JointMap(model, NOMINAL_POSE)
+    contact_map = ContactMap(model)
+    base_mass = model.body_mass.copy()
+    base_inertia = model.body_inertia.copy()
+    base_friction = model.geom_friction.copy()
+    base_gear = model.actuator_gear.copy()
+    trial_results = []
+
+    for trial_index, scenario in enumerate(scenarios):
+        body_scales = scenario["body_scales"]
+        model.body_mass[:] = base_mass * body_scales
+        model.body_inertia[:] = base_inertia * body_scales[:, None]
+        model.geom_friction[:] = (
+            base_friction * scenario["friction_scales"][:, None]
+        )
+        model.actuator_gear[:] = (
+            base_gear * scenario["actuator_scales"][:, None]
+        )
+        mujoco.mj_setConst(model, data)
+
+        disturbed_height = max(1e-4, height + scenario["height_offset"])
+        initial_state = {
+            "base_xy": scenario["base_xy"],
+            "quaternion": scenario["quaternion"],
+            "linear_velocity": scenario["linear_velocity"],
+            "angular_velocity": scenario["angular_velocity"],
+            "joint_offsets": dict(zip(
+                NOMINAL_POSE, scenario["joint_offset_values"]
+            )),
+        }
+        result = result_from_params(
+            model, data, jmap, contact_map, best["params"],
+            episode_steps(model, disturbed_height), disturbed_height,
+            optimize_nominal_position, lock_spine, initial_state,
+        )
+        result["safe"] = is_safe(result)
+        result["trial"] = trial_index
+        result["disturbed_height"] = disturbed_height
+        result["euler"] = scenario["euler"]
+        result["linear_velocity"] = scenario["linear_velocity"]
+        result["angular_velocity"] = scenario["angular_velocity"]
+        trial_results.append(result)
+
+    successes = sum(result["safe"] for result in trial_results)
+    confidence_low, confidence_high = wilson_interval(
+        successes, len(trial_results)
+    )
+    foot_forces = np.asarray([
+        result["peak_foot_force"] for result in trial_results
+    ])
+    accelerations = np.asarray([
+        result["peak_body_acceleration"] for result in trial_results
+    ])
+    summary = {
+        "trials": len(trial_results),
+        "successes": successes,
+        "success_rate": successes / len(trial_results),
+        "confidence_low": confidence_low,
+        "confidence_high": confidence_high,
+        "fail_no_foot_contact": sum(
+            not result["foot_contact"] for result in trial_results
+        ),
+        "fail_crashed": sum(result["crashed"] for result in trial_results),
+        "fail_non_foot_contact": sum(
+            result["non_foot_contact"] for result in trial_results
+        ),
+        "fail_foot_force": int(np.sum(
+            foot_forces > MAX_LANDING_FOOT_FORCE
+        )),
+        "fail_body_acceleration": int(np.sum(
+            accelerations > MAX_LANDING_BODY_ACCELERATION
+        )),
+        "foot_force_p95": float(np.percentile(foot_forces, 95)),
+        "foot_force_p99": float(np.percentile(foot_forces, 99)),
+        "foot_force_max": float(np.max(foot_forces)),
+        "body_acceleration_p95": float(np.percentile(accelerations, 95)),
+        "body_acceleration_p99": float(np.percentile(accelerations, 99)),
+        "body_acceleration_max": float(np.max(accelerations)),
+        "trials_data": trial_results,
+    }
+    return summary
+
+
+def save_validation_results(validation, output_dir, args, validation_seed):
+    """Save Monte Carlo summaries, individual trials, and a success plot."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_columns = [
+        "height", "spine", "trials", "successes", "success_rate",
+        "confidence_low", "confidence_high", "fail_no_foot_contact",
+        "fail_crashed", "fail_non_foot_contact", "fail_foot_force",
+        "fail_body_acceleration", "foot_force_p95", "foot_force_p99",
+        "foot_force_max", "body_acceleration_p95",
+        "body_acceleration_p99", "body_acceleration_max",
+    ]
+    with (output_dir / "walidacja_najlepszych.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.DictWriter(stream, fieldnames=summary_columns)
+        writer.writeheader()
+        for height in sorted(validation):
+            for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+                summary = validation[height][lock_spine]
+                writer.writerow({
+                    "height": height,
+                    "spine": label,
+                    **{key: summary[key] for key in summary_columns[2:]},
+                })
+
+    trial_columns = [
+        "height", "spine", "trial", "disturbed_height", "safe",
+        "crashed", "foot_contact", "non_foot_contact", "min_height",
+        "peak_foot_force", "peak_body_acceleration", "roll_deg",
+        "pitch_deg", "yaw_deg", "linear_speed", "angular_speed_deg_s",
+    ]
+    with (output_dir / "walidacja_proby.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=trial_columns)
+        writer.writeheader()
+        for height in sorted(validation):
+            for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+                for result in validation[height][lock_spine]["trials_data"]:
+                    roll, pitch, yaw = np.rad2deg(result["euler"])
+                    writer.writerow({
+                        "height": height,
+                        "spine": label,
+                        "trial": result["trial"],
+                        "disturbed_height": result["disturbed_height"],
+                        "safe": result["safe"],
+                        "crashed": result["crashed"],
+                        "foot_contact": result["foot_contact"],
+                        "non_foot_contact": result["non_foot_contact"],
+                        "min_height": result["min_height"],
+                        "peak_foot_force": result["peak_foot_force"],
+                        "peak_body_acceleration": result["peak_body_acceleration"],
+                        "roll_deg": roll,
+                        "pitch_deg": pitch,
+                        "yaw_deg": yaw,
+                        "linear_speed": np.linalg.norm(result["linear_velocity"]),
+                        "angular_speed_deg_s": np.rad2deg(
+                            np.linalg.norm(result["angular_velocity"])
+                        ),
+                    })
+
+    with (output_dir / "walidacja_ustawienia.csv").open(
+        "w", newline=""
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["parameter", "value"])
+        settings = {
+            "validation_seed": validation_seed,
+            "validation_trials": args.validation_trials,
+            "height_jitter_m": args.validation_height_jitter,
+            "horizontal_position_jitter_m": args.validation_position_jitter,
+            "orientation_jitter_deg": args.validation_angle_jitter_deg,
+            "linear_velocity_jitter_m_s": args.validation_linear_velocity_jitter,
+            "angular_velocity_jitter_deg_s": args.validation_angular_velocity_jitter_deg,
+            "joint_position_jitter_rad": args.validation_joint_jitter,
+            "mass_inertia_jitter_fraction": args.validation_mass_jitter,
+            "friction_jitter_fraction": args.validation_friction_jitter,
+            "actuator_strength_jitter_fraction": args.validation_actuator_jitter,
+        }
+        writer.writerows(settings.items())
+
+    os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axis = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    colors = {False: "#1976d2", True: "#d32f2f"}
+    for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+        heights = sorted(validation)
+        rates = np.asarray([
+            validation[height][lock_spine]["success_rate"] for height in heights
+        ])
+        lows = np.asarray([
+            validation[height][lock_spine]["confidence_low"] for height in heights
+        ])
+        highs = np.asarray([
+            validation[height][lock_spine]["confidence_high"] for height in heights
+        ])
+        axis.errorbar(
+            heights, 100.0 * rates,
+            yerr=np.vstack((
+                100.0 * np.maximum(0.0, rates - lows),
+                100.0 * np.maximum(0.0, highs - rates),
+            )),
+            marker="o", capsize=3, color=colors[lock_spine], label=label,
+        )
+    axis.set_title("Walidacja Monte Carlo najlepszych konfiguracji (95% CI)")
+    axis.set_xlabel("Nominalna wysokość [m]")
+    axis.set_ylabel("Bezpieczne próby [%]")
+    axis.set_ylim(-2.0, 102.0)
+    axis.grid(alpha=0.25)
+    axis.legend()
+    fig.savefig(output_dir / "walidacja_najlepszych.png", dpi=150)
+    plt.close(fig)
+
+
+def validate_comparison_best(
+    results, args, optimize_nominal_position, validation_seed,
+):
+    """Validate every best comparison candidate using paired disturbances."""
+    reference_model = mujoco.MjModel.from_xml_path(str(XML_PATH))
+    validation = {}
+    print(
+        f"\nWALIDACJA MONTE CARLO: {args.validation_trials} prob na "
+        f"wysokosc i tryb | seed: {validation_seed}",
+        flush=True,
+    )
+    for height_index, height in enumerate(sorted(results)):
+        scenario_seed = np.random.SeedSequence([
+            int(validation_seed) % (2**32), height_index
+        ])
+        scenarios = validation_scenarios(args, reference_model, scenario_seed)
+        validation[height] = {}
+        for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+            summary = validate_candidate(
+                results[height][lock_spine], height, lock_spine,
+                optimize_nominal_position, scenarios,
+            )
+            validation[height][lock_spine] = summary
+            print(
+                f"{height:6.2f} m | {label:8s} | "
+                f"{summary['successes']}/{summary['trials']} "
+                f"({summary['success_rate']:.1%}, 95% CI "
+                f"{summary['confidence_low']:.1%}-{summary['confidence_high']:.1%})",
+                flush=True,
+            )
+    save_validation_results(
+        validation, args.output_dir, args, validation_seed
+    )
+    print(f"Raport walidacji zapisano w: {args.output_dir}")
+    return validation
 
 
 def comparison_winner(unlocked, locked):
@@ -1160,6 +1570,14 @@ def main(args=None):
                 )
         print_comparison(results)
         save_plots(results, args.output_dir, args.optimize_nominal_position)
+        if args.validate_best:
+            validation_seed = args.validation_seed
+            if validation_seed is None:
+                validation_seed = (int(seed) + 104729) % (2**32)
+            validate_comparison_best(
+                results, args, args.optimize_nominal_position,
+                validation_seed,
+            )
         viewer_height = heights[-1]
         highest_modes = results[viewer_height]
         winner = comparison_winner(highest_modes[False], highest_modes[True])
