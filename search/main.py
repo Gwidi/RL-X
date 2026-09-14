@@ -35,12 +35,12 @@ START_HEIGHT = 1.5
 # Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
 STATIC_FRICTION = 0.37
 
-# Public HB4.0 / Silver Badger specifications do not provide certified shock
-# or foot-load ratings.  Use conservative research screening limits: 15 g at
-# the floating base and 2 kN total normal force across all feet.  For the
-# 13.12 kg model these are consistent (m * (15 g + g) ~= 2.06 kN).
-MAX_LANDING_FOOT_FORCE = 10_000.0              # total normal force, N
-MAX_LANDING_BODY_ACCELERATION = 20.0 * 9.81   # m/s^2 (15 g)
+# Screen structural load on each leg separately.  The total force across all
+# feet is retained as a diagnostic, but does not decide safety.
+MAX_LANDING_FOOT_FORCE = 3_000.0               # 10 ms average per foot, N
+MAX_LANDING_BODY_ACCELERATION = 10.0 * 9.81   # 50 ms average, m/s^2 (10 g)
+FOOT_FORCE_WINDOW = 0.010                      # seconds
+BODY_ACCELERATION_WINDOW = 0.050               # seconds
 LANDING_QUALITY_PENALTY = 1_000_000.0
 NOMINAL_POSITION_REGULARIZATION = 2.0
 
@@ -149,10 +149,17 @@ class ContactMap:
         }
         if not self.foot_geom_ids:
             raise ValueError("No colliding foot spheres found in the MuJoCo model")
+        self.foot_geom_to_leg = {
+            geom_id: model.body(model.geom_bodyid[geom_id]).name[:2]
+            for geom_id in self.foot_geom_ids
+        }
+        self.foot_legs = sorted(set(self.foot_geom_to_leg.values()))
 
     def support_contact_forces(self, model, data):
         """Measure contacts with either the floor or the front landing box."""
-        foot_normal_force = 0.0
+        foot_normal_forces = {
+            leg: 0.0 for leg in self.foot_geom_to_leg.values()
+        }
         shin_normal_force = 0.0
         contact_force = np.zeros(6)
         for contact_id in range(data.ncon):
@@ -162,8 +169,10 @@ class ContactMap:
                 continue
             mujoco.mj_contactForce(model, data, contact_id, contact_force)
             normal_force = abs(contact_force[0])
-            if pair & self.foot_geom_ids:
-                foot_normal_force += normal_force
+            for foot_geom_id in pair & self.foot_geom_ids:
+                foot_normal_forces[
+                    self.foot_geom_to_leg[foot_geom_id]
+                ] += normal_force
             if pair & self.shin_geom_ids:
                 shin_normal_force += normal_force
         non_foot_contact = any(
@@ -177,7 +186,18 @@ class ContactMap:
             )
             for i in range(data.ncon)
         )
-        return foot_normal_force, shin_normal_force, non_foot_contact
+        total_foot_force = sum(foot_normal_forces.values())
+        max_single_foot_force = max(foot_normal_forces.values(), default=0.0)
+        force_by_foot = np.asarray([
+            foot_normal_forces[leg] for leg in self.foot_legs
+        ])
+        return (
+            total_foot_force,
+            max_single_foot_force,
+            force_by_foot,
+            shin_normal_force,
+            non_foot_contact,
+        )
 
 
 def quaternion_from_euler(roll, pitch, yaw):
@@ -335,8 +355,11 @@ def evaluate_drop(
     min_body_height = float("inf")
     peak_leg_torque = 0.0
     peak_foot_force = 0.0
+    peak_foot_force_raw = 0.0
+    peak_total_foot_force = 0.0
     peak_shin_force = 0.0
     peak_body_acceleration = 0.0
+    peak_body_acceleration_raw = 0.0
     total_leg_effort = 0.0
     total_spine_effort = 0.0
     peak_leg_current_proxy = 0.0
@@ -345,6 +368,14 @@ def evaluate_drop(
     shin_contact = False
     non_foot_contact = False
     crashed = False
+    acceleration_window_steps = max(
+        1, int(np.ceil(BODY_ACCELERATION_WINDOW / model.opt.timestep))
+    )
+    acceleration_history = []
+    foot_force_window_steps = max(
+        1, int(np.ceil(FOOT_FORCE_WINDOW / model.opt.timestep))
+    )
+    foot_force_history = []
 
     for _ in range(steps):
         controlled_step(model, data, jmap, targets, kp, kd)
@@ -366,17 +397,50 @@ def evaluate_drop(
         peak_leg_current_proxy = max(peak_leg_current_proxy, float(np.max(np.abs(leg_ctrl))))
         peak_spine_current_proxy = max(peak_spine_current_proxy, abs(spine_ctrl))
         peak_leg_torque = max(peak_leg_torque, float(np.max(np.abs(joint_torque))))
-        foot_force, shin_force, current_non_foot_contact = contact_map.support_contact_forces(model, data)
+        (
+            total_foot_force,
+            max_single_foot_force,
+            force_by_foot,
+            shin_force,
+            current_non_foot_contact,
+        ) = contact_map.support_contact_forces(model, data)
         non_foot_contact = non_foot_contact or current_non_foot_contact
-        peak_foot_force = max(peak_foot_force, foot_force)
+        peak_foot_force_raw = max(
+            peak_foot_force_raw, max_single_foot_force
+        )
+        peak_total_foot_force = max(
+            peak_total_foot_force, total_foot_force
+        )
         peak_shin_force = max(peak_shin_force, shin_force)
-        if foot_force > 0.0:
+        if total_foot_force > 0.0:
             foot_contact = True
+        if foot_contact:
+            foot_force_history.append(force_by_foot)
+            if len(foot_force_history) > foot_force_window_steps:
+                foot_force_history.pop(0)
+            if len(foot_force_history) == foot_force_window_steps:
+                window_average_by_foot = np.mean(
+                    foot_force_history, axis=0
+                )
+                peak_foot_force = max(
+                    peak_foot_force,
+                    float(np.max(window_average_by_foot)),
+                )
         # Measure impact acceleration only once landing has started; this
         # excludes the constant gravitational acceleration during free fall.
         if foot_contact or shin_force > 0.0:
             body_acceleration = float(np.linalg.norm(data.qacc[0:3]))
-            peak_body_acceleration = max(peak_body_acceleration, body_acceleration)
+            peak_body_acceleration_raw = max(
+                peak_body_acceleration_raw, body_acceleration
+            )
+            acceleration_history.append(body_acceleration)
+            if len(acceleration_history) > acceleration_window_steps:
+                acceleration_history.pop(0)
+            if len(acceleration_history) == acceleration_window_steps:
+                window_average = float(np.mean(acceleration_history))
+                peak_body_acceleration = max(
+                    peak_body_acceleration, window_average
+                )
         if shin_force > 0.0:
             shin_contact = True
 
@@ -412,8 +476,11 @@ def evaluate_drop(
         peak_leg_torque,
         shin_contact,
         peak_foot_force,
+        peak_foot_force_raw,
+        peak_total_foot_force,
         peak_shin_force,
         peak_body_acceleration,
+        peak_body_acceleration_raw,
         total_leg_effort,
         total_spine_effort,
         peak_leg_current_proxy,
@@ -461,8 +528,11 @@ def result_from_params(
         peak_leg_torque,
         shin_contact,
         peak_foot_force,
+        peak_foot_force_raw,
+        peak_total_foot_force,
         peak_shin_force,
         peak_body_acceleration,
+        peak_body_acceleration_raw,
         total_leg_effort,
         total_spine_effort,
         peak_leg_current_proxy,
@@ -480,8 +550,11 @@ def result_from_params(
         "peak_leg_torque": peak_leg_torque,
         "shin_contact": shin_contact,
         "peak_foot_force": peak_foot_force,
+        "peak_foot_force_raw": peak_foot_force_raw,
+        "peak_total_foot_force": peak_total_foot_force,
         "peak_shin_force": peak_shin_force,
         "peak_body_acceleration": peak_body_acceleration,
+        "peak_body_acceleration_raw": peak_body_acceleration_raw,
         "total_leg_effort": total_leg_effort,
         "total_spine_effort": total_spine_effort,
         "total_motor_effort": total_leg_effort + total_spine_effort,
@@ -876,7 +949,19 @@ def print_result(best, model, optimize_nominal_position, lock_spine):
         print("Najlepsza pozycja nominalna:")
         for name in nominal_position_names(True, lock_spine):
             print(f"  {name}: {nominal_pose[name]:.4f} rad")
-    print(f"Szczytowa sila stop: {best['peak_foot_force']:.1f} N")
+    print(
+        f"Szczytowa srednia sila jednej stopy (okno 10 ms): "
+        f"{best['peak_foot_force']:.1f} N "
+        f"(limit: {MAX_LANDING_FOOT_FORCE:.0f} N)"
+    )
+    print(
+        f"Surowy chwilowy pik sily jednej stopy: "
+        f"{best['peak_foot_force_raw']:.1f} N"
+    )
+    print(
+        f"Szczytowa suma sil wszystkich stop: "
+        f"{best['peak_total_foot_force']:.1f} N"
+    )
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
     print(f"Calka kwadratu komend wszystkich silnikow: {best['total_motor_effort']:.3f}")
@@ -885,8 +970,14 @@ def print_result(best, model, optimize_nominal_position, lock_spine):
     print(f"Szczytowa komenda silnika nogi: {best['peak_leg_current_proxy']:.3f}")
     print(f"Szczytowa komenda silnika kregoslupa: {best['peak_spine_current_proxy']:.3f}")
     print(
-        f"Szczytowe przyspieszenie korpusu: {best['peak_body_acceleration']:.1f} m/s^2 "
+        f"Szczytowe srednie przyspieszenie korpusu (okno 50 ms): "
+        f"{best['peak_body_acceleration']:.1f} m/s^2 "
         f"({best['peak_body_acceleration'] / abs(model.opt.gravity[2]):.1f} g)"
+    )
+    print(
+        f"Surowy chwilowy pik przyspieszenia: "
+        f"{best['peak_body_acceleration_raw']:.1f} m/s^2 "
+        f"({best['peak_body_acceleration_raw'] / abs(model.opt.gravity[2]):.1f} g)"
     )
 
 
@@ -1054,8 +1145,17 @@ def validate_candidate(
     foot_forces = np.asarray([
         result["peak_foot_force"] for result in trial_results
     ])
+    raw_foot_forces = np.asarray([
+        result["peak_foot_force_raw"] for result in trial_results
+    ])
+    total_foot_forces = np.asarray([
+        result["peak_total_foot_force"] for result in trial_results
+    ])
     accelerations = np.asarray([
         result["peak_body_acceleration"] for result in trial_results
+    ])
+    raw_accelerations = np.asarray([
+        result["peak_body_acceleration_raw"] for result in trial_results
     ])
     summary = {
         "trials": len(trial_results),
@@ -1079,9 +1179,18 @@ def validate_candidate(
         "foot_force_p95": float(np.percentile(foot_forces, 95)),
         "foot_force_p99": float(np.percentile(foot_forces, 99)),
         "foot_force_max": float(np.max(foot_forces)),
+        "raw_foot_force_p95": float(np.percentile(raw_foot_forces, 95)),
+        "raw_foot_force_p99": float(np.percentile(raw_foot_forces, 99)),
+        "raw_foot_force_max": float(np.max(raw_foot_forces)),
+        "total_foot_force_p95": float(np.percentile(total_foot_forces, 95)),
+        "total_foot_force_p99": float(np.percentile(total_foot_forces, 99)),
+        "total_foot_force_max": float(np.max(total_foot_forces)),
         "body_acceleration_p95": float(np.percentile(accelerations, 95)),
         "body_acceleration_p99": float(np.percentile(accelerations, 99)),
         "body_acceleration_max": float(np.max(accelerations)),
+        "raw_body_acceleration_p95": float(np.percentile(raw_accelerations, 95)),
+        "raw_body_acceleration_p99": float(np.percentile(raw_accelerations, 99)),
+        "raw_body_acceleration_max": float(np.max(raw_accelerations)),
         "trials_data": trial_results,
     }
     return summary
@@ -1095,8 +1204,12 @@ def save_validation_results(validation, output_dir, args, validation_seed):
         "confidence_low", "confidence_high", "fail_no_foot_contact",
         "fail_crashed", "fail_non_foot_contact", "fail_foot_force",
         "fail_body_acceleration", "foot_force_p95", "foot_force_p99",
-        "foot_force_max", "body_acceleration_p95",
+        "foot_force_max", "raw_foot_force_p95", "raw_foot_force_p99",
+        "raw_foot_force_max", "total_foot_force_p95", "total_foot_force_p99",
+        "total_foot_force_max", "body_acceleration_p95",
         "body_acceleration_p99", "body_acceleration_max",
+        "raw_body_acceleration_p95", "raw_body_acceleration_p99",
+        "raw_body_acceleration_max",
     ]
     with (output_dir / "walidacja_najlepszych.csv").open(
         "w", newline=""
@@ -1115,7 +1228,8 @@ def save_validation_results(validation, output_dir, args, validation_seed):
     trial_columns = [
         "height", "spine", "trial", "disturbed_height", "safe",
         "crashed", "foot_contact", "non_foot_contact", "min_height",
-        "peak_foot_force", "peak_body_acceleration", "roll_deg",
+        "peak_foot_force", "peak_foot_force_raw", "peak_total_foot_force",
+        "peak_body_acceleration", "peak_body_acceleration_raw", "roll_deg",
         "pitch_deg", "yaw_deg", "linear_speed", "angular_speed_deg_s",
     ]
     with (output_dir / "walidacja_proby.csv").open("w", newline="") as stream:
@@ -1136,7 +1250,10 @@ def save_validation_results(validation, output_dir, args, validation_seed):
                         "non_foot_contact": result["non_foot_contact"],
                         "min_height": result["min_height"],
                         "peak_foot_force": result["peak_foot_force"],
+                        "peak_foot_force_raw": result["peak_foot_force_raw"],
+                        "peak_total_foot_force": result["peak_total_foot_force"],
                         "peak_body_acceleration": result["peak_body_acceleration"],
+                        "peak_body_acceleration_raw": result["peak_body_acceleration_raw"],
                         "roll_deg": roll,
                         "pitch_deg": pitch,
                         "yaw_deg": yaw,
@@ -1154,6 +1271,14 @@ def save_validation_results(validation, output_dir, args, validation_seed):
         settings = {
             "validation_seed": validation_seed,
             "validation_trials": args.validation_trials,
+            "single_foot_force_limit_n": MAX_LANDING_FOOT_FORCE,
+            "foot_force_window_ms": FOOT_FORCE_WINDOW * 1000.0,
+            "body_acceleration_limit_g": (
+                MAX_LANDING_BODY_ACCELERATION / 9.81
+            ),
+            "body_acceleration_window_ms": (
+                BODY_ACCELERATION_WINDOW * 1000.0
+            ),
             "height_jitter_m": args.validation_height_jitter,
             "horizontal_position_jitter_m": args.validation_position_jitter,
             "orientation_jitter_deg": args.validation_angle_jitter_deg,
@@ -1473,7 +1598,10 @@ def save_plots(results, output_dir, optimize_nominal_position):
         writer = csv.writer(stream)
         writer.writerow([
             "height", "spine", "safe", "cost", "total_motor_effort",
-            "total_leg_effort", "total_spine_effort", "peak_body_acceleration",
+            "total_leg_effort", "total_spine_effort", "peak_foot_force",
+            "peak_foot_force_raw", "peak_total_foot_force",
+            "peak_body_acceleration",
+            "peak_body_acceleration_raw",
         ])
         for height in heights:
             for lock_spine, label in modes.items():
@@ -1481,7 +1609,11 @@ def save_plots(results, output_dir, optimize_nominal_position):
                 writer.writerow([
                     height, label, is_safe(result), result["cost"],
                     result["total_motor_effort"], result["total_leg_effort"],
-                    result["total_spine_effort"], result["peak_body_acceleration"],
+                    result["total_spine_effort"], result["peak_foot_force"],
+                    result["peak_foot_force_raw"],
+                    result["peak_total_foot_force"],
+                    result["peak_body_acceleration"],
+                    result["peak_body_acceleration_raw"],
                 ])
 
     parameter_columns = [
