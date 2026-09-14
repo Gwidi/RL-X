@@ -122,10 +122,12 @@ class ContactMap:
 
     def __init__(self, model):
         self.ground_geom_id = model.geom("ground_2").id
-        self.support_geom_ids = {
-            self.ground_geom_id,
-            model.geom("front_landing_box").id,
-        }
+        self.support_geom_ids = {self.ground_geom_id}
+        landing_box_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, "front_landing_box"
+        )
+        if landing_box_id != -1:
+            self.support_geom_ids.add(landing_box_id)
         calf_body_ids = {
             model.body(name).id for name in ("fr_l2", "fl_l2", "rl_l2", "rr_l2")
         }
