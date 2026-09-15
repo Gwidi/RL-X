@@ -871,27 +871,27 @@ def parse_args():
     )
     parser.add_argument(
         "--validation-linear-velocity-jitter", type=float, default=0.10,
-        metavar="M/S", help="maximum uniform initial linear velocity (default: +/-0.10 m/s)",
+        metavar="M/S",
+        help=(
+            "maximum uniform initial horizontal velocity in X/Y; "
+            "Z remains zero (default: +/-0.10 m/s)"
+        ),
     )
     parser.add_argument(
-        "--validation-angular-velocity-jitter-deg", type=float, default=5.0,
-        metavar="DEG/S", help="maximum uniform initial angular velocity (default: +/-5 deg/s)",
+        "--validation-angular-velocity-jitter-deg", type=float, default=1.0,
+        metavar="DEG/S", help="maximum uniform initial angular velocity (default: +/-1 deg/s)",
     )
     parser.add_argument(
         "--validation-joint-jitter", type=float, default=0.02, metavar="RAD",
         help="maximum uniform initial joint-position error (default: +/-0.02 rad)",
     )
     parser.add_argument(
-        "--validation-mass-jitter", type=float, default=0.05, metavar="FRACTION",
-        help="maximum relative body mass/inertia disturbance (default: +/-0.05)",
+        "--validation-mass-jitter", type=float, default=0.02, metavar="FRACTION",
+        help="maximum relative body mass/inertia disturbance (default: +/-0.02)",
     )
     parser.add_argument(
-        "--validation-friction-jitter", type=float, default=0.10, metavar="FRACTION",
-        help="maximum relative contact-friction disturbance (default: +/-0.10)",
-    )
-    parser.add_argument(
-        "--validation-actuator-jitter", type=float, default=0.05, metavar="FRACTION",
-        help="maximum relative actuator-strength disturbance (default: +/-0.05)",
+        "--validation-friction-jitter", type=float, default=0.01, metavar="FRACTION",
+        help="maximum relative contact-friction disturbance (default: +/-0.01)",
     )
     return parser.parse_args()
 
@@ -937,7 +937,6 @@ def validate_args(args):
         "--validation-joint-jitter": args.validation_joint_jitter,
         "--validation-mass-jitter": args.validation_mass_jitter,
         "--validation-friction-jitter": args.validation_friction_jitter,
-        "--validation-actuator-jitter": args.validation_actuator_jitter,
     }
     for option, value in validation_jitters.items():
         if value < 0.0:
@@ -945,7 +944,6 @@ def validate_args(args):
     for option in (
         "--validation-mass-jitter",
         "--validation-friction-jitter",
-        "--validation-actuator-jitter",
     ):
         if validation_jitters[option] >= 1.0:
             raise ValueError(f"{option} must be less than 1")
@@ -1076,10 +1074,13 @@ def validation_scenarios(args, model, seed):
             ),
             "euler": euler,
             "quaternion": quaternion_from_euler(*euler),
-            "linear_velocity": rng.uniform(
-                -args.validation_linear_velocity_jitter,
-                args.validation_linear_velocity_jitter,
-                3,
+            "linear_velocity": np.append(
+                rng.uniform(
+                    -args.validation_linear_velocity_jitter,
+                    args.validation_linear_velocity_jitter,
+                    2,
+                ),
+                0.0,
             ),
             "angular_velocity": rng.uniform(
                 -angular_velocity_limit, angular_velocity_limit, 3
@@ -1099,11 +1100,6 @@ def validation_scenarios(args, model, seed):
                 1.0 + args.validation_friction_jitter,
                 model.ngeom,
             ),
-            "actuator_scales": rng.uniform(
-                1.0 - args.validation_actuator_jitter,
-                1.0 + args.validation_actuator_jitter,
-                model.nu,
-            ),
         })
     return scenarios
 
@@ -1120,7 +1116,6 @@ def validate_candidate(
     base_mass = model.body_mass.copy()
     base_inertia = model.body_inertia.copy()
     base_friction = model.geom_friction.copy()
-    base_gear = model.actuator_gear.copy()
     trial_results = []
 
     for trial_index, scenario in enumerate(scenarios):
@@ -1129,9 +1124,6 @@ def validate_candidate(
         model.body_inertia[:] = base_inertia * body_scales[:, None]
         model.geom_friction[:] = (
             base_friction * scenario["friction_scales"][:, None]
-        )
-        model.actuator_gear[:] = (
-            base_gear * scenario["actuator_scales"][:, None]
         )
         mujoco.mj_setConst(model, data)
 
@@ -1310,7 +1302,6 @@ def save_validation_results(validation, output_dir, args, validation_seed):
             "joint_position_jitter_rad": args.validation_joint_jitter,
             "mass_inertia_jitter_fraction": args.validation_mass_jitter,
             "friction_jitter_fraction": args.validation_friction_jitter,
-            "actuator_strength_jitter_fraction": args.validation_actuator_jitter,
         }
         writer.writerows(settings.items())
 
