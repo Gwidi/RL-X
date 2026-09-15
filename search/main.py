@@ -809,6 +809,15 @@ def parse_args():
         action="store_true",
         help="compare locked and unlocked spines over a series of drop heights",
     )
+    spine_mode.add_argument(
+        "--compare-heights",
+        choices=("locked", "unlocked"),
+        metavar="MODE",
+        help=(
+            "optimize a series of drop heights for one spine mode "
+            "(locked or unlocked)"
+        ),
+    )
     parser.add_argument(
         "--height",
         type=float,
@@ -821,7 +830,10 @@ def parse_args():
         nargs="+",
         default=None,
         metavar="M",
-        help="drop heights for --compare-spine (default: 1 2 3 4 5)",
+        help=(
+            "drop heights for --compare-spine or --compare-heights "
+            "(default: 1 2 3 4 5)"
+        ),
     )
     parser.add_argument("--no-viewer", action="store_true", help="finish without opening the 3D viewer")
     parser.add_argument(
@@ -835,7 +847,7 @@ def parse_args():
     parser.add_argument(
         "--validate-best",
         action="store_true",
-        help="Monte Carlo validation of every best --compare-spine candidate",
+        help="Monte Carlo validation of every best height-series candidate",
     )
     parser.add_argument(
         "--validation-trials", type=int, default=300,
@@ -902,12 +914,18 @@ def validate_args(args):
         raise ValueError("--xi must be non-negative")
     if args.height <= 0.0:
         raise ValueError("--height must be positive")
-    if args.heights is not None and not args.compare_spine:
-        raise ValueError("--heights can only be used with --compare-spine")
+    compare_heights = getattr(args, "compare_heights", None)
+    height_series = args.compare_spine or compare_heights is not None
+    if args.heights is not None and not height_series:
+        raise ValueError(
+            "--heights can only be used with --compare-spine or --compare-heights"
+        )
     if args.heights is not None and any(height <= 0.0 for height in args.heights):
         raise ValueError("all --heights values must be positive")
-    if args.validate_best and not args.compare_spine:
-        raise ValueError("--validate-best requires --compare-spine")
+    if args.validate_best and not height_series:
+        raise ValueError(
+            "--validate-best requires --compare-spine or --compare-heights"
+        )
     if args.validation_trials < 1:
         raise ValueError("--validation-trials must be at least 1")
     validation_jitters = {
@@ -1218,8 +1236,10 @@ def save_validation_results(validation, output_dir, args, validation_seed):
     ) as stream:
         writer = csv.DictWriter(stream, fieldnames=summary_columns)
         writer.writeheader()
+        modes = sorted(validation[next(iter(validation))])
         for height in sorted(validation):
-            for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+            for lock_spine in modes:
+                label = "LOCKED" if lock_spine else "UNLOCKED"
                 summary = validation[height][lock_spine]
                 writer.writerow({
                     "height": height,
@@ -1238,7 +1258,8 @@ def save_validation_results(validation, output_dir, args, validation_seed):
         writer = csv.DictWriter(stream, fieldnames=trial_columns)
         writer.writeheader()
         for height in sorted(validation):
-            for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+            for lock_spine in modes:
+                label = "LOCKED" if lock_spine else "UNLOCKED"
                 for result in validation[height][lock_spine]["trials_data"]:
                     roll, pitch, yaw = np.rad2deg(result["euler"])
                     writer.writerow({
@@ -1300,7 +1321,8 @@ def save_validation_results(validation, output_dir, args, validation_seed):
 
     fig, axis = plt.subplots(figsize=(11, 6), constrained_layout=True)
     colors = {False: "#1976d2", True: "#d32f2f"}
-    for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+    for lock_spine in modes:
+        label = "LOCKED" if lock_spine else "UNLOCKED"
         heights = sorted(validation)
         rates = np.asarray([
             validation[height][lock_spine]["success_rate"] for height in heights
@@ -1332,7 +1354,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
 def validate_comparison_best(
     results, args, optimize_nominal_position, validation_seed,
 ):
-    """Validate every best comparison candidate using paired disturbances."""
+    """Validate every best height-series candidate using shared disturbances."""
     reference_model = mujoco.MjModel.from_xml_path(str(XML_PATH))
     validation = {}
     print(
@@ -1346,7 +1368,8 @@ def validate_comparison_best(
         ])
         scenarios = validation_scenarios(args, reference_model, scenario_seed)
         validation[height] = {}
-        for lock_spine, label in ((False, "UNLOCKED"), (True, "LOCKED")):
+        for lock_spine in sorted(results[height]):
+            label = "LOCKED" if lock_spine else "UNLOCKED"
             summary = validate_candidate(
                 results[height][lock_spine], height, lock_spine,
                 optimize_nominal_position, scenarios,
@@ -1379,6 +1402,29 @@ def comparison_winner(unlocked, locked):
 
 
 def print_comparison(results):
+    available_modes = sorted(results[next(iter(results))])
+    if len(available_modes) == 1:
+        lock_spine = available_modes[0]
+        label = "LOCKED" if lock_spine else "UNLOCKED"
+        print(f"\nWYNIKI WZGLEDEM WYSOKOSCI: {label}")
+        print("height | safe / total / legs / spine")
+        print("-" * 48)
+        for height, modes in results.items():
+            result = modes[lock_spine]
+            print(
+                f"{height:6.2f} | {str(is_safe(result)):5s} / "
+                f"{result['total_motor_effort']:6.3f} / "
+                f"{result['total_leg_effort']:6.3f} / "
+                f"{result['total_spine_effort']:6.3f}"
+            )
+        safe_heights = [
+            height for height, modes in results.items()
+            if is_safe(modes[lock_spine])
+        ]
+        maximum = f"{max(safe_heights):g} m" if safe_heights else "none"
+        print(f"Highest safe tested height ({label}): {maximum}")
+        return
+
     print("\nPOROWNANIE: minimalny prad przy zachowaniu przezycia")
     print(
         "height | unlocked: safe / total / legs / spine | "
@@ -1416,7 +1462,11 @@ def save_plots(results, output_dir, optimize_nominal_position):
     import matplotlib.pyplot as plt
 
     heights = sorted(results)
-    modes = {False: "UNLOCKED", True: "LOCKED"}
+    available_modes = sorted(results[next(iter(results))])
+    modes = {
+        lock_spine: "LOCKED" if lock_spine else "UNLOCKED"
+        for lock_spine in available_modes
+    }
     colors = {False: "#1976d2", True: "#d32f2f"}
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
@@ -1454,7 +1504,11 @@ def save_plots(results, output_dir, optimize_nominal_position):
     axis.set_ylim(-0.1, 1.1)
     axis.grid(alpha=0.25)
     axis.legend()
-    fig.suptitle("Porównanie kręgosłupa: odblokowany vs zablokowany")
+    if len(modes) == 2:
+        figure_title = "Porównanie kręgosłupa: odblokowany vs zablokowany"
+    else:
+        figure_title = f"Wyniki względem wysokości: {next(iter(modes.values()))}"
+    fig.suptitle(figure_title)
     comparison_path = output_dir / "porownanie_kregoslupa.png"
     fig.savefig(comparison_path, dpi=150)
     plt.close(fig)
@@ -1686,18 +1740,24 @@ def main(args=None):
         args = parse_args()
     batch_size = validate_args(args)
 
-    if args.compare_spine:
+    compare_heights = getattr(args, "compare_heights", None)
+    height_series = args.compare_spine or compare_heights is not None
+    if height_series:
         heights = sorted(set(args.heights or [1.0, 2.0, 3.0, 4.0, 5.0]))
-        # A concrete shared seed makes the two modes directly comparable even
-        # when the caller did not request repeatability explicitly.
+        # A concrete shared seed makes heights and, when present, both modes
+        # reproducible even when the caller did not request it explicitly.
         seed = args.seed
         if seed is None:
             seed = int(np.random.SeedSequence().generate_state(1)[0])
-        print(f"Shared comparison seed: {seed}")
+        print(f"Shared height-series seed: {seed}")
+        if args.compare_spine:
+            spine_modes = (False, True)
+        else:
+            spine_modes = (compare_heights == "locked",)
         results = {}
         for height in heights:
             results[height] = {}
-            for lock_spine in (False, True):
+            for lock_spine in spine_modes:
                 results[height][lock_spine] = optimize_configuration(
                     args, batch_size, lock_spine, height, seed,
                     args.optimize_nominal_position,
@@ -1714,21 +1774,26 @@ def main(args=None):
             )
         viewer_height = heights[-1]
         highest_modes = results[viewer_height]
-        winner = comparison_winner(highest_modes[False], highest_modes[True])
-        if winner in ("NO SAFE", "TIE"):
-            viewer_lock = min(
-                (False, True),
-                key=lambda locked: (
-                    not is_safe(highest_modes[locked]),
-                    highest_modes[locked]["cost"],
-                ),
-            )
+        if len(spine_modes) == 1:
+            viewer_lock = spine_modes[0]
+            winner = None
         else:
-            viewer_lock = winner == "LOCKED"
+            winner = comparison_winner(highest_modes[False], highest_modes[True])
+            if winner in ("NO SAFE", "TIE"):
+                viewer_lock = min(
+                    spine_modes,
+                    key=lambda locked: (
+                        not is_safe(highest_modes[locked]),
+                        highest_modes[locked]["cost"],
+                    ),
+                )
+            else:
+                viewer_lock = winner == "LOCKED"
         best = results[viewer_height][viewer_lock]
         selected_lock_spine = viewer_lock
         print(
-            f"\nHighest-height {'best candidate' if winner in ('NO SAFE', 'TIE') else 'winner'} details "
+            f"\nHighest-height "
+            f"{'winner' if winner not in (None, 'NO SAFE', 'TIE') else 'best candidate'} details "
             f"({viewer_height:g} m, "
             f"{'LOCKED' if viewer_lock else 'UNLOCKED'}):"
         )
