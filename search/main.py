@@ -68,6 +68,11 @@ SPINE_GAIN_BOUNDS = np.array([
 LEG_NOMINAL_POSITION_NAMES = tuple(
     name for group in ("hip", "thigh", "calf") for name in LEG_JOINTS[group]
 )
+INDIVIDUAL_GAIN_NAMES = tuple(
+    f"{gain}_{name}"
+    for gain in ("kp", "kd")
+    for name in LEG_NOMINAL_POSITION_NAMES
+)
 NOMINAL_POSITION_DELTA_BOUNDS = (-0.5, 0.5)
 MAX_GP_POINTS = 400
 _WORKER_MODEL = None
@@ -77,6 +82,7 @@ _WORKER_CONTACT_MAP = None
 _WORKER_STEPS = None
 _WORKER_START_HEIGHT = None
 _WORKER_OPTIMIZE_NOMINAL_POSITION = False
+_WORKER_INDIVIDUAL_GAINS = False
 
 
 def configure_spine(model, lock_spine):
@@ -241,29 +247,33 @@ def reset_drop(
     return targets
 
 
-def gain_parameter_count(lock_spine):
-    return len(LEG_GAIN_BOUNDS) + (0 if lock_spine else len(SPINE_GAIN_BOUNDS))
+def gain_parameter_count(lock_spine, individual_gains=False):
+    leg_count = len(INDIVIDUAL_GAIN_NAMES) if individual_gains else len(LEG_GAIN_BOUNDS)
+    return leg_count + (0 if lock_spine else len(SPINE_GAIN_BOUNDS))
 
 
-def build_gains(params, lock_spine):
-    kp_h, kp_t, kp_c, kd_h, kd_t, kd_c = params[:6]
-    group_gains = {
-        "hip": (kp_h, kd_h),
-        "thigh": (kp_t, kd_t),
-        "calf": (kp_c, kd_c),
-    }
+def build_gains(params, lock_spine, individual_gains=False):
+    if individual_gains:
+        leg_count = len(LEG_NOMINAL_POSITION_NAMES)
+        kp = dict(zip(LEG_NOMINAL_POSITION_NAMES, params[:leg_count]))
+        kd = dict(zip(LEG_NOMINAL_POSITION_NAMES, params[leg_count:2 * leg_count]))
+    else:
+        kp_h, kp_t, kp_c, kd_h, kd_t, kd_c = params[:6]
+        group_gains = {
+            "hip": (kp_h, kd_h),
+            "thigh": (kp_t, kd_t),
+            "calf": (kp_c, kd_c),
+        }
+        kp = {name: group_gains[group][0] for group, names in LEG_JOINTS.items() for name in names}
+        kd = {name: group_gains[group][1] for group, names in LEG_JOINTS.items() for name in names}
     if lock_spine:
         # Values are immaterial for a mechanically locked, unpowered joint.
         spine_kp, spine_kd = 0.0, 0.0
     else:
-        spine_kp, spine_kd = params[6:8]
-    kp = {"sp_j0": spine_kp}
-    kd = {"sp_j0": spine_kd}
-    for group, names in LEG_JOINTS.items():
-        group_kp, group_kd = group_gains[group]
-        for name in names:
-            kp[name] = group_kp
-            kd[name] = group_kd
+        spine_start = len(INDIVIDUAL_GAIN_NAMES) if individual_gains else len(LEG_GAIN_BOUNDS)
+        spine_kp, spine_kd = params[spine_start:spine_start + 2]
+    kp["sp_j0"] = spine_kp
+    kd["sp_j0"] = spine_kd
     return kp, kd
 
 
@@ -276,12 +286,12 @@ def nominal_position_names(optimize_nominal_position, lock_spine):
     return tuple(names)
 
 
-def nominal_pose_from_params(params, optimize_nominal_position, lock_spine):
+def nominal_pose_from_params(params, optimize_nominal_position, lock_spine, individual_gains=False):
     """Build the episode pose from the optional nominal-position parameters."""
     if not optimize_nominal_position:
         return NOMINAL_POSE
     pose = dict(NOMINAL_POSE)
-    position_start = gain_parameter_count(lock_spine)
+    position_start = gain_parameter_count(lock_spine, individual_gains)
     for name, delta in zip(
         nominal_position_names(optimize_nominal_position, lock_spine),
         params[position_start:],
@@ -290,8 +300,8 @@ def nominal_pose_from_params(params, optimize_nominal_position, lock_spine):
     return pose
 
 
-def parameter_bounds(optimize_nominal_position, lock_spine):
-    gain_bounds = LEG_GAIN_BOUNDS
+def parameter_bounds(optimize_nominal_position, lock_spine, individual_gains=False):
+    gain_bounds = np.vstack([np.repeat(LEG_GAIN_BOUNDS[i:i+1], 4, axis=0) for i in range(6)]) if individual_gains else LEG_GAIN_BOUNDS
     if not lock_spine:
         gain_bounds = np.vstack((gain_bounds, SPINE_GAIN_BOUNDS))
     if not optimize_nominal_position:
@@ -339,15 +349,15 @@ def episode_steps(model, start_height):
 
 def evaluate_drop(
     model, data, jmap, contact_map, params, steps, start_height,
-    optimize_nominal_position, lock_spine, initial_state=None,
+    optimize_nominal_position, lock_spine, initial_state=None, individual_gains=False,
 ):
     nominal_pose = nominal_pose_from_params(
-        params, optimize_nominal_position, lock_spine
+        params, optimize_nominal_position, lock_spine, individual_gains
     )
     targets = reset_drop(
         data, model, jmap, start_height, nominal_pose, initial_state
     )
-    kp, kd = build_gains(params, lock_spine)
+    kp, kd = build_gains(params, lock_spine, individual_gains)
     leg_dof_idx = np.array([
         jmap.dof_adr[name]
         for group in ("hip", "thigh", "calf")
@@ -452,7 +462,7 @@ def evaluate_drop(
     if optimize_nominal_position:
         # Avoid using a highly asymmetric, boundary pose as a free impact
         # brace.  The position variables are deltas from NOMINAL_POSE.
-        position_start = gain_parameter_count(lock_spine)
+        position_start = gain_parameter_count(lock_spine, individual_gains)
         position_deltas = np.asarray(params[position_start:], dtype=float)
         cost += NOMINAL_POSITION_REGULARIZATION * float(np.sum(position_deltas**2))
     if not foot_contact:
@@ -492,11 +502,13 @@ def evaluate_drop(
 
 def show_best(
     model, data, jmap, params, steps, start_height, optimize_nominal_position,
-    lock_spine,
+    lock_spine, playback_speed=1.0, individual_gains=False,
 ):
-    kp, kd = build_gains(params, lock_spine)
+    if playback_speed <= 0.0:
+        raise ValueError("playback_speed must be positive")
+    kp, kd = build_gains(params, lock_spine, individual_gains)
     nominal_pose = nominal_pose_from_params(
-        params, optimize_nominal_position, lock_spine
+        params, optimize_nominal_position, lock_spine, individual_gains
     )
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
@@ -507,7 +519,8 @@ def show_best(
                 step_start = time.time()
                 controlled_step(model, data, jmap, targets, kp, kd)
                 viewer.sync()
-                remaining = model.opt.timestep - (time.time() - step_start)
+                frame_duration = model.opt.timestep / playback_speed
+                remaining = frame_duration - (time.time() - step_start)
                 if remaining > 0.0:
                     time.sleep(remaining)
             time.sleep(1.0)
@@ -519,7 +532,7 @@ def sample_params(rng, bounds):
 
 def result_from_params(
     model, data, jmap, contact_map, params, steps, start_height,
-    optimize_nominal_position, lock_spine, initial_state=None,
+    optimize_nominal_position, lock_spine, initial_state=None, individual_gains=False,
 ):
     (
         cost,
@@ -541,7 +554,7 @@ def result_from_params(
         peak_spine_current_proxy,
     ) = evaluate_drop(
         model, data, jmap, contact_map, params, steps, start_height,
-        optimize_nominal_position, lock_spine, initial_state,
+        optimize_nominal_position, lock_spine, initial_state, individual_gains,
     )
     return {
         "cost": cost,
@@ -566,10 +579,10 @@ def result_from_params(
     }
 
 
-def init_worker(lock_spine, start_height, optimize_nominal_position):
+def init_worker(lock_spine, start_height, optimize_nominal_position, individual_gains=False):
     global _WORKER_MODEL, _WORKER_DATA, _WORKER_JMAP
     global _WORKER_CONTACT_MAP, _WORKER_STEPS, _WORKER_START_HEIGHT
-    global _WORKER_OPTIMIZE_NOMINAL_POSITION, _WORKER_LOCK_SPINE
+    global _WORKER_OPTIMIZE_NOMINAL_POSITION, _WORKER_LOCK_SPINE, _WORKER_INDIVIDUAL_GAINS
     _WORKER_MODEL = mujoco.MjModel.from_xml_path(str(XML_PATH))
     configure_spine(_WORKER_MODEL, lock_spine)
     _WORKER_DATA = mujoco.MjData(_WORKER_MODEL)
@@ -579,6 +592,7 @@ def init_worker(lock_spine, start_height, optimize_nominal_position):
     _WORKER_START_HEIGHT = start_height
     _WORKER_OPTIMIZE_NOMINAL_POSITION = optimize_nominal_position
     _WORKER_LOCK_SPINE = lock_spine
+    _WORKER_INDIVIDUAL_GAINS = individual_gains
 
 
 def evaluate_candidate(params):
@@ -593,6 +607,7 @@ def evaluate_candidate(params):
         _WORKER_START_HEIGHT,
         _WORKER_OPTIMIZE_NOMINAL_POSITION,
         _WORKER_LOCK_SPINE,
+        individual_gains=_WORKER_INDIVIDUAL_GAINS,
     )
 
 
@@ -682,13 +697,13 @@ def propose_candidates(
 def run_search(
     trials, workers, seed, initial_trials, candidate_pool, batch_size,
     exploration_fraction, xi, lock_spine, start_height,
-    optimize_nominal_position,
+    optimize_nominal_position, individual_gains=False,
 ):
     """Bayesian optimization of total actuator effort under survival constraints."""
     workers = min(workers, trials)
     rng = np.random.default_rng(seed)
     initial_trials = min(initial_trials, trials)
-    bounds = parameter_bounds(optimize_nominal_position, lock_spine)
+    bounds = parameter_bounds(optimize_nominal_position, lock_spine, individual_gains)
     x_values = []
     costs = []
     best = None
@@ -700,7 +715,7 @@ def run_search(
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=init_worker,
-        initargs=(lock_spine, start_height, optimize_nominal_position),
+        initargs=(lock_spine, start_height, optimize_nominal_position, individual_gains),
     ) as executor:
         completed = 0
         while completed < trials:
@@ -797,6 +812,10 @@ def parse_args():
             f"{NOMINAL_POSITION_DELTA_BOUNDS[0]:g} to "
             f"{NOMINAL_POSITION_DELTA_BOUNDS[1]:g} rad"
         ),
+    )
+    parser.add_argument(
+        "--individual-gains", action="store_true",
+        help="optimize separate Kp and Kd for each of the 12 leg joints",
     )
     spine_mode = parser.add_mutually_exclusive_group()
     spine_mode.add_argument(
@@ -950,19 +969,24 @@ def validate_args(args):
     return batch_size
 
 
-def print_result(best, model, optimize_nominal_position, lock_spine):
+def print_result(best, model, optimize_nominal_position, lock_spine, individual_gains=False):
     print(
         f"TOP WYNIK - Koszt: {best['cost']:.2f} | "
         f"Wysokosc bazy: {best['min_height']:.3f}m | Safe: {is_safe(best)} | "
         f"Kontakt inny niz stopa: {best['non_foot_contact']}"
     )
-    print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
-    print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
+    kp, kd = build_gains(best["params"], lock_spine, individual_gains)
+    if individual_gains:
+        for name in LEG_NOMINAL_POSITION_NAMES:
+            print(f"  {name}: Kp={kp[name]:.2f}, Kd={kd[name]:.2f}")
+    else:
+        print(f"Najlepsze Kp (Hip, Thigh, Calf): {best['params'][0]:.1f}, {best['params'][1]:.1f}, {best['params'][2]:.1f}")
+        print(f"Najlepsze Kd (Hip, Thigh, Calf): {best['params'][3]:.1f}, {best['params'][4]:.1f}, {best['params'][5]:.1f}")
     if not lock_spine:
-        print(f"Najlepsze Kp/Kd kregoslupa: {best['params'][6]:.1f}, {best['params'][7]:.1f}")
+        print(f"Najlepsze Kp/Kd kregoslupa: {kp['sp_j0']:.1f}, {kd['sp_j0']:.1f}")
     if optimize_nominal_position:
         nominal_pose = nominal_pose_from_params(
-            best["params"], True, lock_spine
+            best["params"], True, lock_spine, individual_gains
         )
         print("Najlepsza pozycja nominalna:")
         for name in nominal_position_names(True, lock_spine):
@@ -1023,6 +1047,7 @@ def optimize_configuration(
         lock_spine,
         start_height,
         optimize_nominal_position,
+        args.individual_gains,
     )
     print(f"Zakonczono konfiguracje w {time.time() - start_time:.2f} s.")
     return best
@@ -1105,7 +1130,7 @@ def validation_scenarios(args, model, seed):
 
 
 def validate_candidate(
-    best, height, lock_spine, optimize_nominal_position, scenarios,
+    best, height, lock_spine, optimize_nominal_position, scenarios, individual_gains=False,
 ):
     """Evaluate one optimized candidate under a fixed set of disturbances."""
     model = mujoco.MjModel.from_xml_path(str(XML_PATH))
@@ -1140,7 +1165,7 @@ def validate_candidate(
         result = result_from_params(
             model, data, jmap, contact_map, best["params"],
             episode_steps(model, disturbed_height), disturbed_height,
-            optimize_nominal_position, lock_spine, initial_state,
+            optimize_nominal_position, lock_spine, initial_state, individual_gains,
         )
         result["safe"] = is_safe(result)
         result["trial"] = trial_index
@@ -1363,7 +1388,7 @@ def validate_comparison_best(
             label = "LOCKED" if lock_spine else "UNLOCKED"
             summary = validate_candidate(
                 results[height][lock_spine], height, lock_spine,
-                optimize_nominal_position, scenarios,
+                optimize_nominal_position, scenarios, args.individual_gains,
             )
             validation[height][lock_spine] = summary
             print(
@@ -1443,7 +1468,7 @@ def print_comparison(results):
         print(f"Highest safe tested height ({label}): {maximum}")
 
 
-def save_plots(results, output_dir, optimize_nominal_position):
+def save_plots(results, output_dir, optimize_nominal_position, individual_gains=False):
     """Save comparison plots and a machine-readable summary without showing a GUI."""
     output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(output_dir / ".matplotlib"))
@@ -1560,7 +1585,7 @@ def save_plots(results, output_dir, optimize_nominal_position):
         mode_results = [results[h][lock_spine] for h in heights]
         nominal_poses = [
             nominal_pose_from_params(
-                result["params"], optimize_nominal_position, lock_spine
+                result["params"], optimize_nominal_position, lock_spine, individual_gains
             )
             for result in mode_results
         ]
@@ -1606,27 +1631,27 @@ def save_plots(results, output_dir, optimize_nominal_position):
         fig, (kp_axis, kd_axis) = plt.subplots(
             1, 2, figsize=(13, 5), constrained_layout=True
         )
-        gain_series = [
-            ("hip", 0, 3),
-            ("thigh", 1, 4),
-            ("calf", 2, 5),
-        ]
+        gain_series = list(LEG_NOMINAL_POSITION_NAMES) if individual_gains else list(LEG_JOINTS)
         if not lock_spine:
-            gain_series.append(("spine", 6, 7))
-        for gain_name, kp_index, kd_index in gain_series:
+            gain_series.append("sp_j0")
+        for gain_name in gain_series:
+            gain_group = gain_name.split("_", 1)[1][1:] if individual_gains and gain_name != "sp_j0" else gain_name
+            if gain_group == "sp_j0":
+                gain_group = "spine"
+            gain_values = [build_gains(result["params"], lock_spine, individual_gains) for result in mode_results]
             kp_axis.plot(
                 heights,
-                [result["params"][kp_index] for result in mode_results],
+                [values[0][gain_name if individual_gains or gain_name == "sp_j0" else LEG_JOINTS[gain_name][0]] for values in gain_values],
                 marker="o",
-                color=gain_colors[gain_name],
-                label=gain_labels[gain_name],
+                color=joint_colors.get(gain_name[:2], gain_colors.get(gain_group, "#333333")),
+                label=gain_name if individual_gains else gain_labels[gain_group],
             )
             kd_axis.plot(
                 heights,
-                [result["params"][kd_index] for result in mode_results],
+                [values[1][gain_name if individual_gains or gain_name == "sp_j0" else LEG_JOINTS[gain_name][0]] for values in gain_values],
                 marker="o",
-                color=gain_colors[gain_name],
-                label=gain_labels[gain_name],
+                color=joint_colors.get(gain_name[:2], gain_colors.get(gain_group, "#333333")),
+                label=gain_name if individual_gains else gain_labels[gain_group],
             )
         for axis, symbol in ((kp_axis, "Kp"), (kd_axis, "Kd")):
             axis.set_title(symbol)
@@ -1663,9 +1688,8 @@ def save_plots(results, output_dir, optimize_nominal_position):
                     result["peak_body_acceleration_raw"],
                 ])
 
-    parameter_columns = [
-        *LEG_GAIN_PARAMETER_NAMES, "kp_spine", "kd_spine", *NOMINAL_POSE,
-    ]
+    gain_names = INDIVIDUAL_GAIN_NAMES if individual_gains else LEG_GAIN_PARAMETER_NAMES
+    parameter_columns = [*gain_names, "kp_spine", "kd_spine", *NOMINAL_POSE]
     with (output_dir / "parametry_wzgledem_wysokosci.csv").open(
         "w", newline=""
     ) as stream:
@@ -1678,15 +1702,15 @@ def save_plots(results, output_dir, optimize_nominal_position):
                 result = results[height][lock_spine]
                 params = result["params"]
                 pose = nominal_pose_from_params(
-                    params, optimize_nominal_position, lock_spine
+                    params, optimize_nominal_position, lock_spine, individual_gains
                 )
                 row = {
                     "height": height,
                     "spine": label,
                     "safe": is_safe(result),
-                    **dict(zip(LEG_GAIN_PARAMETER_NAMES, params[:6])),
-                    "kp_spine": "" if lock_spine else params[6],
-                    "kd_spine": "" if lock_spine else params[7],
+                    **dict(zip(gain_names, params[:len(gain_names)])),
+                    "kp_spine": "" if lock_spine else params[len(gain_names)],
+                    "kd_spine": "" if lock_spine else params[len(gain_names) + 1],
                     **pose,
                 }
                 writer.writerow(row)
@@ -1754,7 +1778,7 @@ def main(args=None):
                     args.optimize_nominal_position,
                 )
         print_comparison(results)
-        save_plots(results, args.output_dir, args.optimize_nominal_position)
+        save_plots(results, args.output_dir, args.optimize_nominal_position, args.individual_gains)
         if args.validate_best:
             validation_seed = args.validation_seed
             if validation_seed is None:
@@ -1791,7 +1815,7 @@ def main(args=None):
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, viewer_lock)
         print_result(
-            best, model, args.optimize_nominal_position, viewer_lock
+            best, model, args.optimize_nominal_position, viewer_lock, args.individual_gains
         )
         start_height = viewer_height
     else:
@@ -1804,7 +1828,7 @@ def main(args=None):
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, args.lock_spine)
         print_result(
-            best, model, args.optimize_nominal_position, args.lock_spine
+            best, model, args.optimize_nominal_position, args.lock_spine, args.individual_gains
         )
         save_single_run_plot(best, args.output_dir, args.lock_spine, start_height)
 
@@ -1816,6 +1840,7 @@ def main(args=None):
         show_best(
             model, data, jmap, best["params"], steps, start_height,
             args.optimize_nominal_position, selected_lock_spine,
+            individual_gains=args.individual_gains,
         )
 
 
