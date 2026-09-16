@@ -47,8 +47,11 @@ RESULT_KEYS = (
     "peak_leg_torque",
     "shin_contact",
     "peak_foot_force",
+    "peak_foot_force_raw",
+    "peak_total_foot_force",
     "peak_shin_force",
     "peak_body_acceleration",
+    "peak_body_acceleration_raw",
     "total_leg_effort",
     "total_spine_effort",
     "peak_leg_current_proxy",
@@ -70,10 +73,11 @@ def require_gpu():
     return devices[0]
 
 
-def _prepare_model(lock_spine):
+def _prepare_model(lock_spine, safety_factor=1.0):
     """Load the same model and make its collision graph compatible with MJX."""
     model = mujoco.MjModel.from_xml_path(str(cpu.XML_PATH))
     cpu.configure_spine(model, lock_spine)
+    cpu.configure_safety_factor(model, safety_factor)
 
     # The C solver exits as soon as it converges, while MJX benefits greatly
     # from tight static limits.  Profiling this model showed at most 17 Newton
@@ -116,16 +120,17 @@ class GpuBatchEvaluator:
 
     def __init__(
         self, lock_spine, steps, optimize_nominal_position, gpu_batch_size,
-        device,
+        device, individual_gains=False, safety_factor=1.0,
     ):
         self.batch_size = gpu_batch_size
-        self.cpu_model = _prepare_model(lock_spine)
+        self.cpu_model = _prepare_model(lock_spine, safety_factor)
         self.jmap = cpu.JointMap(self.cpu_model, cpu.NOMINAL_POSE)
         self.contact_map = cpu.ContactMap(self.cpu_model)
         self.steps = steps
         self.timestep = float(self.cpu_model.opt.timestep)
         self.lock_spine = lock_spine
         self.optimize_nominal_position = optimize_nominal_position
+        self.individual_gains = individual_gains
 
         self.model = mjx.put_model(self.cpu_model, device=device)
         self.empty_data = mjx.make_data(self.model, device=device)
@@ -140,7 +145,14 @@ class GpuBatchEvaluator:
         jmap = self.jmap
         lock_spine = self.lock_spine
         optimize_positions = self.optimize_nominal_position
+        individual_gains = self.individual_gains
         timestep = self.timestep
+        acceleration_window_steps = max(
+            1, int(np.ceil(cpu.BODY_ACCELERATION_WINDOW / timestep))
+        )
+        foot_force_window_steps = max(
+            1, int(np.ceil(cpu.FOOT_FORCE_WINDOW / timestep))
+        )
 
         names = jmap.names
         qpos_idx = jnp.asarray([jmap.qpos_adr[name] for name in names])
@@ -154,12 +166,15 @@ class GpuBatchEvaluator:
         spine_index = names.index("sp_j0")
 
         group_idx = jnp.asarray([
-            0 if name.endswith("j0") else 1 if name.endswith("j1") else 2
+            cpu.LEG_NOMINAL_POSITION_NAMES.index(name) if individual_gains and name != "sp_j0"
+            else 0 if name.endswith("j0") else 1 if name.endswith("j1") else 2
             for name in names
         ])
+        leg_gain_count = len(cpu.LEG_NOMINAL_POSITION_NAMES) if individual_gains else 3
+        spine_gain_start = 2 * leg_gain_count
         position_names = cpu.nominal_position_names(optimize_positions, lock_spine)
         position_target_idx = jnp.asarray([names.index(name) for name in position_names])
-        position_start = cpu.gain_parameter_count(lock_spine)
+        position_start = cpu.gain_parameter_count(lock_spine, individual_gains)
 
         contact = empty_data._impl.contact
         addresses = np.asarray(contact.efc_address)
@@ -181,14 +196,23 @@ class GpuBatchEvaluator:
                 & (data._impl.contact.dist <= data._impl.contact.includemargin)
             )
             support = jnp.any(geoms[:, :, None] == support_ids, axis=(1, 2))
-            foot = jnp.any(geoms[:, :, None] == foot_ids, axis=(1, 2))
+            foot_by_geom = jnp.any(
+                geoms[:, :, None] == foot_ids, axis=1
+            )
+            foot = jnp.any(foot_by_geom, axis=1)
             shin = jnp.any(geoms[:, :, None] == shin_ids, axis=(1, 2))
             # Equivalent of abs(mj_contactForce(...)[0]) for the pyramidal
             # condim=3 contacts used by intention.xml.
             normal = jnp.abs(jnp.sum(data._impl.efc_force[force_idx], axis=1))
             valid = active & support
+            force_by_foot = jnp.sum(
+                jnp.where(valid[:, None] & foot_by_geom, normal[:, None], 0.0),
+                axis=0,
+            )
             return (
-                jnp.sum(jnp.where(valid & foot, normal, 0.0)),
+                jnp.sum(force_by_foot),
+                jnp.max(force_by_foot),
+                force_by_foot,
                 jnp.sum(jnp.where(valid & shin, normal, 0.0)),
                 jnp.any(valid & ~foot),
             )
@@ -199,13 +223,13 @@ class GpuBatchEvaluator:
                 targets = targets.at[position_target_idx].add(params[position_start:])
 
             kp = params[group_idx]
-            kd = params[group_idx + 3]
+            kd = params[group_idx + leg_gain_count]
             if lock_spine:
                 kp = kp.at[spine_index].set(0.0)
                 kd = kd.at[spine_index].set(0.0)
             else:
-                kp = kp.at[spine_index].set(params[6])
-                kd = kd.at[spine_index].set(params[7])
+                kp = kp.at[spine_index].set(params[spine_gain_start])
+                kd = kd.at[spine_index].set(params[spine_gain_start + 1])
 
             qpos = jnp.asarray(self.cpu_model.qpos0)
             qpos = qpos.at[0].set(0.0)
@@ -220,15 +244,25 @@ class GpuBatchEvaluator:
             )
             data = mjx.forward(model, data)
 
-            # min height, four peaks, two efforts, two current peaks, and four flags
+            # min height, seven peaks, two efforts, two current peaks, and four flags
             initial_stats = (
-                jnp.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                jnp.inf, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0,
                 jnp.asarray(False), jnp.asarray(False), jnp.asarray(False),
                 jnp.asarray(False),
             )
+            initial_acceleration_history = jnp.zeros(acceleration_window_steps)
+            initial_acceleration_samples = jnp.asarray(0)
+            initial_foot_force_history = jnp.zeros(
+                (foot_force_window_steps, len(foot_ids))
+            )
+            initial_foot_force_samples = jnp.asarray(0)
 
             def step(carry, _):
-                data, stats = carry
+                (
+                    data, stats, acceleration_history, acceleration_samples,
+                    foot_force_history, foot_force_samples,
+                ) = carry
                 q = data.qpos[qpos_idx]
                 qd = data.qvel[dof_idx]
                 torque = kp * (targets - q) - kd * qd
@@ -238,24 +272,71 @@ class GpuBatchEvaluator:
                 data = mjx.step(model, data)
 
                 (
-                    min_height, peak_torque, peak_foot_force, peak_shin_force,
-                    peak_accel, leg_effort, spine_effort, peak_leg_current,
+                    min_height, peak_torque, peak_foot_force,
+                    peak_foot_force_raw, peak_total_foot_force,
+                    peak_shin_force, peak_accel,
+                    peak_accel_raw, leg_effort, spine_effort, peak_leg_current,
                     peak_spine_current, foot_contact, shin_contact,
                     non_foot_contact, crashed,
                 ) = stats
-                foot_force, shin_force, current_non_foot = contact_metrics(data)
-                now_foot = foot_force > 0.0
+                (
+                    total_foot_force, max_single_foot_force, force_by_foot,
+                    shin_force, current_non_foot,
+                ) = contact_metrics(data)
+                now_foot = total_foot_force > 0.0
                 now_shin = shin_force > 0.0
+                force_landing = foot_contact | now_foot
+                current_force_by_foot = jnp.where(
+                    force_landing, force_by_foot, jnp.zeros_like(force_by_foot)
+                )
+                foot_force_history = jnp.roll(
+                    foot_force_history, -1, axis=0
+                )
+                foot_force_history = foot_force_history.at[-1].set(
+                    current_force_by_foot
+                )
+                foot_force_samples = jnp.minimum(
+                    foot_force_window_steps,
+                    foot_force_samples + force_landing.astype(jnp.int32),
+                )
+                force_window_average = jnp.max(
+                    jnp.mean(foot_force_history, axis=0)
+                )
+                valid_force_window_average = jnp.where(
+                    foot_force_samples >= foot_force_window_steps,
+                    force_window_average,
+                    0.0,
+                )
                 landing = foot_contact | now_foot | now_shin
                 body_accel = jnp.linalg.norm(data.qacc[0:3])
+                current_accel = jnp.where(landing, body_accel, 0.0)
+                acceleration_history = jnp.roll(acceleration_history, -1)
+                acceleration_history = acceleration_history.at[-1].set(
+                    current_accel
+                )
+                acceleration_samples = jnp.minimum(
+                    acceleration_window_steps,
+                    acceleration_samples + landing.astype(jnp.int32),
+                )
+                window_average = jnp.sum(
+                    acceleration_history
+                ) / acceleration_window_steps
+                valid_window_average = jnp.where(
+                    acceleration_samples >= acceleration_window_steps,
+                    window_average,
+                    0.0,
+                )
                 joint_torque = data.qfrc_actuator[dof_idx]
                 leg_command = jnp.where(leg_mask, command, 0.0)
                 return (data, (
                     jnp.minimum(min_height, data.qpos[2]),
                     jnp.maximum(peak_torque, jnp.max(jnp.abs(jnp.where(leg_mask, joint_torque, 0.0)))),
-                    jnp.maximum(peak_foot_force, foot_force),
+                    jnp.maximum(peak_foot_force, valid_force_window_average),
+                    jnp.maximum(peak_foot_force_raw, max_single_foot_force),
+                    jnp.maximum(peak_total_foot_force, total_foot_force),
                     jnp.maximum(peak_shin_force, shin_force),
-                    jnp.maximum(peak_accel, jnp.where(landing, body_accel, 0.0)),
+                    jnp.maximum(peak_accel, valid_window_average),
+                    jnp.maximum(peak_accel_raw, current_accel),
                     leg_effort + jnp.sum(jnp.square(leg_command)) * timestep,
                     spine_effort + command[spine_index] ** 2 * timestep,
                     jnp.maximum(peak_leg_current, jnp.max(jnp.abs(leg_command))),
@@ -264,14 +345,24 @@ class GpuBatchEvaluator:
                     shin_contact | now_shin,
                     non_foot_contact | current_non_foot,
                     crashed | (data.qpos[2] < 0.05),
-                )), None
+                ), acceleration_history, acceleration_samples,
+                    foot_force_history, foot_force_samples), None
 
-            (_, stats), _ = jax.lax.scan(
-                step, (data, initial_stats), xs=None, length=self.steps
+            (_, stats, _, _, _, _), _ = jax.lax.scan(
+                step,
+                (
+                    data, initial_stats, initial_acceleration_history,
+                    initial_acceleration_samples, initial_foot_force_history,
+                    initial_foot_force_samples,
+                ),
+                xs=None,
+                length=self.steps,
             )
             (
-                min_height, peak_torque, peak_foot_force, peak_shin_force,
-                peak_accel, leg_effort, spine_effort, peak_leg_current,
+                min_height, peak_torque, peak_foot_force,
+                peak_foot_force_raw, peak_total_foot_force,
+                peak_shin_force, peak_accel,
+                peak_accel_raw, leg_effort, spine_effort, peak_leg_current,
                 peak_spine_current, foot_contact, shin_contact,
                 non_foot_contact, crashed,
             ) = stats
@@ -303,8 +394,9 @@ class GpuBatchEvaluator:
             )
             return jnp.asarray((
                 cost, crashed, foot_contact, non_foot_contact, min_height,
-                peak_torque, shin_contact, peak_foot_force, peak_shin_force,
-                peak_accel, leg_effort, spine_effort, peak_leg_current,
+                peak_torque, shin_contact, peak_foot_force, peak_foot_force_raw,
+                peak_total_foot_force, peak_shin_force, peak_accel,
+                peak_accel_raw, leg_effort, spine_effort, peak_leg_current,
                 peak_spine_current,
             ))
 
@@ -337,14 +429,16 @@ class GpuBatchEvaluator:
 
 
 def get_evaluator(
-    lock_spine, start_height, optimize_nominal_position, batch_size, device,
+    lock_spine, start_height, optimize_nominal_position, batch_size, device, individual_gains=False, safety_factor=1.0,
 ):
     """Reuse expensive JIT compilations across equal-length drop episodes."""
-    reference_model = _prepare_model(lock_spine)
+    reference_model = _prepare_model(lock_spine, safety_factor)
     steps = cpu.episode_steps(reference_model, start_height)
     key = (
         lock_spine,
         optimize_nominal_position,
+        individual_gains,
+        safety_factor,
         batch_size,
         steps,
         device.platform,
@@ -353,7 +447,7 @@ def get_evaluator(
     evaluator = _EVALUATOR_CACHE.get(key)
     if evaluator is None:
         evaluator = GpuBatchEvaluator(
-            lock_spine, steps, optimize_nominal_position, batch_size, device
+            lock_spine, steps, optimize_nominal_position, batch_size, device, individual_gains, safety_factor
         )
         _EVALUATOR_CACHE[key] = evaluator
     return evaluator
@@ -362,13 +456,13 @@ def get_evaluator(
 def run_search_gpu(
     trials, workers, seed, initial_trials, candidate_pool, batch_size,
     exploration_fraction, xi, lock_spine, start_height,
-    optimize_nominal_position,
+    optimize_nominal_position, individual_gains=False, safety_factor=1.0,
 ):
     """The same Bayesian loop as main.py, with batched MJX evaluation."""
     del workers  # retained in the CLI for compatibility with existing jobs
     rng = np.random.default_rng(seed)
     initial_trials = min(initial_trials, trials)
-    bounds = cpu.parameter_bounds(optimize_nominal_position, lock_spine)
+    bounds = cpu.parameter_bounds(optimize_nominal_position, lock_spine, individual_gains)
     x_values, costs, progress = [], [], []
     best = None
     safe_trials = 0
@@ -377,12 +471,12 @@ def run_search_gpu(
     device = require_gpu()
     initial_evaluator = get_evaluator(
         lock_spine, start_height, optimize_nominal_position, initial_trials,
-        device,
+        device, individual_gains, safety_factor,
     )
     regular_batch_size = min(batch_size, trials)
     regular_evaluator = get_evaluator(
         lock_spine, start_height, optimize_nominal_position,
-        regular_batch_size, device,
+        regular_batch_size, device, individual_gains, safety_factor,
     )
 
     completed = 0
@@ -454,7 +548,8 @@ def optimize_configuration_gpu(
     best = run_search_gpu(
         args.trials, args.workers, seed, args.initial_trials,
         args.candidate_pool, batch_size, args.exploration, args.xi,
-        lock_spine, start_height, optimize_nominal_position,
+        lock_spine, start_height, optimize_nominal_position, args.individual_gains,
+        args.safety_factor,
     )
     print(f"Zakonczono konfiguracje w {time.time() - start:.2f} s.")
     return best
