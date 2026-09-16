@@ -52,15 +52,15 @@ LEG_GAIN_PARAMETER_NAMES = (
     "kd_hip", "kd_thigh", "kd_calf",
 )
 LEG_GAIN_BOUNDS = np.array([
-    (5.0, 60.0),
-    (5.0, 100.0),
-    (5.0, 100.0),
+    (20.0, 60.0),
+    (20.0, 100.0),
+    (20.0, 100.0),
     (0.2, 5.0),
     (0.2, 8.0),
     (0.2, 8.0),
 ], dtype=float)
 SPINE_GAIN_BOUNDS = np.array([
-    (5.0, 100.0),  # kp_spine
+    (20.0, 100.0),  # kp_spine
     (0.2, 8.0),    # kd_spine
 ], dtype=float)
 # Nominal leg positions are optimized as offsets from NOMINAL_POSE. Keeping
