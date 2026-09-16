@@ -648,7 +648,10 @@ def propose_candidates(
     span = parameter_bounds[:, 1] - lower
     x_normalized = (np.asarray(x_values) - lower) / span
     # The log transform separates hard failure penalties from feasible costs.
-    y = np.log1p(np.asarray(costs))
+    raw_costs = np.asarray(costs, dtype=float)
+    # Treat numerically divergent rollouts as maximally bad observations.
+    raw_costs = np.nan_to_num(raw_costs, nan=1e30, posinf=1e30, neginf=0.0)
+    y = np.log1p(raw_costs)
     train_x, train_y = select_gp_training_data(x_normalized, y, rng)
     kernel = (
         ConstantKernel(1.0, (1e-2, 1e2))

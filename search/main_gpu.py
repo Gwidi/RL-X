@@ -416,6 +416,15 @@ class GpuBatchEvaluator:
         )[:count]
         results = []
         for point, row in zip(params[:count], values):
+            # A numerically divergent MJX rollout must remain a bad candidate,
+            # rather than injecting NaN into the Gaussian-process training set.
+            row = np.asarray(row, dtype=float)
+            row[0] = np.nan_to_num(
+                row[0], nan=1e30, posinf=1e30, neginf=1e30
+            )
+            row[4:] = np.nan_to_num(
+                row[4:], nan=1e30, posinf=1e30, neginf=-1e30
+            )
             result = dict(zip(RESULT_KEYS, row))
             for key in ("crashed", "foot_contact", "non_foot_contact", "shin_contact"):
                 result[key] = bool(result[key])
