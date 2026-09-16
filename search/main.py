@@ -99,6 +99,13 @@ def configure_spine(model, lock_spine):
     model.actuator_ctrlrange[spine_actuator.id] = [0.0, 0.0]
 
 
+def configure_safety_factor(model, safety_factor):
+    """Scale each actuator's available motor command/torque range."""
+    if safety_factor >= 1.0:
+        return
+    model.actuator_ctrlrange[:] *= safety_factor
+
+
 class JointMap:
     """Resolve model indices and transmission data by joint name."""
 
@@ -579,12 +586,13 @@ def result_from_params(
     }
 
 
-def init_worker(lock_spine, start_height, optimize_nominal_position, individual_gains=False):
+def init_worker(lock_spine, start_height, optimize_nominal_position, individual_gains=False, safety_factor=1.0):
     global _WORKER_MODEL, _WORKER_DATA, _WORKER_JMAP
     global _WORKER_CONTACT_MAP, _WORKER_STEPS, _WORKER_START_HEIGHT
     global _WORKER_OPTIMIZE_NOMINAL_POSITION, _WORKER_LOCK_SPINE, _WORKER_INDIVIDUAL_GAINS
     _WORKER_MODEL = mujoco.MjModel.from_xml_path(str(XML_PATH))
     configure_spine(_WORKER_MODEL, lock_spine)
+    configure_safety_factor(_WORKER_MODEL, safety_factor)
     _WORKER_DATA = mujoco.MjData(_WORKER_MODEL)
     _WORKER_JMAP = JointMap(_WORKER_MODEL, NOMINAL_POSE)
     _WORKER_CONTACT_MAP = ContactMap(_WORKER_MODEL)
@@ -697,7 +705,7 @@ def propose_candidates(
 def run_search(
     trials, workers, seed, initial_trials, candidate_pool, batch_size,
     exploration_fraction, xi, lock_spine, start_height,
-    optimize_nominal_position, individual_gains=False,
+    optimize_nominal_position, individual_gains=False, safety_factor=1.0,
 ):
     """Bayesian optimization of total actuator effort under survival constraints."""
     workers = min(workers, trials)
@@ -715,7 +723,7 @@ def run_search(
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=init_worker,
-        initargs=(lock_spine, start_height, optimize_nominal_position, individual_gains),
+        initargs=(lock_spine, start_height, optimize_nominal_position, individual_gains, safety_factor),
     ) as executor:
         completed = 0
         while completed < trials:
@@ -817,6 +825,10 @@ def parse_args():
         "--individual-gains", action="store_true",
         help="optimize separate Kp and Kd for each of the 12 leg joints",
     )
+    parser.add_argument(
+        "--safety-factor", type=float, default=1.0, metavar="F",
+        help="maksymalny uzywany moment jako czesc limitu aktuatora (0<F<=1; domyslnie 1.0)",
+    )
     spine_mode = parser.add_mutually_exclusive_group()
     spine_mode.add_argument(
         "--lock-spine",
@@ -916,6 +928,8 @@ def parse_args():
 
 
 def validate_args(args):
+    if not 0.0 < args.safety_factor <= 1.0:
+        raise ValueError("--safety-factor must be greater than 0 and at most 1")
     if args.trials < 1:
         raise ValueError("--trials must be at least 1")
     if args.workers < 1:
@@ -1048,6 +1062,7 @@ def optimize_configuration(
         start_height,
         optimize_nominal_position,
         args.individual_gains,
+        args.safety_factor,
     )
     print(f"Zakonczono konfiguracje w {time.time() - start_time:.2f} s.")
     return best
@@ -1130,11 +1145,12 @@ def validation_scenarios(args, model, seed):
 
 
 def validate_candidate(
-    best, height, lock_spine, optimize_nominal_position, scenarios, individual_gains=False,
+    best, height, lock_spine, optimize_nominal_position, scenarios, individual_gains=False, safety_factor=1.0,
 ):
     """Evaluate one optimized candidate under a fixed set of disturbances."""
     model = mujoco.MjModel.from_xml_path(str(XML_PATH))
     configure_spine(model, lock_spine)
+    configure_safety_factor(model, safety_factor)
     data = mujoco.MjData(model)
     jmap = JointMap(model, NOMINAL_POSE)
     contact_map = ContactMap(model)
@@ -1388,7 +1404,7 @@ def validate_comparison_best(
             label = "LOCKED" if lock_spine else "UNLOCKED"
             summary = validate_candidate(
                 results[height][lock_spine], height, lock_spine,
-                optimize_nominal_position, scenarios, args.individual_gains,
+                optimize_nominal_position, scenarios, args.individual_gains, args.safety_factor,
             )
             validation[height][lock_spine] = summary
             print(
@@ -1814,6 +1830,7 @@ def main(args=None):
         )
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, viewer_lock)
+        configure_safety_factor(model, args.safety_factor)
         print_result(
             best, model, args.optimize_nominal_position, viewer_lock, args.individual_gains
         )
@@ -1827,6 +1844,7 @@ def main(args=None):
         selected_lock_spine = args.lock_spine
         model = mujoco.MjModel.from_xml_path(str(XML_PATH))
         configure_spine(model, args.lock_spine)
+        configure_safety_factor(model, args.safety_factor)
         print_result(
             best, model, args.optimize_nominal_position, args.lock_spine, args.individual_gains
         )

@@ -1,4 +1,11 @@
 <mujoco model="intention">
+    <option timestep="0.001" solver="Newton" iterations="100"
+          cone="elliptic" integrator="Euler"/>
+  <default>
+      <geom condim="3" friction="1.1 0.005 0.0001"
+            solref="0.01 1" solimp="0.9 0.95 0.001 0.5 2"/>
+  </default>
+
     <compiler angle="radian" meshdir="../meshes/hb40/" />
     <size njmax="500" nconmax="100" />
     <!--
