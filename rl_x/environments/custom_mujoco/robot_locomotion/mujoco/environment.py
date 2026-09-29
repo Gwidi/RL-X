@@ -439,7 +439,6 @@ class LocomotionEnv(gym.Env):
         self.internal_state["last_action"] = chosen_action.copy()
         self.internal_state["info_episode_store"]["episode_step"] += 1
         self.internal_state["info_episode_store"]["episode_return"] += reward
-        self.internal_state["info_episode_store"]["episode_total_xy_velocity_diff_abs"] += self.internal_state["info"]["env_info/xy_vel_diff_abs"]
         self.internal_state["info"]["rollout/episode_return"] = np.where(done, self.internal_state["info_episode_store"]["episode_return"], self.internal_state["info"]["rollout/episode_return"])
         self.internal_state["info"]["rollout/episode_length"] = np.where(done, self.internal_state["info_episode_store"]["episode_step"], self.internal_state["info"]["rollout/episode_length"])
         self.internal_state["info"]["env_curriculum/coefficient"] = self.internal_state["env_curriculum_coeff"]

@@ -152,24 +152,43 @@ def get_config(environment_name):
         "critic_exteroceptive_observation_type": "height_over_ground",
         "reward": {
             "type": "simplified_landing",
-            
-            # Parametry środowiska
-            "nominal_landing_height": 0.28,
-            "soft_joint_position_limit": 0.9,
-            
-            # WSPÓŁCZYNNIKI MUSZĄ BYĆ DODATNIE (minusy są w kodzie pythona!)
-            "alive_coeff": 1.0,
-            "base_height_coeff": 10.0,
-            "roll_pitch_pos_coeff": 10.0,
-            "base_vel_coeff": 2.0,        # Zamiast skomplikowanego post_impact_bounce
-            "joint_pos_coeff": 10.0,
-            "joint_vel_coeff": 0.5,       # Zamiast śledzenia prądu i falownika
-            "joint_torque_coeff": 0.05,
-            "actuator_overload_coeff": 25.0,
-            "landing_success_coeff": 10.0,
-            "landing_failure_coeff": 10.0,
-            "action_rate_coeff": 1.0,
+            # hardware
+            "leg_motor_torque_limit": 16.0,
+            "spine_motor_torque_limit": 48.0,
+
+            "leg_gear_ratio": 9.0,
+            "spine_gear_ratio": 9.0,
+
+            # gdy MJCF ma rzeczywiste gear=9:
+            "torque_measurement_mode": "mujoco_actuator",
+
+            # thermal proxy
+            "thermal_dose_limit": 0.5,
+            "thermal_cooling_rate": 0.0,
+
+            "thermal_penalty_coeff": 2.0,
+            "saturation_start_ratio": 0.90,
+            "saturation_penalty_coeff": 1.0,
+
+            # success
+            "success_confirmation_time": 2.0,
+            "landing_success_coeff": 100.0,
+            "landing_failure_coeff": 100.0,
+
+            # shaping
+            "alive_coeff": 0.5,
+            "base_vel_coeff": 0.5,
+            "base_height_coeff": 1.5,
+
+            "roll_pitch_pos_coeff": 0.0,
+            "joint_pos_coeff": 0.0,
+            "joint_vel_coeff": 0.05,
+            "action_rate_coeff": 0.02,
+
             "collision_coeff": 5.0,
+            "floor_collision_coeff": 0.05,
+
+            "nominal_landing_height": 0.35,
         },
         "termination": {
             "type": "below_height",
