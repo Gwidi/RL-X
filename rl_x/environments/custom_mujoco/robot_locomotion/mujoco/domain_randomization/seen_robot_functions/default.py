@@ -17,7 +17,6 @@ class DefaultDRSeenRobotFunction:
         self.add_imu_position = env.env_config["domain_randomization"]["seen_robot"]["add_imu_position"]
         self.foot_size_factor = env.env_config["domain_randomization"]["seen_robot"]["foot_size_factor"]
         self.joint_axis_angle_rad = env.env_config["domain_randomization"]["seen_robot"]["joint_axis_angle_rad"]
-        self.torque_limit_factor = env.env_config["domain_randomization"]["seen_robot"]["torque_limit_factor"]
         self.add_actuator_joint_nominal_position = env.env_config["domain_randomization"]["seen_robot"]["add_actuator_joint_nominal_position"]
         self.joint_velocity_max_factor = env.env_config["domain_randomization"]["seen_robot"]["joint_velocity_max_factor"]
         self.add_joint_range = env.env_config["domain_randomization"]["seen_robot"]["add_joint_range"]
@@ -50,7 +49,6 @@ class DefaultDRSeenRobotFunction:
         self.default_cam_pos = self.env.initial_mj_model.cam_pos.copy()
         self.default_jnt_pos = self.env.initial_mj_model.jnt_pos[1:]
         self.default_joint_rotation_axes = self.env.initial_mj_model.jnt_axis[1:]
-        self.default_torque_limits = self.env.initial_mj_model.actuator_forcerange[:, 1]
         self.default_actuator_joint_nominal_positions = self.env.initial_qpos[self.env.actuator_joint_mask_qpos]
         self.default_actuator_joint_max_velocities = self.env.actuator_joint_max_velocities
         self.default_joint_ranges = self.env.initial_mj_model.jnt_range[1:]
@@ -68,7 +66,6 @@ class DefaultDRSeenRobotFunction:
         self.env.internal_state["seen_body_inertias"] = self.default_inertias
         self.env.internal_state["seen_body_coms"] = self.default_coms
         self.env.internal_state["seen_body_positions"] = self.default_body_positions
-        self.env.internal_state["seen_torque_limits"] = self.default_torque_limits
         self.env.internal_state["seen_joint_ranges"] = self.default_joint_ranges
         self.env.internal_state["seen_joint_dampings"] = self.default_joint_dampings
         self.env.internal_state["seen_joint_armatures"] = self.default_joint_armatures
@@ -104,7 +101,6 @@ class DefaultDRSeenRobotFunction:
         site_sizes = self.default_site_size * avg_body_size_factor
         camera_positions = self.default_cam_pos * body_size_factor
         joint_positions = self.default_jnt_pos * body_size_factor
-        default_torque_limits = self.default_torque_limits * avg_body_size_factor
         default_actuator_joint_max_velocities = self.default_actuator_joint_max_velocities * avg_body_size_factor
         default_joint_dampings = self.default_joint_dampings * avg_body_size_factor
         default_joint_armatures = self.default_joint_armatures * avg_body_size_factor
@@ -164,8 +160,6 @@ class DefaultDRSeenRobotFunction:
         rotation = Rotation.from_rotvec(random_angle * random_axis)
         rotated_joint_rotation_axes = rotation.apply(self.default_joint_rotation_axes)
 
-        torque_limits = default_torque_limits * (1 + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.torque_limit_factor, high=self.torque_limit_factor, size=self.default_torque_limits.shape))
-
         actuator_joint_nominal_positions = self.default_actuator_joint_nominal_positions + env_curriculum_coeff * self.env.np_rng.uniform(low=-self.add_actuator_joint_nominal_position, high=self.add_actuator_joint_nominal_position, size=self.default_actuator_joint_nominal_positions.shape)
         actuator_joint_nominal_positions = np.clip(actuator_joint_nominal_positions, self.env.internal_state["joint_position_limits"][self.env.actuator_joint_mask_joints - 1, 0], self.env.internal_state["joint_position_limits"][self.env.actuator_joint_mask_joints - 1, 1])
 
@@ -218,8 +212,6 @@ class DefaultDRSeenRobotFunction:
         self.env.internal_state["mj_model"].cam_pos = camera_positions
         self.env.internal_state["mj_model"].jnt_pos[1:] = joint_positions
         self.env.internal_state["mj_model"].jnt_axis[1:] = rotated_joint_rotation_axes
-        self.env.internal_state["mj_model"].actuator_forcerange[:, 1] = torque_limits
-        self.env.internal_state["mj_model"].actuator_forcerange[:, 0] = -torque_limits
         self.env.internal_state["mj_model"].jnt_range[1:] = joint_ranges
         self.env.internal_state["mj_model"].dof_damping[6:] = dof_damping
         self.env.internal_state["mj_model"].dof_armature[6:] = dof_armature

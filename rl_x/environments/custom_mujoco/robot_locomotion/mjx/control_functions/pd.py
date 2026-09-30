@@ -12,4 +12,4 @@ class PDControl:
         target_joint_positions = internal_state["actuator_joint_nominal_positions"] + scaled_action
         noisy_target_joint_positions = target_joint_positions + internal_state["position_offsets"]
         
-        return noisy_target_joint_positions
+        return noisy_target_joint_positions * self.env.initial_mjx_model.actuator_gear[:, 0]

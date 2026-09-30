@@ -428,7 +428,11 @@ class LocomotionEnv(gym.Env):
             self.command_function.get_next_command()
         
         next_observation = self.get_observation(chosen_action)
-        terminated = self.termination_function.should_terminate() | np.any(np.abs(self.internal_state["data"].qvel[:3]) == 100.0)
+        terminated = (
+            self.termination_function.should_terminate()
+            or np.any(np.abs(self.internal_state["data"].qvel[:3]) == 100.0)
+            or self.internal_state.get("landing_evaluated", False)
+        )
         truncated = self.internal_state["info_episode_store"]["episode_step"] >= (self.horizon - 1)
         done = terminated | truncated
 

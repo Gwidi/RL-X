@@ -118,7 +118,6 @@ def get_config(environment_name):
                 "add_imu_position": 0.05,
                 "foot_size_factor": 0.05,
                 "joint_axis_angle_rad": 0.01,
-                "torque_limit_factor": 0.15,
                 "add_actuator_joint_nominal_position": 0.01,
                 "joint_velocity_max_factor": 0.15,
                 "add_joint_range": 0.05,

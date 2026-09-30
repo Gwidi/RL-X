@@ -253,6 +253,15 @@ class PPO:
         )
 
         saving_return_buffer = deque(maxlen=100 * self.nr_envs)
+        landing_episode_info_keys = {
+            "landing_success_rate": "curriculum/landing_success",
+            "failure_motor_hard_limit_rate": "outcome/failure_motor_hard_limit",
+            "failure_thermal_limit_rate": "outcome/failure_thermal_limit",
+            "failure_base_crash_rate": "outcome/failure_base_crash",
+            "landing_unresolved_rate": "outcome/unresolved",
+            "landing_initial_height": "curriculum/initial_height",
+            "landing_difficulty": "curriculum/difficulty",
+        }
 
         state, _ = self.train_env.reset()
         global_step = 0
@@ -272,6 +281,7 @@ class PPO:
             # Acting
             dones_this_rollout = 0
             step_info_collection = {}
+            rollout_landing_episodes = {name: [] for name in landing_episode_info_keys}
             for step in range(self.nr_steps):
                 processed_action, action, value, log_prob, self.key = get_action_and_value(self.policy_state, self.critic_state, state, self.key)
                 next_state, reward, terminated, truncated, info = self.train_env.step(jax.device_get(processed_action))
@@ -280,7 +290,11 @@ class PPO:
                 for i, single_done in enumerate(done):
                     if single_done:
                         actual_next_state[i] = np.array(self.train_env.get_final_observation_at_index(info, i))
-                        saving_return_buffer.append(self.train_env.get_final_info_value_at_index(info, "episode_return", i))
+                        final_info = info["final_info"][i]
+                        saving_return_buffer.append(final_info["episode_return"])
+                        for name, info_key in landing_episode_info_keys.items():
+                            if info_key in final_info:
+                                rollout_landing_episodes[name].append(final_info[info_key])
                         dones_this_rollout += 1
                 for key, info_value in self.train_env.get_logging_info_dict(info).items():
                     step_info_collection.setdefault(key, []).extend(info_value)
@@ -334,13 +348,19 @@ class PPO:
                     for i, single_done in enumerate(eval_done):
                         if single_done:
                             eval_nr_episodes += 1
-                            evaluation_metrics["eval/episode_return"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_return", i))
-                            evaluation_metrics["eval/episode_length"].append(self.eval_env.get_final_info_value_at_index(eval_info, "episode_length", i))
+                            final_info = eval_info["final_info"][i]
+                            evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
+                            evaluation_metrics["eval/episode_length"].append(final_info["episode_length"])
+                            for name, info_key in landing_episode_info_keys.items():
+                                if info_key in final_info:
+                                    evaluation_metrics.setdefault(f"eval/{name}", []).append(final_info[info_key])
                             if eval_nr_episodes == self.evaluation_episodes:
                                 break
                     if eval_nr_episodes == self.evaluation_episodes:
                         break
                 evaluation_metrics = {key: np.mean(value) for key, value in evaluation_metrics.items()}
+                if "eval/landing_success_rate" in evaluation_metrics:
+                    evaluation_metrics["eval/landing_episode_count"] = eval_nr_episodes
                 self.set_train_mode()
             
             evaluating_end_time = time.time()
@@ -371,6 +391,11 @@ class PPO:
 
             rollout_info_metrics = {}
             env_info_metrics = {}
+            if rollout_landing_episodes["landing_success_rate"]:
+                rollout_info_metrics["rollout/landing_episode_count"] = dones_this_rollout
+            for name, values in rollout_landing_episodes.items():
+                if values:
+                    rollout_info_metrics[f"rollout/{name}"] = np.mean(values)
             if step_info_collection:
                 info_names = list(step_info_collection.keys())
                 for info_name in info_names:

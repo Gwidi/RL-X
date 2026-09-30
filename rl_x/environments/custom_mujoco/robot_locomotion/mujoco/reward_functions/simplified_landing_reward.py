@@ -1305,6 +1305,12 @@ class SimplifiedLandingReward:
         info["curriculum/landing_success"] = float(
             state["landing_success"]
         )
+        # Mutually exclusive episode outcomes, sampled at episode end by PPO.
+        failure_reason = state["landing_failure_reason"]
+        info["outcome/failure_motor_hard_limit"] = float(failure_reason == "motor_hard_limit")
+        info["outcome/failure_thermal_limit"] = float(failure_reason == "thermal_limit")
+        info["outcome/failure_base_crash"] = float(failure_reason == "base_crash")
+        info["outcome/unresolved"] = float(not state["landing_evaluated"])
 
         # Event metrics — dużo łatwiejsze do poprawnej agregacji.
         info["events/landing_success"] = float(
