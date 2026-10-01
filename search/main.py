@@ -131,7 +131,7 @@ class JointMap:
 
 
 class ContactMap:
-    """Geometry IDs needed to distinguish feet from lower-leg collisions."""
+    """Geometry IDs for foot support and disallowed robot contacts."""
 
     def __init__(self, model):
         self.ground_geom_id = model.geom("ground_2").id
@@ -171,15 +171,26 @@ class ContactMap:
         self.foot_legs = sorted(set(self.foot_geom_to_leg.values()))
 
     def support_contact_forces(self, model, data):
-        """Measure contacts with either the floor or the front landing box."""
+        """Measure support forces and flag contacts other than foot-on-support."""
         foot_normal_forces = {
             leg: 0.0 for leg in self.foot_geom_to_leg.values()
         }
         shin_normal_force = 0.0
+        non_foot_contact = False
         contact_force = np.zeros(6)
         for contact_id in range(data.ncon):
             contact = data.contact[contact_id]
             pair = {contact.geom1, contact.geom2}
+            robot_geoms = {
+                geom_id for geom_id in pair if model.geom_bodyid[geom_id] != 0
+            }
+            if robot_geoms and not (
+                pair & self.support_geom_ids
+                and robot_geoms <= self.foot_geom_ids
+            ):
+                # A torso/leg self-collision can absorb a landing impact even
+                # when every robot geom remains above the floor.
+                non_foot_contact = True
             if not (pair & self.support_geom_ids):
                 continue
             mujoco.mj_contactForce(model, data, contact_id, contact_force)
@@ -190,17 +201,6 @@ class ContactMap:
                 ] += normal_force
             if pair & self.shin_geom_ids:
                 shin_normal_force += normal_force
-        non_foot_contact = any(
-            bool(
-                {data.contact[i].geom1, data.contact[i].geom2}
-                & self.support_geom_ids
-            )
-            and not bool(
-                {data.contact[i].geom1, data.contact[i].geom2}
-                & self.foot_geom_ids
-            )
-            for i in range(data.ncon)
-        )
         total_foot_force = sum(foot_normal_forces.values())
         max_single_foot_force = max(foot_normal_forces.values(), default=0.0)
         force_by_foot = np.asarray([
