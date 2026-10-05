@@ -52,15 +52,15 @@ LEG_GAIN_PARAMETER_NAMES = (
     "kd_hip", "kd_thigh", "kd_calf",
 )
 LEG_GAIN_BOUNDS = np.array([
-    (20.0, 60.0),
     (20.0, 100.0),
     (20.0, 100.0),
-    (0.2, 5.0),
+    (20.0, 100.0),
+    (0.2, 8.0),
     (0.2, 8.0),
     (0.2, 8.0),
 ], dtype=float)
 SPINE_GAIN_BOUNDS = np.array([
-    (20.0, 100.0),  # kp_spine
+    (10.0, 100.0),  # kp_spine
     (0.2, 8.0),    # kd_spine
 ], dtype=float)
 # Nominal leg positions are optimized as offsets from NOMINAL_POSE. Keeping
@@ -73,7 +73,7 @@ INDIVIDUAL_GAIN_NAMES = tuple(
     for gain in ("kp", "kd")
     for name in LEG_NOMINAL_POSITION_NAMES
 )
-NOMINAL_POSITION_DELTA_BOUNDS = (-0.5, 0.5)
+NOMINAL_POSITION_DELTA_BOUNDS = (-0.6, 0.6)
 MAX_GP_POINTS = 400
 _WORKER_MODEL = None
 _WORKER_DATA = None

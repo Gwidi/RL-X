@@ -340,13 +340,22 @@ class PPO:
                 self.set_eval_mode()
                 eval_state, _ = self.eval_env.reset()
                 eval_nr_episodes = 0
+                # Take a fixed quota from each environment. Selecting the first
+                # completed episodes biases evaluation toward fast failures.
+                nr_eval_envs = len(eval_state)
+                eval_target_per_env = np.full(
+                    nr_eval_envs, self.evaluation_episodes // nr_eval_envs, dtype=int
+                )
+                eval_target_per_env[:self.evaluation_episodes % nr_eval_envs] += 1
+                eval_completed_per_env = np.zeros(nr_eval_envs, dtype=int)
                 evaluation_metrics = {"eval/episode_return": [], "eval/episode_length": []}
                 while True:
                     eval_processed_action = get_deterministic_action(self.policy_state, eval_state)
                     eval_state, eval_reward, eval_terminated, eval_truncated, eval_info = self.eval_env.step(jax.device_get(eval_processed_action))
                     eval_done = eval_terminated | eval_truncated
                     for i, single_done in enumerate(eval_done):
-                        if single_done:
+                        if single_done and eval_completed_per_env[i] < eval_target_per_env[i]:
+                            eval_completed_per_env[i] += 1
                             eval_nr_episodes += 1
                             final_info = eval_info["final_info"][i]
                             evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
