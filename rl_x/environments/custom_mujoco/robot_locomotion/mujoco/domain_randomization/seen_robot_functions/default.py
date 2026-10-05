@@ -56,8 +56,8 @@ class DefaultDRSeenRobotFunction:
         self.default_joint_armatures = self.env.initial_mj_model.dof_armature[6:]
         self.default_joint_stiffnesses = self.env.initial_mj_model.jnt_stiffness[1:]
         self.default_joint_frictionlosses = self.env.initial_mj_model.dof_frictionloss[6:]
-        self.default_p_gain = -self.env.initial_mj_model.actuator_biasprm[0, 1]
-        self.default_d_gain = -self.env.initial_mj_model.actuator_biasprm[0, 2]
+        self.default_p_gain = -self.env.initial_mj_model.actuator_biasprm[:, 1].copy()
+        self.default_d_gain = -self.env.initial_mj_model.actuator_biasprm[:, 2].copy()
         self.default_scaling_factor = env.robot_config["scaling_factor"]
 
 

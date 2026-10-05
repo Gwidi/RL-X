@@ -12,6 +12,7 @@
     <!-- gear=9 maps 16 Nm at the motor to 144 Nm at the joint.
          Divide the old joint-space PD gains by gear^2 to preserve the
          original joint-space stiffness and damping below saturation. -->
+    <!-- search/replay_target.py gains are joint-side; gear=9 means actuator gains are divided by gear^2. -->
     <position forcelimited="true" kp="0.24691358024691357" kv="0.006172839506172839"/>
     <default class="foot">
       <geom size="0.02" friction="1.1 0.005 0.0001" solimp="0.015 1 0.02" condim="6" priority="1"/>
@@ -177,18 +178,18 @@
   
   <actuator>
     <position name="spine" joint="spine_joint" gear="9" forcerange="-48 48"/>
-    <position name="RL_hip" joint="RL_hip_joint" gear="9" forcerange="-16 16"/>
-    <position name="RL_thigh" joint="RL_thigh_joint" gear="9" forcerange="-16 16"/>
-    <position name="RL_calf" joint="RL_calf_joint" gear="9" forcerange="-16 16"/>
-    <position name="RR_hip" joint="RR_hip_joint" gear="9" forcerange="-16 16"/>
-    <position name="RR_thigh" joint="RR_thigh_joint" gear="9" forcerange="-16 16"/>
-    <position name="RR_calf" joint="RR_calf_joint" gear="9" forcerange="-16 16"/>
-    <position name="FR_hip" joint="FR_hip_joint" gear="9" forcerange="-16 16"/>
-    <position name="FR_thigh" joint="FR_thigh_joint" gear="9" forcerange="-16 16"/>
-    <position name="FR_calf" joint="FR_calf_joint" gear="9" forcerange="-16 16"/>
-    <position name="FL_hip" joint="FL_hip_joint" gear="9" forcerange="-16 16"/>
-    <position name="FL_thigh" joint="FL_thigh_joint" gear="9" forcerange="-16 16"/>
-    <position name="FL_calf" joint="FL_calf_joint" gear="9" forcerange="-16 16"/>
+    <position name="RL_hip" joint="RL_hip_joint" gear="9" kp="0.9666407701635985" kv="0.05087360140687348" forcerange="-16 16"/>
+    <position name="RL_thigh" joint="RL_thigh_joint" gear="9" kp="0.4265455829826122" kv="0.04705748633861439" forcerange="-16 16"/>
+    <position name="RL_calf" joint="RL_calf_joint" gear="9" kp="0.8670926500300559" kv="0.02333161803818540" forcerange="-16 16"/>
+    <position name="RR_hip" joint="RR_hip_joint" gear="9" kp="0.9666407701635985" kv="0.05087360140687348" forcerange="-16 16"/>
+    <position name="RR_thigh" joint="RR_thigh_joint" gear="9" kp="0.4265455829826122" kv="0.04705748633861439" forcerange="-16 16"/>
+    <position name="RR_calf" joint="RR_calf_joint" gear="9" kp="0.8670926500300559" kv="0.02333161803818540" forcerange="-16 16"/>
+    <position name="FR_hip" joint="FR_hip_joint" gear="9" kp="0.9666407701635985" kv="0.05087360140687348" forcerange="-16 16"/>
+    <position name="FR_thigh" joint="FR_thigh_joint" gear="9" kp="0.4265455829826122" kv="0.04705748633861439" forcerange="-16 16"/>
+    <position name="FR_calf" joint="FR_calf_joint" gear="9" kp="0.8670926500300559" kv="0.02333161803818540" forcerange="-16 16"/>
+    <position name="FL_hip" joint="FL_hip_joint" gear="9" kp="0.9666407701635985" kv="0.05087360140687348" forcerange="-16 16"/>
+    <position name="FL_thigh" joint="FL_thigh_joint" gear="9" kp="0.4265455829826122" kv="0.04705748633861439" forcerange="-16 16"/>
+    <position name="FL_calf" joint="FL_calf_joint" gear="9" kp="0.8670926500300559" kv="0.02333161803818540" forcerange="-16 16"/>
   </actuator>
 
   <sensor>
