@@ -52,13 +52,13 @@ def get_config(environment_name):
                 #     "max_lateral_velocity": 2.0,
                 # },
             "energy_dissipation_curriculum": {
-                "start_height": 0.5,
+                "start_height": 4.0,
                 "target_height": 5.0,
 
-                "min_angle_deg": 0.0,
+                "min_angle_deg": 6.0,
                 "max_angle_deg": 3.0,
 
-                "min_lateral_velocity": 0.0,
+                "min_lateral_velocity": 3.0,
                 "max_lateral_velocity": 3.0,
 
                 "ema_alpha": 0.05,
@@ -151,14 +151,14 @@ def get_config(environment_name):
         "critic_exteroceptive_observation_type": "height_over_ground",
         "reward": {
             "type": "simplified_landing",
-            # hardware
-            "leg_motor_torque_limit": 16.0,
-            "spine_motor_torque_limit": 48.0,
+            # Motor-side limits match the effective ctrlrange in search/intention.xml.
+            "leg_motor_torque_limit": 3.0,
+            "spine_motor_torque_limit": 0.785,
 
             "leg_gear_ratio": 9.0,
-            "spine_gear_ratio": 9.0,
+            "spine_gear_ratio": 36.0,
 
-            # gdy MJCF ma rzeczywiste gear=9:
+            # MJCF includes the physical transmission gear.
             "torque_measurement_mode": "mujoco_actuator",
 
             # thermal proxy

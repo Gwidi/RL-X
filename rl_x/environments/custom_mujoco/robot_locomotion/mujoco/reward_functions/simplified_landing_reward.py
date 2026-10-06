@@ -28,7 +28,7 @@ class SimplifiedLandingReward:
 
         Jeśli używasz tego trybu, sam model powinien mieć odpowiednio
         zwiększony forcerange joint-side, np.:
-            16 Nm * 9 = 144 Nm
+            3 Nm * 9 = 27 Nm
         dla nóg.
     """
 
@@ -44,11 +44,11 @@ class SimplifiedLandingReward:
 
         # Twarde fizyczne limity. NIE RANDOMIZOWAĆ.
         self.leg_motor_torque_limit = float(
-            cfg.get("leg_motor_torque_limit", 16.0)
+            cfg.get("leg_motor_torque_limit", 3.0)
         )
 
         self.spine_motor_torque_limit = float(
-            cfg.get("spine_motor_torque_limit", 48.0)
+            cfg.get("spine_motor_torque_limit", 0.785)
         )
 
         self.leg_gear_ratio = float(
@@ -56,7 +56,7 @@ class SimplifiedLandingReward:
         )
 
         self.spine_gear_ratio = float(
-            cfg.get("spine_gear_ratio", 9.0)
+            cfg.get("spine_gear_ratio", 36.0)
         )
 
         # "mujoco_actuator" = actuator_force jest motor-side.
