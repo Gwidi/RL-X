@@ -52,13 +52,13 @@ def get_config(environment_name):
                 #     "max_lateral_velocity": 2.0,
                 # },
             "energy_dissipation_curriculum": {
-                "start_height": 4.0,
+                "start_height": 1.0,
                 "target_height": 5.0,
 
-                "min_angle_deg": 6.0,
+                "min_angle_deg": 0.0,
                 "max_angle_deg": 3.0,
 
-                "min_lateral_velocity": 3.0,
+                "min_lateral_velocity": 0.0,
                 "max_lateral_velocity": 3.0,
 
                 "ema_alpha": 0.05,
