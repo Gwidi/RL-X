@@ -233,11 +233,16 @@ class Runner:
 
     def import_environment(self, environment_name, implementation_package_names):
         for implementation_library_name in implementation_package_names:
+            module_name = f"{implementation_library_name}.environments.{environment_name}"
             try:
-                importlib.import_module(f"{implementation_library_name}.environments.{environment_name}")
-                break
-            except ModuleNotFoundError:
-                pass
+                importlib.import_module(module_name)
+                return
+            except ModuleNotFoundError as error:
+                # Try another implementation only if the requested module is absent.
+                # Missing dependencies inside an existing environment must be reported.
+                if error.name is None or not (module_name == error.name or module_name.startswith(error.name + ".")):
+                    raise
+        raise ModuleNotFoundError(f"Environment {environment_name!r} was not found in {implementation_package_names!r}")
 
 
     def import_algorithm(self, algorithm_name, implementation_package_names):

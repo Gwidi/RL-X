@@ -66,7 +66,7 @@
       <body name="rear" pos="-0.141 -0.0395 0" quat="-9.37064e-07 -0.706262 0.707951 9.39306e-07">
         <inertial pos="-0.038 0.075 0" quat="0.5 0.5 -0.5 0.5" mass="1.337" diaginertia="0.00509714 0.00464543 0.00198234" />
         <joint name="spine_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-1.57 1.57" />
-        <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="rear" />
+        <geom name="rear_mesh" type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="rear" />
         <geom size="0.1 0.025 0.05" pos="-0.04 0.08 0" type="box" rgba="0.6 0.6 0.6 0" />
         <geom class="reward_collision_sphere" pos="-0.04 0 0" size="0.05"/>
         <body name="rl_l0" pos="-0.1025 0.10765 0" quat="0.707388 0 0 0.706825">
@@ -171,6 +171,9 @@
 
   <contact>
     <pair geom1="trunk_box" geom2="floor"/>
+    <!-- The rear mesh includes the spine housing. Explicit pairing enables
+         ground contact while keeping robot self-collisions disabled. -->
+    <pair geom1="rear_mesh" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="RL_foot" geom2="floor"/>
     <pair geom1="RR_foot" geom2="floor"/>
     <pair geom1="FR_foot" geom2="floor"/>

@@ -243,6 +243,8 @@ class LocomotionEnv(gym.Env):
             "mj_model": deepcopy(self.initial_mj_model),
             "data": mujoco.MjData(self.initial_mj_model),
             "actuator_forcerange_used": self.initial_mj_model.actuator_forcerange.copy(),
+            "physics_base_accelerations": np.zeros(self.nr_substeps),
+            "physics_floor_contacts": np.zeros(self.nr_substeps, dtype=bool),
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
@@ -408,7 +410,22 @@ class LocomotionEnv(gym.Env):
         self.internal_state["actuator_forcerange_used"] = (
             self.internal_state["mj_model"].actuator_forcerange.copy()
         )
-        mujoco.mj_step(self.internal_state["mj_model"], self.internal_state["data"], self.nr_substeps)
+        if getattr(self.reward_function, "needs_physics_step_acceleration", False):
+            # Record every physics step: an impact can disappear before the
+            # last substep of a policy action. Capture it before randomization
+            # can change the model or overwrite the dynamics buffers.
+            model = self.internal_state["mj_model"]
+            data = self.internal_state["data"]
+            for substep in range(self.nr_substeps):
+                mujoco.mj_step(model, data)
+                self.internal_state["physics_base_accelerations"][substep] = (
+                    np.linalg.norm(data.qacc[:3])
+                )
+                self.internal_state["physics_floor_contacts"][substep] = (
+                    np.any(data.contact.geom == self.floor_geom_id)
+                )
+        else:
+            mujoco.mj_step(self.internal_state["mj_model"], self.internal_state["data"], self.nr_substeps)
         max_qvel = 100 * np.ones(self.initial_mj_model.nv)
         max_qvel[self.actuator_joint_mask_qvel] = self.internal_state["actuator_joint_max_velocities"]
         self.internal_state["data"].qvel = np.clip(self.internal_state["data"].qvel, -max_qvel, max_qvel)

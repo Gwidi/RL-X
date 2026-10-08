@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 
 
@@ -187,6 +189,37 @@ class SimplifiedLandingReward:
             * self.dt
         )
 
+        self.body_acceleration_coeff = float(
+            cfg.get("body_acceleration_coeff", 100.0)
+        )
+        self.body_acceleration_limit = float(
+            cfg.get("body_acceleration_limit", 98.1)
+        )
+        self.body_acceleration_window = float(
+            cfg.get("body_acceleration_window", 0.05)
+        )
+        if (
+            not np.isfinite(self.body_acceleration_coeff)
+            or self.body_acceleration_coeff < 0
+        ):
+            raise ValueError("body_acceleration_coeff must be finite and non-negative")
+        if (
+            not np.isfinite(self.body_acceleration_limit)
+            or self.body_acceleration_limit <= 0
+        ):
+            raise ValueError("body_acceleration_limit must be finite and positive")
+        if (
+            not np.isfinite(self.body_acceleration_window)
+            or self.body_acceleration_window <= 0
+        ):
+            raise ValueError("body_acceleration_window must be finite and positive")
+        self.body_acceleration_window_steps = max(
+            1,
+            int(np.ceil(self.body_acceleration_window / env.env_config["timestep"])),
+        )
+        # Keep acceleration diagnostics available even with a zero penalty.
+        self.needs_physics_step_acceleration = True
+
         self.joint_pos_coeff = (
             float(cfg.get("joint_pos_coeff", 0.0))
             * self.dt
@@ -280,6 +313,16 @@ class SimplifiedLandingReward:
         # --------------------------------------------------------------
 
         state["base_crash_detected"] = False
+        state["body_acceleration_has_contact"] = False
+        state["body_acceleration_history"] = deque(
+            [0.0] * self.body_acceleration_window_steps,
+            maxlen=self.body_acceleration_window_steps,
+        )
+        state["body_acceleration"] = 0.0
+        state["peak_body_acceleration"] = 0.0
+        state["peak_body_acceleration_raw"] = 0.0
+        state["physics_base_accelerations"].fill(0.0)
+        state["physics_floor_contacts"].fill(False)
         state["motor_hard_limit_detected"] = False
         state["thermal_failure_detected"] = False
 
@@ -380,6 +423,43 @@ class SimplifiedLandingReward:
 
         if state["has_touched_ground"]:
             state["time_since_touchdown"] += self.env.dt
+
+    # ==================================================================
+    # IMPACT ACCELERATION
+    # ==================================================================
+
+    def _body_acceleration_reward(self):
+        """Penalize impact acceleration using a physics-rate moving mean.
+
+        Like search/main.py, measure the norm of world-frame base qacc.
+        Start on any ground contact, including spine-first impact. Pre-contact
+        samples are zero so gravity in free fall is excluded; zero padding
+        also allows detecting a large impact without waiting a full window.
+        """
+        state = self.env.internal_state
+        history = state["body_acceleration_history"]
+        physics_dt = self.env.env_config["timestep"]
+        reward = 0.0
+        for acceleration, contact in zip(
+            state["physics_base_accelerations"],
+            state["physics_floor_contacts"],
+        ):
+            state["body_acceleration_has_contact"] |= bool(contact)
+            if not state["body_acceleration_has_contact"]:
+                continue
+            acceleration = float(acceleration)
+            state["peak_body_acceleration_raw"] = max(
+                state["peak_body_acceleration_raw"], acceleration
+            )
+            history.append(acceleration)
+            average = float(np.mean(history))
+            state["body_acceleration"] = average
+            state["peak_body_acceleration"] = max(
+                state["peak_body_acceleration"], average
+            )
+            excess = max(0.0, average / self.body_acceleration_limit - 1.0)
+            reward -= self.body_acceleration_coeff * excess**2 * physics_dt
+        return reward
 
     # ==================================================================
     # TORQUE CONVERSION
@@ -1103,6 +1183,8 @@ class SimplifiedLandingReward:
             + floor_collision_reward
         )
 
+        body_acceleration_reward = self._body_acceleration_reward()
+
         # ==============================================================
         # ACTION RATE
         # ==============================================================
@@ -1185,6 +1267,7 @@ class SimplifiedLandingReward:
             + landing_event_reward
             + action_rate_reward
             + collision_reward
+            + body_acceleration_reward
         )
 
         reward = np.nan_to_num(
@@ -1230,7 +1313,12 @@ class SimplifiedLandingReward:
         info["reward/collision"] = (
             collision_reward
         )
+        info["reward/body_acceleration"] = body_acceleration_reward
         info["reward/total"] = reward
+
+        info["metrics/body_acceleration"] = state["body_acceleration"]
+        info["metrics/peak_body_acceleration"] = state["peak_body_acceleration"]
+        info["metrics/peak_body_acceleration_raw"] = state["peak_body_acceleration_raw"]
 
         # motor torque
         info["metrics/peak_leg_motor_torque"] = (

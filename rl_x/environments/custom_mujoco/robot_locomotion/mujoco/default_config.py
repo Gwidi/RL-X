@@ -184,6 +184,10 @@ def get_config(environment_name):
             "joint_vel_coeff": 0.05,
             "action_rate_coeff": 0.02,
 
+            "body_acceleration_coeff": 100.0,
+            "body_acceleration_limit": 98.1,
+            "body_acceleration_window": 0.05,
+
             "collision_coeff": 5.0,
             "floor_collision_coeff": 0.05,
 
