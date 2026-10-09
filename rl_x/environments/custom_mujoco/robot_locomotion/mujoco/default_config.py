@@ -200,6 +200,8 @@ def get_config(environment_name):
 
             "collision_coeff": 5.0,
             "floor_collision_coeff": 0.0,
+            "body_support_penalty_coeff": 10.0,
+            "body_support_grace_time": 0.5,
 
             "nominal_landing_height": 0.35,
         },

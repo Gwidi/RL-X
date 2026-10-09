@@ -127,6 +127,14 @@ class SimplifiedLandingReward:
         # LANDING / SAFETY
         # ==============================================================
 
+        # Cost per second of trunk/rear support after initial compression.
+        self.body_support_penalty_coeff = float(cfg.get("body_support_penalty_coeff", 10.0))
+        self.body_support_grace_time = float(cfg.get("body_support_grace_time", 0.5))
+        for name in ("body_support_penalty_coeff", "body_support_grace_time"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+
         self.base_impact_acceleration_limit = float(
             cfg.get("base_impact_acceleration_limit", 98.1)
         )
@@ -1086,6 +1094,17 @@ class SimplifiedLandingReward:
         )
 
         body_acceleration_reward = self._body_acceleration_reward()
+        # Only physical trunk/rear contact is charged; feet support and
+        # airborne rotation are free. The grace period starts at touchdown
+        # and is not renewed by bouncing or briefly clearing the floor.
+        support_penalty_dt = np.clip(
+            time_since_touch - self.body_support_grace_time, 0.0, self.dt
+        ) if has_touched else 0.0
+        body_support_reward = (
+            -self.body_support_penalty_coeff
+            * support_penalty_dt
+            * np.mean(state["physics_body_floor_contacts"])
+        )
 
         # ==============================================================
         # ACTION RATE
@@ -1169,6 +1188,7 @@ class SimplifiedLandingReward:
             + action_rate_reward
             + collision_reward
             + body_acceleration_reward
+            + body_support_reward
         )
 
         reward = np.nan_to_num(
@@ -1186,6 +1206,7 @@ class SimplifiedLandingReward:
 
         # rewards
         info["reward/alive"] = alive_reward
+        info["reward/body_support"] = body_support_reward
         info["reward/base_vel"] = base_vel_reward
         info["reward/angular_position"] = (
             angular_position_reward
