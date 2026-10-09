@@ -36,6 +36,9 @@ class LocomotionEnv(gym.Env):
         self.env_config = env_config
         self.add_goal_arrow = env_config["add_goal_arrow"]
         self.nr_envs = nr_envs
+        self.imu_history_length = env_config.get("imu_history_length", 5)
+        if not isinstance(self.imu_history_length, int) or self.imu_history_length < 0:
+            raise ValueError("imu_history_length must be a non-negative integer")
 
         self.np_rng = np.random.default_rng(seed)
 
@@ -46,6 +49,8 @@ class LocomotionEnv(gym.Env):
         xml_handle.option.iterations = 100
         xml_handle.option.ls_iterations = 50
         xml_handle.option.flag.eulerdamp = "enable"
+        # Add the same hardware IMU channel for every supported robot model.
+        xml_handle.sensor.add("accelerometer", name="imu_linear_acceleration", site="imu")
 
         if "hfield" in env_config["terrain"]["type"]:
             xml_handle.asset.insert("hfield", 0, name="empty_hfield", file="default_hfield_80.png", size="4 4 30.0 0.125")
@@ -153,6 +158,8 @@ class LocomotionEnv(gym.Env):
         imu_angular_velocity_sensor_id = self.initial_mj_model.sensor("imu_angular_velocity").id
         self.imu_angular_velocity_sensor_adr = self.initial_mj_model.sensor_adr[imu_angular_velocity_sensor_id]
         self.imu_angular_velocity_sensor_dim = self.initial_mj_model.sensor_dim[imu_angular_velocity_sensor_id]
+        imu_acceleration_sensor_id = self.initial_mj_model.sensor("imu_linear_acceleration").id
+        self.imu_linear_acceleration_sensor_adr = self.initial_mj_model.sensor_adr[imu_acceleration_sensor_id]
         imu_linear_velocity_sensor_id = self.initial_mj_model.sensor("imu_linear_velocity").id
         self.imu_linear_velocity_sensor_adr = self.initial_mj_model.sensor_adr[imu_linear_velocity_sensor_id]
         self.imu_linear_velocity_sensor_dim = self.initial_mj_model.sensor_dim[imu_linear_velocity_sensor_id]
@@ -251,6 +258,7 @@ class LocomotionEnv(gym.Env):
             "physics_base_accelerations": np.zeros(self.nr_substeps),
             "physics_floor_contacts": np.zeros(self.nr_substeps, dtype=bool),
             "physics_body_floor_contacts": np.zeros(self.nr_substeps, dtype=bool),
+            "imu_history": np.zeros((self.imu_history_length, 6)),
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
@@ -389,6 +397,8 @@ class LocomotionEnv(gym.Env):
         self.domain_randomization_action_delay_function.setup()
         self.handle_domain_randomization(is_episode_start=True)
 
+        self.internal_state["imu_history"].fill(0.0)
+
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
             "episode_return": 0.0,
@@ -462,7 +472,8 @@ class LocomotionEnv(gym.Env):
         
         next_observation = self.get_observation(chosen_action)
         terminated = (
-            self.termination_function.should_terminate()
+            (not getattr(self.reward_function, "uses_landing_outcomes", False)
+             and self.termination_function.should_terminate())
             or np.any(np.abs(self.internal_state["data"].qvel[:3]) == 100.0)
             or self.internal_state.get("landing_evaluated", False)
         )
@@ -508,10 +519,25 @@ class LocomotionEnv(gym.Env):
             self.internal_state["imu_orientation_rotation_inverse"].apply(np.array([0.0, 0.0, -1.0])),
             np.array([self.policy_exteroceptive_observation_function.get_exteroceptive_observation()]).reshape(-1),
             np.array([self.critic_exteroceptive_observation_function.get_exteroceptive_observation()]).reshape(-1),
+            self.internal_state["data"].sensordata[
+                self.imu_linear_acceleration_sensor_adr:self.imu_linear_acceleration_sensor_adr + 3
+            ],
+            self.internal_state["imu_history"].reshape(-1),
         ])
 
         # Add noise
         self.observation_noise_function.modify_observation(observation)
+
+        # Store noisy samples once, so old IMU readings retain their original
+        # noise rather than being re-randomized on every policy step.
+        if self.imu_history_length:
+            history = self.internal_state["imu_history"]
+            history[:-1] = history[1:]
+            history[-1] = np.concatenate([
+                observation[self.imu_linear_acceleration_obs_idx] / 98.1,
+                observation[self.imu_angular_vel_obs_idx] / 50.0,
+            ])
+            observation[self.imu_history_obs_idx] = history.reshape(-1)
 
         # Normalize and clip
         observation[self.joint_positions_obs_idx] = (observation[self.joint_positions_obs_idx] - self.internal_state["actuator_joint_nominal_positions"]) / 3.14
@@ -522,6 +548,7 @@ class LocomotionEnv(gym.Env):
         observation[self.feet_time_in_air_obs_idx] = np.clip((observation[self.feet_time_in_air_obs_idx] / (5.0 / 2)) - 1.0, -1.0, 1.0)
         observation[self.imu_linear_vel_obs_idx] = np.clip(observation[self.imu_linear_vel_obs_idx] / 10.0, -1.0, 1.0)
         observation[self.imu_angular_vel_obs_idx] = np.clip(observation[self.imu_angular_vel_obs_idx] / 50.0, -1.0, 1.0)
+        observation[self.imu_linear_acceleration_obs_idx] /= 98.1
         if len(self.policy_exteroception_obs_idx) > 0:
             observation[self.policy_exteroception_obs_idx] = np.clip((observation[self.policy_exteroception_obs_idx] / (10.0 / 2)) - 1.0, -1.0, 1.0)
         if len(self.critic_exteroception_obs_idx) > 0:
@@ -580,6 +607,10 @@ class LocomotionEnv(gym.Env):
         current_observation_idx += self.policy_exteroceptive_observation_function.nr_exteroceptive_observations
         self.critic_exteroception_obs_idx = np.array([current_observation_idx + i for i in range(self.critic_exteroceptive_observation_function.nr_exteroceptive_observations)], dtype=int)
         current_observation_idx += self.critic_exteroceptive_observation_function.nr_exteroceptive_observations
+        self.imu_linear_acceleration_obs_idx = np.arange(current_observation_idx, current_observation_idx + 3)
+        current_observation_idx += 3
+        self.imu_history_obs_idx = np.arange(current_observation_idx, current_observation_idx + 6 * self.imu_history_length)
+        current_observation_idx += 6 * self.imu_history_length
 
         self.policy_observation_indices = np.concatenate([
             self.joint_positions_obs_idx,
@@ -589,6 +620,7 @@ class LocomotionEnv(gym.Env):
             self.goal_velocities_obs_idx,
             self.gravity_vector_obs_idx,
             self.policy_exteroception_obs_idx,
+            self.imu_history_obs_idx,
         ], dtype=int)
 
         self.critic_observation_indices = np.concatenate([
@@ -603,6 +635,7 @@ class LocomotionEnv(gym.Env):
             self.goal_velocities_obs_idx,
             self.gravity_vector_obs_idx,
             self.critic_exteroception_obs_idx,
+            self.imu_history_obs_idx,
         ], dtype=int)
 
         observation_space_low = -np.ones(current_observation_idx) * np.inf

@@ -1,6 +1,7 @@
 import os
 import shutil
 import json
+import zipfile
 import logging
 import time
 from collections import deque
@@ -493,6 +494,22 @@ class PPO:
 
 
     def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
+        # New IMU inputs change both network input dimensions. Reject a
+        # mismatched checkpoint before extraction with an actionable message.
+        if "imu_history_length" in config.environment:
+            with zipfile.ZipFile(config.runner.load_model) as archive:
+                saved_env = (
+                    json.loads(archive.read("config_environment.json"))
+                    if "config_environment.json" in archive.namelist() else {}
+                )
+            saved_history = saved_env.get("imu_history_length", 0)
+            if saved_history != config.environment.imu_history_length:
+                raise ValueError(
+                    f"Checkpoint uses imu_history_length={saved_history}, but the environment "
+                    f"uses {config.environment.imu_history_length}. Retrain to use the new IMU "
+                    "observations, or set --environment.imu_history_length to the saved value "
+                    "(IMU_HISTORY_LENGTH=0 for legacy models in experiments/test.sh)."
+                )
         splitted_path = config.runner.load_model.split("/")
         checkpoint_dir = os.path.abspath("/".join(splitted_path[:-1]))
         checkpoint_file_name = splitted_path[-1]

@@ -10,6 +10,9 @@ def get_config(environment_name):
         "copy_train_env_for_eval": True,
         "train_robot": "unitree_go2",
         "spine_locked": False,
+        # Control-rate history of local accelerometer + gyro samples. No range
+        # or simulator linear-velocity measurement is exposed to the actor.
+        "imu_history_length": 5,
         "control_type": "pd",
         "async_skip_percentage": 0.5,
         "command": {
@@ -96,6 +99,7 @@ def get_config(environment_name):
                 "joint_position": 0.01,
                 "joint_velocity": 1.5,
                 "imu_angular_velocity": 0.2,
+                "imu_linear_acceleration": 0.2,
                 "gravity_vector": 0.05,
                 "exteroception": 0.03,
             },
@@ -174,29 +178,28 @@ def get_config(environment_name):
             # success
             "success_confirmation_time": 2.0,
             "success_stability_time": 0.5,
-            "success_min_height": 0.175,
-            "success_max_tilt_deg": 30.0,
             "success_max_linear_velocity": 0.5,
             "success_max_angular_velocity": 1.0,
+            "base_impact_acceleration_limit": 98.1,
             "landing_success_coeff": 100.0,
             "landing_failure_coeff": 100.0,
 
             # shaping
             "alive_coeff": 0.5,
-            "base_vel_coeff": 0.5,
-            "base_height_coeff": 1.5,
+            "base_vel_coeff": 0.0,
+            "base_height_coeff": 0.0,
 
             "roll_pitch_pos_coeff": 0.0,
             "joint_pos_coeff": 0.0,
-            "joint_vel_coeff": 0.05,
-            "action_rate_coeff": 0.02,
+            "joint_vel_coeff": 0.0,
+            "action_rate_coeff": 0.0,
 
             "body_acceleration_coeff": 100.0,
             "body_acceleration_limit": 98.1,
             "body_acceleration_window": 0.05,
 
             "collision_coeff": 5.0,
-            "floor_collision_coeff": 0.05,
+            "floor_collision_coeff": 0.0,
 
             "nominal_landing_height": 0.35,
         },

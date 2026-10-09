@@ -12,7 +12,8 @@ class SimplifiedLandingReward:
     2. Nie może przekroczyć fizycznego limitu momentu silników.
     3. Nie może nadmiernie obciążać termicznie silników.
     4. Duży, krótki moment podczas amortyzacji jest dozwolony.
-    5. Sukces jest zatwierdzany dopiero po okresie stabilizacji po touchdown.
+    5. Sukces oznacza zakończenie upadku, niezależnie od końcowej pozycji.
+       Łagodny kontakt korpusu jest dozwolony; mocny impact jest porażką.
     6. Spine locked nie ma aktywnego silnika spine i nie jest monitorowany
        jako actuator torque.
 
@@ -37,6 +38,8 @@ class SimplifiedLandingReward:
     def __init__(self, env):
         self.env = env
         self.dt = env.dt
+        # Generic below-height termination would reject safe lying poses.
+        self.uses_landing_outcomes = True
 
         cfg = env.env_config.get("reward", {})
 
@@ -124,8 +127,8 @@ class SimplifiedLandingReward:
         # LANDING / SAFETY
         # ==============================================================
 
-        self.base_crash_height = float(
-            cfg.get("base_crash_height", 0.05)
+        self.base_impact_acceleration_limit = float(
+            cfg.get("base_impact_acceleration_limit", 98.1)
         )
 
         # Sukces zatwierdzamy dopiero po tym czasie od touchdown.
@@ -134,14 +137,12 @@ class SimplifiedLandingReward:
             cfg.get("success_confirmation_time", 2.0)
         )
         self.success_stability_time = float(cfg.get("success_stability_time", 0.5))
-        self.success_min_height = float(cfg.get("success_min_height", 0.175))
-        self.success_max_tilt = np.deg2rad(float(cfg.get("success_max_tilt_deg", 30.0)))
         self.success_max_linear_velocity = float(cfg.get("success_max_linear_velocity", 0.5))
         self.success_max_angular_velocity = float(cfg.get("success_max_angular_velocity", 1.0))
         for name, value in (
             ("success_stability_time", self.success_stability_time),
-            ("success_min_height", self.success_min_height),
-            ("success_max_tilt_deg", self.success_max_tilt),
+            ("base_impact_acceleration_limit", self.base_impact_acceleration_limit),
+            ("success_confirmation_time", self.success_confirmation_time),
             ("success_max_linear_velocity", self.success_max_linear_velocity),
             ("success_max_angular_velocity", self.success_max_angular_velocity),
         ):
@@ -168,28 +169,13 @@ class SimplifiedLandingReward:
             * self.dt
         )
 
-        self.base_height_coeff = (
-            float(cfg.get("base_height_coeff", 1.5))
-            * self.dt
-        )
-
-        self.roll_pitch_pos_coeff = (
-            float(cfg.get("roll_pitch_pos_coeff", 0.0))
-            * self.dt
-        )
-
         self.base_vel_coeff = (
-            float(cfg.get("base_vel_coeff", 0.5))
+            float(cfg.get("base_vel_coeff", 0.0))
             * self.dt
         )
 
         self.joint_vel_coeff = (
-            float(cfg.get("joint_vel_coeff", 0.05))
-            * self.dt
-        )
-
-        self.action_rate_coeff = (
-            float(cfg.get("action_rate_coeff", 0.02))
+            float(cfg.get("joint_vel_coeff", 0.0))
             * self.dt
         )
 
@@ -199,7 +185,7 @@ class SimplifiedLandingReward:
         )
 
         self.floor_collision_coeff = (
-            float(cfg.get("floor_collision_coeff", 0.05))
+            float(cfg.get("floor_collision_coeff", 0.0))
             * self.dt
         )
 
@@ -233,15 +219,6 @@ class SimplifiedLandingReward:
         )
         # Keep acceleration diagnostics available even with a zero penalty.
         self.needs_physics_step_acceleration = True
-
-        self.joint_pos_coeff = (
-            float(cfg.get("joint_pos_coeff", 0.0))
-            * self.dt
-        )
-
-        self.nominal_landing_height = cfg[
-            "nominal_landing_height"
-        ]
 
         self.soft_joint_position_limit = float(
             cfg.get("soft_joint_position_limit", 0.9)
@@ -328,6 +305,8 @@ class SimplifiedLandingReward:
         # --------------------------------------------------------------
 
         state["base_crash_detected"] = False
+        state["base_contact_window_remaining"] = 0
+        state["peak_base_impact_acceleration"] = 0.0
         state["body_acceleration_has_contact"] = False
         state["body_acceleration_history"] = deque(
             [0.0] * self.body_acceleration_window_steps,
@@ -434,12 +413,6 @@ class SimplifiedLandingReward:
             + self.env.imu_linear_velocity_sensor_dim
         ]
 
-        if np.any(feet_floor_contacts):
-            state["has_touched_ground"] = True
-
-        if state["has_touched_ground"]:
-            state["time_since_touchdown"] += self.env.dt
-
     # ==================================================================
     # IMPACT ACCELERATION
     # ==================================================================
@@ -456,9 +429,10 @@ class SimplifiedLandingReward:
         history = state["body_acceleration_history"]
         physics_dt = self.env.env_config["timestep"]
         reward = 0.0
-        for acceleration, contact in zip(
+        for acceleration, contact, body_contact in zip(
             state["physics_base_accelerations"],
             state["physics_floor_contacts"],
+            state["physics_body_floor_contacts"],
         ):
             state["body_acceleration_has_contact"] |= bool(contact)
             if not state["body_acceleration_has_contact"]:
@@ -473,6 +447,17 @@ class SimplifiedLandingReward:
             state["peak_body_acceleration"] = max(
                 state["peak_body_acceleration"], average
             )
+            if body_contact:
+                state["base_contact_window_remaining"] = self.body_acceleration_window_steps
+            if state["base_contact_window_remaining"] > 0:
+                # Include the trailing window: the mean can peak just after a
+                # brief body contact has ended. Feet-only impacts remain soft.
+                state["peak_base_impact_acceleration"] = max(
+                    state["peak_base_impact_acceleration"], average
+                )
+                if average > self.base_impact_acceleration_limit:
+                    state["base_crash_detected"] = True
+                state["base_contact_window_remaining"] -= 1
             excess = max(0.0, average / self.body_acceleration_limit - 1.0)
             reward -= self.body_acceleration_coeff * excess**2 * physics_dt
         return reward
@@ -685,9 +670,12 @@ class SimplifiedLandingReward:
         state = self.env.internal_state
         data = state["data"]
 
-        qpos = data.qpos[
-            self.env.actuator_joint_mask_qpos
-        ]
+        # Any ground contact starts confirmation, including body-first landing.
+        # Use all physics substeps, so a brief contact cannot be missed.
+        ground_contact = bool(np.any(state["physics_floor_contacts"]))
+        state["has_touched_ground"] |= ground_contact
+        if state["has_touched_ground"]:
+            state["time_since_touchdown"] += self.dt
 
         qvel = data.qvel[
             self.env.actuator_joint_mask_qvel
@@ -709,8 +697,6 @@ class SimplifiedLandingReward:
             + self.env.imu_angular_velocity_sensor_dim
         ]
 
-        euler = state["imu_orientation_euler"]
-
         has_touched = state.get(
             "has_touched_ground",
             False,
@@ -720,12 +706,6 @@ class SimplifiedLandingReward:
             "time_since_touchdown",
             0.0,
         )
-
-        height = state[
-            "robot_imu_height_over_ground"
-        ]
-
-        target_height = self.nominal_landing_height
 
         # ==============================================================
         # MOTOR / JOINT TORQUE
@@ -945,20 +925,13 @@ class SimplifiedLandingReward:
         # BASE CRASH
         # ==============================================================
 
-        if (
-            np.any(state["physics_body_floor_contacts"])
-            or (has_touched and height < self.base_crash_height)
-        ):
-            state["base_crash_detected"] = True
-
-        # A timer alone can award success to a collapsed or still-moving robot.
+        # Settling is about motion and support, not height or orientation. A
+        # robot supported by its side/base can survive just like one on feet.
         stable = (
             has_touched
-            and height >= self.success_min_height
-            and np.all(np.abs(euler[:2]) <= self.success_max_tilt)
             and np.linalg.norm(lin_vel) <= self.success_max_linear_velocity
             and np.linalg.norm(ang_vel) <= self.success_max_angular_velocity
-            and np.any(self.env.terrain_function.check_feet_floor_contact())
+            and ground_contact
         )
         state["landing_stable_time"] = (
             state["landing_stable_time"] + self.dt if stable else 0.0
@@ -1020,124 +993,19 @@ class SimplifiedLandingReward:
         # FREE FALL / POST TOUCHDOWN SHAPING
         # ==============================================================
 
-        angular_position_reward = (
-            -self.roll_pitch_pos_coeff
-            * np.sum(
-                np.square(euler[:2])
+        # Emergency rescue has no target pose or preferred action smoothness.
+        angular_position_reward = 0.0
+        base_height_reward = 0.0
+        joint_pos_reward = 0.0
+        base_vel_reward = 0.0
+        joint_vel_reward = 0.0
+        # Optional motion shaping only after the minimum survival window;
+        # default coefficients are zero so rotation/compression stay available.
+        if has_touched and time_since_touch >= self.success_confirmation_time:
+            base_vel_reward = -self.base_vel_coeff * (
+                np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel))
             )
-        )
-
-        if not has_touched:
-            # ----------------------------------------------------------
-            # FREE FALL
-            # ----------------------------------------------------------
-
-            base_vel_xy_reward = 0.0
-            base_vel_z_reward = 0.0
-            base_height_reward = 0.0
-
-            nominal_joint_pos = state[
-                "actuator_joint_nominal_positions"
-            ]
-
-            joint_pos_reward = (
-                -0.1
-                * self.joint_pos_coeff
-                * np.mean(
-                    np.square(
-                        qpos - nominal_joint_pos
-                    )
-                )
-            )
-
-            joint_vel_reward = (
-                -0.25
-                * self.joint_vel_coeff
-                * np.mean(
-                    np.square(
-                        leg_qvel
-                    )
-                )
-            )
-
-        else:
-            # ----------------------------------------------------------
-            # POST TOUCHDOWN
-            # ----------------------------------------------------------
-
-            base_vel_xy_reward = (
-                -self.base_vel_coeff
-                * (
-                    np.sum(
-                        np.square(
-                            lin_vel[:2]
-                        )
-                    )
-                    + np.sum(
-                        np.square(
-                            ang_vel
-                        )
-                    )
-                )
-            )
-
-            joint_pos_reward = 0.0
-
-            # ----------------------------------------------------------
-            # ENERGY ABSORPTION
-            # ----------------------------------------------------------
-
-            if time_since_touch < 0.5:
-                # Nie karzemy ruchu w dół podczas kompresji.
-                if lin_vel[2] > 0.0:
-                    base_vel_z_reward = (
-                        -2.0
-                        * self.base_vel_coeff
-                        * np.square(
-                            lin_vel[2]
-                        )
-                    )
-                else:
-                    base_vel_z_reward = 0.0
-
-                # nogi mogą bardzo szybko pracować
-                joint_vel_reward = 0.0
-
-                base_height_reward = 0.0
-
-            else:
-                # ------------------------------------------------------
-                # STABILIZATION
-                # ------------------------------------------------------
-
-                base_vel_z_reward = (
-                    -self.base_vel_coeff
-                    * np.square(
-                        lin_vel[2]
-                    )
-                )
-
-                joint_vel_reward = (
-                    -self.joint_vel_coeff
-                    * np.mean(
-                        np.square(
-                            leg_qvel
-                        )
-                    )
-                )
-
-                base_height_reward = (
-                    -self.base_height_coeff
-                    * np.square(
-                        height
-                        - target_height
-                    )
-                )
-
-        base_vel_reward = (
-            base_vel_xy_reward
-            + base_vel_z_reward
-        )
+            joint_vel_reward = -self.joint_vel_coeff * np.mean(np.square(leg_qvel))
 
         # ==============================================================
         # COLLISIONS
@@ -1221,15 +1089,7 @@ class SimplifiedLandingReward:
         # ACTION RATE
         # ==============================================================
 
-        action_rate_reward = (
-            -self.action_rate_coeff
-            * np.mean(
-                np.square(
-                    action
-                    - state["last_action"]
-                )
-            )
-        )
+        action_rate_reward = 0.0
 
         # ==============================================================
         # ALIVE
@@ -1282,6 +1142,12 @@ class SimplifiedLandingReward:
                     self._finalize_landing(
                         success=True,
                     )
+                )
+            elif state["info_episode_store"]["episode_step"] >= self.env.horizon - 1:
+                # Every completed trial affects curriculum. Timing out while
+                # still falling/bouncing must not silently escape evaluation.
+                landing_event_reward = self._finalize_landing(
+                    success=False, failure_reason="unresolved"
                 )
 
         # ==============================================================
@@ -1354,6 +1220,7 @@ class SimplifiedLandingReward:
         info["metrics/peak_body_acceleration_raw"] = state["peak_body_acceleration_raw"]
         info["metrics/landing_stable_time"] = state["landing_stable_time"]
         info["metrics/body_floor_contact"] = float(np.any(state["physics_body_floor_contacts"]))
+        info["metrics/peak_base_impact_acceleration"] = state["peak_base_impact_acceleration"]
 
         # motor torque
         info["metrics/peak_leg_motor_torque"] = (
@@ -1433,7 +1300,9 @@ class SimplifiedLandingReward:
         info["outcome/failure_motor_hard_limit"] = float(failure_reason == "motor_hard_limit")
         info["outcome/failure_thermal_limit"] = float(failure_reason == "thermal_limit")
         info["outcome/failure_base_crash"] = float(failure_reason == "base_crash")
-        info["outcome/unresolved"] = float(not state["landing_evaluated"])
+        info["outcome/unresolved"] = float(
+            not state["landing_evaluated"] or failure_reason == "unresolved"
+        )
 
         # Event metrics — dużo łatwiejsze do poprawnej agregacji.
         info["events/landing_success"] = float(
