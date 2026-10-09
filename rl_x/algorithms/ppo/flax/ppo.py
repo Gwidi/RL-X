@@ -102,6 +102,7 @@ class PPO:
         if self.save_model:
             os.makedirs(self.save_path)
             self.best_mean_return = -np.inf
+            self.checkpoint_metrics = {}
             self.best_model_file_name = "best.model"
             self.best_model_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
@@ -376,13 +377,26 @@ class PPO:
             time_metrics["time/evaluating_time"] = evaluating_end_time - optimizing_end_time
             
 
-            # Saving
-            # Also only save when there were finished episodes this update
-            if self.save_model and dones_this_rollout > 0:
-                mean_return = np.mean(saving_return_buffer)
-                if mean_return > self.best_mean_return:
+            # Compare checkpoints on the independent evaluation task. Training
+            # returns at different curriculum levels are not comparable.
+            if self.save_model:
+                self.checkpoint_metrics = {
+                    "nr_env_steps": global_step,
+                    **evaluation_metrics,
+                }
+                independent_eval = (
+                    self.eval_env is not self.train_env
+                    and self.evaluation_frequency != -1
+                )
+                if independent_eval:
+                    mean_return = evaluation_metrics.get("eval/episode_return")
+                else:
+                    mean_return = np.mean(saving_return_buffer) if dones_this_rollout > 0 else None
+                if mean_return is not None and mean_return > self.best_mean_return:
                     self.best_mean_return = mean_return
                     self.save()
+                if evaluation_metrics:
+                    self.save("latest.model")
             
             saving_end_time = time.time()
             if prev_saving_end_time:
@@ -423,6 +437,8 @@ class PPO:
             logging_end_time = time.time()
             logging_time_prev = logging_end_time - saving_end_time
 
+        if self.save_model:
+            self.save("latest.model")
 
     def log(self, name, value, step):
         if self.track_wandb:
@@ -454,7 +470,8 @@ class PPO:
             rlx_logger.info("└" + "─" * 31 + "┴" + "─" * 16 + "┘")
 
     
-    def save(self):
+    def save(self, file_name=None):
+        file_name = file_name or self.best_model_file_name
         checkpoint = {
             "policy": self.policy_state,
             "critic": self.critic_state
@@ -463,12 +480,16 @@ class PPO:
         self.best_model_checkpointer.save(f"{self.save_path}/tmp", checkpoint, save_args=save_args)
         with open(f"{self.save_path}/tmp/config_algorithm.json", "w") as f:
             json.dump(self.config.algorithm.to_dict(), f)
-        shutil.make_archive(f"{self.save_path}/{self.best_model_file_name}", "zip", f"{self.save_path}/tmp")
-        os.rename(f"{self.save_path}/{self.best_model_file_name}.zip", f"{self.save_path}/{self.best_model_file_name}")
+        with open(f"{self.save_path}/tmp/config_environment.json", "w") as f:
+            json.dump(self.config.environment.to_dict(), f)
+        with open(f"{self.save_path}/tmp/checkpoint_metrics.json", "w") as f:
+            json.dump(self.checkpoint_metrics, f)
+        shutil.make_archive(f"{self.save_path}/{file_name}", "zip", f"{self.save_path}/tmp")
+        os.replace(f"{self.save_path}/{file_name}.zip", f"{self.save_path}/{file_name}")
         shutil.rmtree(f"{self.save_path}/tmp")
 
         if self.track_wandb:
-            wandb.save(f"{self.save_path}/{self.best_model_file_name}", base_path=self.save_path)
+            wandb.save(f"{self.save_path}/{file_name}", base_path=self.save_path)
 
 
     def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
@@ -516,7 +537,24 @@ class PPO:
                 state, reward, terminated, truncated, info = self.eval_env.step(jax.device_get(processed_action))
                 done = terminated | truncated
                 episode_return += reward
-            rlx_logger.info(f"Episode {i + 1} - Return: {episode_return}")
+            landing_results = []
+            for final_info in info.get("final_info", []):
+                if final_info is not None and "curriculum/landing_success" in final_info:
+                    landing_results.append({
+                        key: final_info[key]
+                        for key in (
+                            "curriculum/landing_success",
+                            "outcome/failure_base_crash",
+                            "outcome/failure_motor_hard_limit",
+                            "outcome/failure_thermal_limit",
+                            "outcome/unresolved",
+                            "curriculum/difficulty",
+                            "curriculum/initial_height",
+                            "metrics/peak_body_acceleration",
+                        )
+                        if key in final_info
+                    })
+            rlx_logger.info(f"Episode {i + 1} - Return: {episode_return} - Landing: {landing_results}")
     
             
     def set_train_mode(self):

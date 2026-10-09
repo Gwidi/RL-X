@@ -133,6 +133,20 @@ class SimplifiedLandingReward:
         self.success_confirmation_time = float(
             cfg.get("success_confirmation_time", 2.0)
         )
+        self.success_stability_time = float(cfg.get("success_stability_time", 0.5))
+        self.success_min_height = float(cfg.get("success_min_height", 0.175))
+        self.success_max_tilt = np.deg2rad(float(cfg.get("success_max_tilt_deg", 30.0)))
+        self.success_max_linear_velocity = float(cfg.get("success_max_linear_velocity", 0.5))
+        self.success_max_angular_velocity = float(cfg.get("success_max_angular_velocity", 1.0))
+        for name, value in (
+            ("success_stability_time", self.success_stability_time),
+            ("success_min_height", self.success_min_height),
+            ("success_max_tilt_deg", self.success_max_tilt),
+            ("success_max_linear_velocity", self.success_max_linear_velocity),
+            ("success_max_angular_velocity", self.success_max_angular_velocity),
+        ):
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
 
         # Terminal event rewards.
         # Nie mnożymy przez dt.
@@ -303,6 +317,7 @@ class SimplifiedLandingReward:
 
         state["has_touched_ground"] = False
         state["time_since_touchdown"] = 0.0
+        state["landing_stable_time"] = 0.0
 
         state["landing_evaluated"] = False
         state["landing_success"] = False
@@ -323,6 +338,7 @@ class SimplifiedLandingReward:
         state["peak_body_acceleration_raw"] = 0.0
         state["physics_base_accelerations"].fill(0.0)
         state["physics_floor_contacts"].fill(False)
+        state["physics_body_floor_contacts"].fill(False)
         state["motor_hard_limit_detected"] = False
         state["thermal_failure_detected"] = False
 
@@ -598,6 +614,9 @@ class SimplifiedLandingReward:
 
         curriculum["last_success"] = success_float
         curriculum["nr_evaluated_landings"] += 1
+
+        if curriculum.get("fixed_difficulty", False):
+            return
 
         ema = curriculum["success_ema"]
 
@@ -927,10 +946,23 @@ class SimplifiedLandingReward:
         # ==============================================================
 
         if (
-            has_touched
-            and height < self.base_crash_height
+            np.any(state["physics_body_floor_contacts"])
+            or (has_touched and height < self.base_crash_height)
         ):
             state["base_crash_detected"] = True
+
+        # A timer alone can award success to a collapsed or still-moving robot.
+        stable = (
+            has_touched
+            and height >= self.success_min_height
+            and np.all(np.abs(euler[:2]) <= self.success_max_tilt)
+            and np.linalg.norm(lin_vel) <= self.success_max_linear_velocity
+            and np.linalg.norm(ang_vel) <= self.success_max_angular_velocity
+            and np.any(self.env.terrain_function.check_feet_floor_contact())
+        )
+        state["landing_stable_time"] = (
+            state["landing_stable_time"] + self.dt if stable else 0.0
+        )
 
         # ==============================================================
         # CONTINUOUS MOTOR COST
@@ -1244,6 +1276,7 @@ class SimplifiedLandingReward:
                 and
                 time_since_touch
                 >= self.success_confirmation_time
+                and state["landing_stable_time"] >= self.success_stability_time
             ):
                 landing_event_reward = (
                     self._finalize_landing(
@@ -1319,6 +1352,8 @@ class SimplifiedLandingReward:
         info["metrics/body_acceleration"] = state["body_acceleration"]
         info["metrics/peak_body_acceleration"] = state["peak_body_acceleration"]
         info["metrics/peak_body_acceleration_raw"] = state["peak_body_acceleration_raw"]
+        info["metrics/landing_stable_time"] = state["landing_stable_time"]
+        info["metrics/body_floor_contact"] = float(np.any(state["physics_body_floor_contacts"]))
 
         # motor torque
         info["metrics/peak_leg_motor_torque"] = (

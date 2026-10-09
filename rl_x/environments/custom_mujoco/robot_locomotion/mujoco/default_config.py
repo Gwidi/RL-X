@@ -54,6 +54,8 @@ def get_config(environment_name):
             "energy_dissipation_curriculum": {
                 "start_height": 1.0,
                 "target_height": 5.0,
+                # Independent eval/test environments use a fixed challenge.
+                "eval_difficulty": 1.0,
 
                 "min_angle_deg": 0.0,
                 "max_angle_deg": 3.0,
@@ -171,6 +173,11 @@ def get_config(environment_name):
 
             # success
             "success_confirmation_time": 2.0,
+            "success_stability_time": 0.5,
+            "success_min_height": 0.175,
+            "success_max_tilt_deg": 30.0,
+            "success_max_linear_velocity": 0.5,
+            "success_max_angular_velocity": 1.0,
             "landing_success_coeff": 100.0,
             "landing_failure_coeff": 100.0,
 

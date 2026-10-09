@@ -15,6 +15,9 @@ class EnergyDissipationCurriculumInitialState:
 
         self.start_height = curriculum_config.get("start_height", 0.5)
         self.target_height = curriculum_config.get("target_height", 6.0)
+        self.eval_difficulty = float(curriculum_config.get("eval_difficulty", 1.0))
+        if not np.isfinite(self.eval_difficulty) or not 0.0 <= self.eval_difficulty <= 1.0:
+            raise ValueError("eval_difficulty must be between 0 and 1")
 
         self.min_angle_deg = curriculum_config.get("min_angle_deg", 5.0)
         self.max_angle_deg = curriculum_config.get("max_angle_deg", 25.0)
@@ -63,6 +66,7 @@ class EnergyDissipationCurriculumInitialState:
                 "nr_evaluated_landings": 0,
                 "last_success": 0.0,
                 "last_update": "none",
+                "fixed_difficulty": self.env.runner_mode == "test",
 
                 # Curriculum parameters
                 "ema_alpha": self.ema_alpha,
@@ -75,6 +79,8 @@ class EnergyDissipationCurriculumInitialState:
                 "difficulty_step_down":
                     self.difficulty_step_down,
             }
+            if state["landing_curriculum"]["fixed_difficulty"]:
+                state["landing_curriculum"]["difficulty"] = self.eval_difficulty
 
         return state["landing_curriculum"]
 
@@ -93,6 +99,9 @@ class EnergyDissipationCurriculumInitialState:
 
         curriculum["last_success"] = success
         curriculum["nr_evaluated_landings"] += 1
+
+        if curriculum["fixed_difficulty"]:
+            return
 
         ema = curriculum["success_ema"]
         difficulty = curriculum["difficulty"]

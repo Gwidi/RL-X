@@ -13,11 +13,11 @@ def create_train_and_eval_env(config):
     robot_config["directory_path"] = Path(__file__).parent.parent / "robots" / config.environment.train_robot
     robot_config["spine_locked"] = config.environment.spine_locked
     
-    def make_env(seed):
+    def make_env(seed, runner_mode=None):
         def thunk():
             env = LocomotionEnv(
                 robot_config=robot_config,
-                runner_mode=config.runner.mode,
+                runner_mode=config.runner.mode if runner_mode is None else runner_mode,
                 seed=seed,
                 render=config.environment.render,
                 env_config=config.environment,
@@ -42,10 +42,14 @@ def create_train_and_eval_env(config):
     if config.environment.copy_train_env_for_eval:
         return train_env, train_env
 
+    make_eval_env_functions = [
+        make_env(config.environment.seed + i, runner_mode="test")
+        for i in range(config.environment.nr_envs)
+    ]
     if config.environment.nr_envs == 1:
-        eval_env = gym.vector.SyncVectorEnv(make_env_functions)
+        eval_env = gym.vector.SyncVectorEnv(make_eval_env_functions)
     else:
-        eval_env = AsyncVectorEnvWithSkipping(make_env_functions, config.environment.async_skip_percentage)
+        eval_env = AsyncVectorEnvWithSkipping(make_eval_env_functions, config.environment.async_skip_percentage)
     eval_env = RLXInfo(eval_env)
     eval_env.horizon = eval_env.call("horizon")[0]
     eval_env.general_properties = GeneralProperties

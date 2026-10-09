@@ -122,6 +122,11 @@ class LocomotionEnv(gym.Env):
         
         self.imu_site_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_SITE, "imu")
         self.trunk_body_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+        rear_body_id = mujoco.mj_name2id(self.initial_mj_model, mujoco.mjtObj.mjOBJ_BODY, "rear")
+        self.landing_body_geom_mask = np.isin(
+            self.initial_mj_model.geom_bodyid,
+            [body_id for body_id in (self.trunk_body_id, rear_body_id) if body_id >= 0],
+        )
         self.actuator_joint_max_velocities = np.array(robot_config["actuator_joint_max_velocities"])
         if self.spine_locked:
             # W Twoim XML siłownik "spine" jest na samej górze listy <actuator>,
@@ -245,6 +250,7 @@ class LocomotionEnv(gym.Env):
             "actuator_forcerange_used": self.initial_mj_model.actuator_forcerange.copy(),
             "physics_base_accelerations": np.zeros(self.nr_substeps),
             "physics_floor_contacts": np.zeros(self.nr_substeps, dtype=bool),
+            "physics_body_floor_contacts": np.zeros(self.nr_substeps, dtype=bool),
             "in_eval_mode": eval_mode,
             "env_curriculum_coeff": env_curriculum_coeff,
             "env_curriculum_levels_in_a_row": 0.0,
@@ -423,6 +429,16 @@ class LocomotionEnv(gym.Env):
                 )
                 self.internal_state["physics_floor_contacts"][substep] = (
                     np.any(data.contact.geom == self.floor_geom_id)
+                )
+                pairs = data.contact.geom
+                body_floor = (
+                    ((pairs[:, 0] == self.floor_geom_id)
+                     & self.landing_body_geom_mask[pairs[:, 1]])
+                    | ((pairs[:, 1] == self.floor_geom_id)
+                       & self.landing_body_geom_mask[pairs[:, 0]])
+                )
+                self.internal_state["physics_body_floor_contacts"][substep] = (
+                    np.any(body_floor & (data.contact.dist <= 0.0))
                 )
         else:
             mujoco.mj_step(self.internal_state["mj_model"], self.internal_state["data"], self.nr_substeps)
