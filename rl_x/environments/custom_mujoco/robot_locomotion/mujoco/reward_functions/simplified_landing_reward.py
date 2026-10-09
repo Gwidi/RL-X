@@ -12,8 +12,8 @@ class SimplifiedLandingReward:
     2. Nie może przekroczyć fizycznego limitu momentu silników.
     3. Nie może nadmiernie obciążać termicznie silników.
     4. Duży, krótki moment podczas amortyzacji jest dozwolony.
-    5. Sukces oznacza zakończenie upadku, niezależnie od końcowej pozycji.
-       Łagodny kontakt korpusu jest dozwolony; mocny impact jest porażką.
+    5. Sukces oznacza zakończenie upadku bez końcowego podparcia korpusem.
+       Chwilowy łagodny kontakt jest dozwolony; mocny impact jest porażką.
     6. Spine locked nie ma aktywnego silnika spine i nie jest monitorowany
        jako actuator torque.
 
@@ -925,13 +925,15 @@ class SimplifiedLandingReward:
         # BASE CRASH
         # ==============================================================
 
-        # Settling is about motion and support, not height or orientation. A
-        # robot supported by its side/base can survive just like one on feet.
+        # No target height or joint pose, but the trunk/rear (including the
+        # spine) must clear the floor throughout the final stability window.
+        # Transient gentle body contact during rescue only resets this timer.
         stable = (
             has_touched
             and np.linalg.norm(lin_vel) <= self.success_max_linear_velocity
             and np.linalg.norm(ang_vel) <= self.success_max_angular_velocity
             and ground_contact
+            and not np.any(state["physics_body_floor_contacts"])
         )
         state["landing_stable_time"] = (
             state["landing_stable_time"] + self.dt if stable else 0.0
