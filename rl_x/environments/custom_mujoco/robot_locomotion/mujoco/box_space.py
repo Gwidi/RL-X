@@ -7,7 +7,8 @@ class BoxSpace(gym.spaces.Box):
     center: np.ndarray
         In robot locomotion-like environments this is the nominal position of the joints. Has no impact on sampling.
     scale: np.ndarray
-        In robot locomotion-like environments this is a multiplier to scale the sampled actions. Has impact on sampling.
+        Joint-angle multiplier applied by the controller. Sampling uses the
+        declared normalized action bounds without applying this multiplier.
     '''
 
     def __init__(self, low, high, shape, dtype, center=None, scale=None):
@@ -20,9 +21,3 @@ class BoxSpace(gym.spaces.Box):
         
         self.scale = gym.spaces.box._broadcast(self.scale, self.dtype, shape)
         self.scale = self.scale.astype(self.dtype)
-
-
-    def sample(self):
-        sample = super().sample()
-        sample = sample / self.scale
-        return sample

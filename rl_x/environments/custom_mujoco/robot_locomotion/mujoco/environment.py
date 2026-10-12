@@ -234,13 +234,13 @@ class LocomotionEnv(gym.Env):
         self.joint_dropout_function = get_joint_dropout_function(env_config["domain_randomization"]["joint_dropout"]["type"], self)
         
         action_space_size = self.nr_actuator_joints
-        lower_joint_limit, upper_joint_limit = self.initial_mj_model.jnt_range[self.actuator_joint_mask_joints].T
         nominal_joint_positions = self.initial_qpos[self.actuator_joint_mask_qpos]
         action_scale_factor = robot_config["scaling_factor"]
         if self.spine_locked and isinstance(action_scale_factor, (list, np.ndarray)):
             action_scale_factor = action_scale_factor[1:]
-        # The action space attributes are fixed and do not change with domain randomization, if they are randomized heavily the algorithm using them might need to be adapted
-        self.action_space = BoxSpace(low=lower_joint_limit, high=upper_joint_limit, shape=(action_space_size,), dtype=np.float32, center=nominal_joint_positions, scale=action_scale_factor)
+        # Actions are normalized residuals, not absolute joint angles. PD
+        # applies the (possibly randomized) scale and nominal pose once.
+        self.action_space = BoxSpace(low=-1.0, high=1.0, shape=(action_space_size,), dtype=np.float32, center=nominal_joint_positions, scale=action_scale_factor)
 
         self.observation_space = self.get_observation_space()
 
