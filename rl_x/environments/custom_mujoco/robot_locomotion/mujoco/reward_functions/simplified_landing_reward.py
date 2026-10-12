@@ -146,7 +146,7 @@ class SimplifiedLandingReward:
         )
         self.success_stability_time = float(cfg.get("success_stability_time", 0.5))
         self.success_max_linear_velocity = float(cfg.get("success_max_linear_velocity", 0.5))
-        self.success_max_angular_velocity = float(cfg.get("success_max_angular_velocity", 1.0))
+        self.success_max_angular_velocity = float(cfg.get("success_max_angular_velocity", 2.0))
         for name, value in (
             ("success_stability_time", self.success_stability_time),
             ("base_impact_acceleration_limit", self.base_impact_acceleration_limit),
@@ -303,6 +303,13 @@ class SimplifiedLandingReward:
         state["has_touched_ground"] = False
         state["time_since_touchdown"] = 0.0
         state["landing_stable_time"] = 0.0
+        state["landing_max_stable_time"] = 0.0
+        state["landing_last_instability"] = []
+        state["landing_blocking_time"] = {
+            "linear_velocity": 0.0, "angular_velocity": 0.0,
+            "no_ground_contact": 0.0, "body_floor_contact": 0.0,
+        }
+        state["info"].pop("landing_diagnostics", None)
 
         state["landing_evaluated"] = False
         state["landing_success"] = False
@@ -936,15 +943,27 @@ class SimplifiedLandingReward:
         # No target height or joint pose, but the trunk/rear (including the
         # spine) must clear the floor throughout the final stability window.
         # Transient gentle body contact during rescue only resets this timer.
-        stable = (
-            has_touched
-            and np.linalg.norm(lin_vel) <= self.success_max_linear_velocity
-            and np.linalg.norm(ang_vel) <= self.success_max_angular_velocity
-            and ground_contact
-            and not np.any(state["physics_body_floor_contacts"])
-        )
+        linear_speed = float(np.linalg.norm(lin_vel))
+        angular_speed = float(np.linalg.norm(ang_vel))
+        body_contact = bool(np.any(state["physics_body_floor_contacts"]))
+        blockers = {
+            "linear_velocity": linear_speed > self.success_max_linear_velocity,
+            "angular_velocity": angular_speed > self.success_max_angular_velocity,
+            "no_ground_contact": not ground_contact,
+            "body_floor_contact": body_contact,
+        }
+        stable = has_touched and not any(blockers.values())
+        if has_touched:
+            active_blockers = [name for name, blocked in blockers.items() if blocked]
+            if active_blockers:
+                state["landing_last_instability"] = active_blockers
+            for name in active_blockers:
+                state["landing_blocking_time"][name] += self.dt
         state["landing_stable_time"] = (
             state["landing_stable_time"] + self.dt if stable else 0.0
+        )
+        state["landing_max_stable_time"] = max(
+            state["landing_max_stable_time"], state["landing_stable_time"]
         )
 
         # ==============================================================
@@ -1172,6 +1191,48 @@ class SimplifiedLandingReward:
                 )
 
         # ==============================================================
+        # Snapshot the terminal decision before vector autoreset clears it.
+        # Keep structured diagnostics separate from numeric rollout metrics.
+        if state["landing_evaluated"]:
+            unmet = []
+            if not has_touched:
+                unmet.append("no_touchdown")
+            if time_since_touch < self.success_confirmation_time:
+                unmet.append("confirmation_time")
+            if state["landing_stable_time"] < self.success_stability_time:
+                unmet.append("continuous_stability_time")
+            unmet.extend(name for name, blocked in blockers.items() if blocked)
+            state["info"]["landing_diagnostics"] = {
+                "success": bool(state["landing_success"]),
+                "reason": "success" if state["landing_success"] else state["landing_failure_reason"],
+                "unmet_success_conditions": unmet,
+                "last_instability": list(state["landing_last_instability"]),
+                "time_since_touchdown_s": round(time_since_touch, 4),
+                "confirmation_required_s": self.success_confirmation_time,
+                "stable_time_s": round(state["landing_stable_time"], 4),
+                "max_stable_time_s": round(state["landing_max_stable_time"], 4),
+                "stability_required_s": self.success_stability_time,
+                "linear_speed_m_s": round(linear_speed, 4),
+                "linear_speed_limit_m_s": self.success_max_linear_velocity,
+                "angular_speed_rad_s": round(angular_speed, 4),
+                "angular_speed_limit_rad_s": self.success_max_angular_velocity,
+                "ground_contact": ground_contact,
+                "body_floor_contact": body_contact,
+                "blocking_time_after_touchdown_s": {
+                    name: round(duration, 4)
+                    for name, duration in state["landing_blocking_time"].items()
+                },
+                "leg_thermal_dose_max": round(max_leg_dose, 4),
+                "spine_thermal_dose_max": round(max_spine_dose, 4),
+                "thermal_dose_limit": self.thermal_dose_limit,
+                "peak_leg_motor_torque_nm": round(state["peak_leg_motor_torque"], 4),
+                "leg_motor_torque_limit_nm": self.leg_motor_torque_limit,
+                "peak_spine_motor_torque_nm": round(state["peak_spine_motor_torque"], 4),
+                "spine_motor_torque_limit_nm": self.spine_motor_torque_limit,
+                "peak_base_impact_acceleration_m_s2": round(state["peak_base_impact_acceleration"], 4),
+                "base_impact_acceleration_limit_m_s2": self.base_impact_acceleration_limit,
+            }
+
         # TOTAL REWARD
         # ==============================================================
 

@@ -179,7 +179,7 @@ def get_config(environment_name):
             "success_confirmation_time": 2.0,
             "success_stability_time": 0.5,
             "success_max_linear_velocity": 0.5,
-            "success_max_angular_velocity": 1.0,
+            "success_max_angular_velocity": 2.0,
             "base_impact_acceleration_limit": 98.1,
             "landing_success_coeff": 100.0,
             "landing_failure_coeff": 100.0,

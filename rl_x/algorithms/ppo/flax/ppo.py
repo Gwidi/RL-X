@@ -23,6 +23,17 @@ from rl_x.algorithms.ppo.flax.batch import Batch
 rlx_logger = logging.getLogger("rl_x")
 
 
+def log_landing_diagnostics(final_info, mode, env_index):
+    diagnostics = final_info.get("landing_diagnostics")
+    if diagnostics is not None:
+        # Runner.info reserves its second argument for `flush`, unlike the
+        # standard logger. Pass a complete message to work with both.
+        rlx_logger.info(
+            f"Landing episode ({mode}, env {env_index}): "
+            f"{json.dumps(diagnostics, ensure_ascii=False)}"
+        )
+
+
 class PPO:
     def __init__(self, config, train_env, eval_env, run_path, writer):
         self.config = config
@@ -293,6 +304,7 @@ class PPO:
                     if single_done:
                         actual_next_state[i] = np.array(self.train_env.get_final_observation_at_index(info, i))
                         final_info = info["final_info"][i]
+                        log_landing_diagnostics(final_info, "train", i)
                         saving_return_buffer.append(final_info["episode_return"])
                         for name, info_key in landing_episode_info_keys.items():
                             if info_key in final_info:
@@ -360,6 +372,7 @@ class PPO:
                             eval_completed_per_env[i] += 1
                             eval_nr_episodes += 1
                             final_info = eval_info["final_info"][i]
+                            log_landing_diagnostics(final_info, "eval", i)
                             evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
                             evaluation_metrics["eval/episode_length"].append(final_info["episode_length"])
                             for name, info_key in landing_episode_info_keys.items():
@@ -555,8 +568,9 @@ class PPO:
                 done = terminated | truncated
                 episode_return += reward
             landing_results = []
-            for final_info in info.get("final_info", []):
+            for env_index, final_info in enumerate(info.get("final_info", [])):
                 if final_info is not None and "curriculum/landing_success" in final_info:
+                    log_landing_diagnostics(final_info, "test", env_index)
                     landing_results.append({
                         key: final_info[key]
                         for key in (

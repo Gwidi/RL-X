@@ -15,7 +15,7 @@ class RLXInfo(gym.Wrapper):
 
     def get_logging_info_dict(self, info):
         all_keys = list(info.keys())
-        keys_to_remove = ["final_observation", "final_info"]
+        keys_to_remove = ["final_observation", "final_info", "landing_diagnostics"]
 
         logging_info = {
             key: info[key][info["_" + key]].tolist()
