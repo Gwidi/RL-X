@@ -304,7 +304,6 @@ class PPO:
                     if single_done:
                         actual_next_state[i] = np.array(self.train_env.get_final_observation_at_index(info, i))
                         final_info = info["final_info"][i]
-                        log_landing_diagnostics(final_info, "train", i)
                         saving_return_buffer.append(final_info["episode_return"])
                         for name, info_key in landing_episode_info_keys.items():
                             if info_key in final_info:
@@ -372,7 +371,6 @@ class PPO:
                             eval_completed_per_env[i] += 1
                             eval_nr_episodes += 1
                             final_info = eval_info["final_info"][i]
-                            log_landing_diagnostics(final_info, "eval", i)
                             evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
                             evaluation_metrics["eval/episode_length"].append(final_info["episode_length"])
                             for name, info_key in landing_episode_info_keys.items():

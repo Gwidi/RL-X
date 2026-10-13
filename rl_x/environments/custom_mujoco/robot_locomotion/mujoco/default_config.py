@@ -195,7 +195,8 @@ def get_config(environment_name):
             "action_rate_coeff": 0.0,
 
             "body_acceleration_coeff": 100.0,
-            "body_acceleration_limit": 98.1,
+            # Soft impact penalty starts below the separate base crash limit.
+            "body_acceleration_limit": 60.0,
             "body_acceleration_window": 0.05,
 
             "collision_coeff": 5.0,

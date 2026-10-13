@@ -201,7 +201,7 @@ class SimplifiedLandingReward:
             cfg.get("body_acceleration_coeff", 100.0)
         )
         self.body_acceleration_limit = float(
-            cfg.get("body_acceleration_limit", 98.1)
+            cfg.get("body_acceleration_limit", 60.0)
         )
         self.body_acceleration_window = float(
             cfg.get("body_acceleration_window", 0.05)
@@ -1231,6 +1231,8 @@ class SimplifiedLandingReward:
                 "spine_motor_torque_limit_nm": self.spine_motor_torque_limit,
                 "peak_base_impact_acceleration_m_s2": round(state["peak_base_impact_acceleration"], 4),
                 "base_impact_acceleration_limit_m_s2": self.base_impact_acceleration_limit,
+                "soft_acceleration_limit_m_s2": self.body_acceleration_limit,
+                "soft_acceleration_penalty_coeff": self.body_acceleration_coeff,
             }
 
         # TOTAL REWARD
