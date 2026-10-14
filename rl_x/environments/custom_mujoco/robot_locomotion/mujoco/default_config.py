@@ -73,6 +73,7 @@ def get_config(environment_name):
 
                 "difficulty_step_up": 0.005,
                 "difficulty_step_down": 0.01,
+                "replay_easy_probability": 0.15,
                 },
             },
             "joint_dropout": {
@@ -186,7 +187,7 @@ def get_config(environment_name):
 
             # shaping
             "alive_coeff": 0.5,
-            "base_vel_coeff": 0.0,
+            "base_vel_coeff": 2.0,
             "base_height_coeff": 0.0,
 
             "roll_pitch_pos_coeff": 0.0,
@@ -194,7 +195,7 @@ def get_config(environment_name):
             "joint_vel_coeff": 0.0,
             "action_rate_coeff": 0.0,
 
-            "body_acceleration_coeff": 100.0,
+            "body_acceleration_coeff": 500.0,
             # Soft impact penalty starts below the separate base crash limit.
             "body_acceleration_limit": 60.0,
             "body_acceleration_window": 0.05,
@@ -203,6 +204,7 @@ def get_config(environment_name):
             "floor_collision_coeff": 0.0,
             "body_support_penalty_coeff": 10.0,
             "body_support_grace_time": 0.5,
+            "post_touchdown_motion_grace_time": 0.5,
 
             "nominal_landing_height": 0.35,
         },

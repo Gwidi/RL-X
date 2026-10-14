@@ -178,7 +178,7 @@ class SimplifiedLandingReward:
         )
 
         self.base_vel_coeff = (
-            float(cfg.get("base_vel_coeff", 0.0))
+            float(cfg.get("base_vel_coeff", 2.0))
             * self.dt
         )
 
@@ -198,7 +198,7 @@ class SimplifiedLandingReward:
         )
 
         self.body_acceleration_coeff = float(
-            cfg.get("body_acceleration_coeff", 100.0)
+            cfg.get("body_acceleration_coeff", 500.0)
         )
         self.body_acceleration_limit = float(
             cfg.get("body_acceleration_limit", 60.0)
@@ -231,6 +231,16 @@ class SimplifiedLandingReward:
         self.soft_joint_position_limit = float(
             cfg.get("soft_joint_position_limit", 0.9)
         )
+
+        # Let the legs absorb the initial impact before asking the body to settle.
+        self.post_touchdown_motion_grace_time = float(
+            cfg.get("post_touchdown_motion_grace_time", 0.5)
+        )
+        if (
+            not np.isfinite(self.post_touchdown_motion_grace_time)
+            or self.post_touchdown_motion_grace_time < 0.0
+        ):
+            raise ValueError("post_touchdown_motion_grace_time must be finite and non-negative")
 
     # ==================================================================
     # INITIALIZATION
@@ -599,6 +609,11 @@ class SimplifiedLandingReward:
         )
 
         if curriculum is None:
+            return
+
+        # Rehearsal episodes train the policy but must not promote the
+        # curriculum based on an easier landing.
+        if curriculum.get("replay_easy", False):
             return
 
         success_float = float(bool(success))
@@ -1028,9 +1043,9 @@ class SimplifiedLandingReward:
         joint_pos_reward = 0.0
         base_vel_reward = 0.0
         joint_vel_reward = 0.0
-        # Optional motion shaping only after the minimum survival window;
-        # default coefficients are zero so rotation/compression stay available.
-        if has_touched and time_since_touch >= self.success_confirmation_time:
+        # Discourage late wobbling while preserving the initial compression.
+        # This must begin before the success decision at confirmation_time.
+        if has_touched and time_since_touch >= self.post_touchdown_motion_grace_time:
             base_vel_reward = -self.base_vel_coeff * (
                 np.sum(np.square(lin_vel)) + np.sum(np.square(ang_vel))
             )
@@ -1407,6 +1422,10 @@ class SimplifiedLandingReward:
             info["curriculum/difficulty"] = (
                 curriculum["difficulty"]
             )
+            info["curriculum/applied_difficulty"] = (
+                curriculum.get("applied_difficulty", curriculum["difficulty"])
+            )
+            info["curriculum/replay_easy"] = float(curriculum.get("replay_easy", False))
 
             info["curriculum/success_ema"] = (
                 curriculum["success_ema"]

@@ -295,6 +295,8 @@ class PPO:
             dones_this_rollout = 0
             step_info_collection = {}
             rollout_landing_episodes = {name: [] for name in landing_episode_info_keys}
+            current_landing_successes = []
+            replay_landing_successes = []
             for step in range(self.nr_steps):
                 processed_action, action, value, log_prob, self.key = get_action_and_value(self.policy_state, self.critic_state, state, self.key)
                 next_state, reward, terminated, truncated, info = self.train_env.step(jax.device_get(processed_action))
@@ -308,6 +310,13 @@ class PPO:
                         for name, info_key in landing_episode_info_keys.items():
                             if info_key in final_info:
                                 rollout_landing_episodes[name].append(final_info[info_key])
+                        if "curriculum/landing_success" in final_info:
+                            successes = (
+                                replay_landing_successes
+                                if final_info.get("curriculum/replay_easy", 0.0) > 0.5
+                                else current_landing_successes
+                            )
+                            successes.append(final_info["curriculum/landing_success"])
                         dones_this_rollout += 1
                 for key, info_value in self.train_env.get_logging_info_dict(info).items():
                     step_info_collection.setdefault(key, []).extend(info_value)
@@ -431,6 +440,13 @@ class PPO:
             for name, values in rollout_landing_episodes.items():
                 if values:
                     rollout_info_metrics[f"rollout/{name}"] = np.mean(values)
+            for name, values in (
+                ("landing_current_success_rate", current_landing_successes),
+                ("landing_replay_success_rate", replay_landing_successes),
+            ):
+                if values:
+                    rollout_info_metrics[f"rollout/{name}"] = np.mean(values)
+                    rollout_info_metrics[f"rollout/{name.removesuffix('_success_rate')}_count"] = len(values)
             if step_info_collection:
                 info_names = list(step_info_collection.keys())
                 for info_name in info_names:

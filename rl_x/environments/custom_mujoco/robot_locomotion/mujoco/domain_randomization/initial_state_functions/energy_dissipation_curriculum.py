@@ -46,6 +46,16 @@ class EnergyDissipationCurriculumInitialState:
             "difficulty_step_down", 0.005
         )
 
+        # Keep practicing the shortest drop after the curriculum advances.
+        self.replay_easy_probability = float(
+            curriculum_config.get("replay_easy_probability", 0.15)
+        )
+        if (
+            not np.isfinite(self.replay_easy_probability)
+            or not 0.0 <= self.replay_easy_probability <= 1.0
+        ):
+            raise ValueError("replay_easy_probability must be between 0 and 1")
+
         self.is_energy_curriculum = (
             initial_state_config.get("type")
             == "energy_dissipation_curriculum"
@@ -67,6 +77,8 @@ class EnergyDissipationCurriculumInitialState:
                 "last_success": 0.0,
                 "last_update": "none",
                 "fixed_difficulty": self.env.runner_mode == "test",
+                "replay_easy": False,
+                "applied_difficulty": 0.0,
 
                 # Curriculum parameters
                 "ema_alpha": self.ema_alpha,
@@ -88,6 +100,9 @@ class EnergyDissipationCurriculumInitialState:
     def update_landing_result(self, success):
 
         curriculum = self._get_curriculum_state()
+
+        if curriculum["replay_easy"]:
+            return
 
         success = float(bool(success))
 
@@ -131,11 +146,12 @@ class EnergyDissipationCurriculumInitialState:
     # DIFFICULTY -> INITIAL CONDITIONS
     # ------------------------------------------------------------------
 
-    def _get_curriculum_schedule(self):
+    def _get_curriculum_schedule(self, difficulty=None):
 
         curriculum = self._get_curriculum_state()
 
-        difficulty = curriculum["difficulty"]
+        if difficulty is None:
+            difficulty = curriculum["difficulty"]
 
         # Height
         actual_height = (
@@ -180,12 +196,22 @@ class EnergyDissipationCurriculumInitialState:
         if not self.is_energy_curriculum:
             return None
 
+        curriculum = self._get_curriculum_state()
+        curriculum["replay_easy"] = bool(
+            self.env.runner_mode == "train"
+            and curriculum["difficulty"] > 0.0
+            and self.env.np_rng.random() < self.replay_easy_probability
+        )
+        curriculum["applied_difficulty"] = (
+            0.0 if curriculum["replay_easy"] else curriculum["difficulty"]
+        )
+
         (
             height,
             max_angle,
             max_lateral_velocity,
             difficulty,
-        ) = self._get_curriculum_schedule()
+        ) = self._get_curriculum_schedule(curriculum["applied_difficulty"])
 
         # --------------------------------------------------------------
         # ORIENTATION
@@ -354,9 +380,9 @@ class EnergyDissipationCurriculumInitialState:
 
         info = self.env.internal_state["info"]
 
-        curriculum = self._get_curriculum_state()
-
-        info["curriculum/difficulty"] = difficulty
+        info["curriculum/difficulty"] = curriculum["difficulty"]
+        info["curriculum/applied_difficulty"] = difficulty
+        info["curriculum/replay_easy"] = float(curriculum["replay_easy"])
         info["curriculum/initial_height"] = height
         info["curriculum/max_angle_deg"] = np.rad2deg(max_angle)
         info["curriculum/max_lateral_velocity"] = (
