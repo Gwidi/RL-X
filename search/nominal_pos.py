@@ -3,6 +3,8 @@ import mujoco.viewer
 import numpy as np
 import time
 
+import main as landing
+
 # Nominal pose defined PER JOINT NAME - edit values here and re-run
 # to quickly test which sign/direction is correct for each joint.
 NOMINAL_POSE = {
@@ -25,39 +27,21 @@ START_HEIGHT = 0.6
 
 
 def main():
-    xml_path = "intention.xml"
-    model = mujoco.MjModel.from_xml_path(xml_path)
+    model = mujoco.MjModel.from_xml_path(str(landing.XML_PATH))
     data = mujoco.MjData(model)
 
     joint_names = list(NOMINAL_POSE.keys())
-    qpos_adr = {n: model.joint(n).qposadr[0] for n in joint_names}
-    act_id = {n: model.actuator(n).id for n in joint_names}
-
-    # IMPORTANT: the XML defines these as <motor> actuators, which have
-    # biastype="none" hardcoded. That means biasprm is silently ignored
-    # by the physics engine - ctrl acts as raw torque, NOT a position
-    # target, no matter what you put in gainprm/biasprm.
-    #
-    # To actually get position-control (PD) behavior:
-    #   force = gainprm[0]*(ctrl) + biasprm[1]*qpos + biasprm[2]*qvel
-    # we need biastype = affine (mjBIAS_AFFINE = 1). This is safe to set
-    # at runtime because actuator_biastype is just a mutable model array,
-    # even though it's normally fixed by the XML element type at compile
-    # time.
-    mjBIAS_AFFINE = 1
-    all_act_idx = np.array([act_id[n] for n in joint_names])
-    model.actuator_biastype[all_act_idx] = mjBIAS_AFFINE
-    model.actuator_gainprm[all_act_idx, 0] = KP
-    model.actuator_biasprm[all_act_idx, 1] = -KP
-    model.actuator_biasprm[all_act_idx, 2] = -KV
+    jmap = landing.JointMap(model, joint_names)
+    kp = dict.fromkeys(joint_names, KP)
+    kd = dict.fromkeys(joint_names, KV)
 
     def reset_to_nominal():
         mujoco.mj_resetData(model, data)
         data.qpos[0:3] = [0.0, 0.0, START_HEIGHT]
         data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
         for name, val in NOMINAL_POSE.items():
-            data.qpos[qpos_adr[name]] = val
-            data.ctrl[act_id[name]] = val
+            data.qpos[jmap.qpos_adr[name]] = val
+        landing.apply_position_pd(model, data, jmap, NOMINAL_POSE, kp, kd)
         mujoco.mj_forward(model, data)
 
     reset_to_nominal()
@@ -71,7 +55,7 @@ def main():
     with mujoco.viewer.launch_passive(model, data) as viewer:
         last_reset = time.time()
         while viewer.is_running():
-            mujoco.mj_step(model, data)
+            landing.controlled_step(model, data, jmap, NOMINAL_POSE, kp, kd)
             viewer.sync()
             time.sleep(model.opt.timestep)
 

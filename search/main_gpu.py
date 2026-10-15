@@ -33,8 +33,6 @@ import main as cpu
 
 
 GPU_NUMPY_DTYPE = np.float64 if GPU_ENABLE_X64 else np.float32
-GPU_SOLVER_ITERATIONS = 30
-GPU_LINESEARCH_ITERATIONS = 15
 _EVALUATOR_CACHE = {}
 
 
@@ -74,42 +72,16 @@ def require_gpu():
 
 
 def _prepare_model(lock_spine, safety_factor=1.0):
-    """Load the same model and make its collision graph compatible with MJX."""
+    """Keep the RL robot, solver and explicit contact pairs intact in MJX."""
     model = mujoco.MjModel.from_xml_path(str(cpu.XML_PATH))
     cpu.configure_spine(model, lock_spine)
     cpu.configure_safety_factor(model, safety_factor)
 
-    # The C solver exits as soon as it converges, while MJX benefits greatly
-    # from tight static limits.  Profiling this model showed at most 17 Newton
-    # iterations; 30/15 retained the CPU results in the validation set.
-    model.opt.iterations = min(model.opt.iterations, GPU_SOLVER_ITERATIONS)
-    model.opt.ls_iterations = min(
-        model.opt.ls_iterations, GPU_LINESEARCH_ITERATIONS
-    )
-
-    # MJX builds all collision pairs ahead of time and cannot compile the
-    # cylinder-box self-collision pairs present in this XML.  Separate just
-    # those two groups while retaining their ground and supported self
-    # contacts.  Geoms which had contact disabled remain disabled.
-    ground_id = model.geom("ground_2").id
-    enabled = (model.geom_contype != 0) | (model.geom_conaffinity != 0)
-    for geom_id in np.flatnonzero(enabled):
-        geom_type = model.geom_type[geom_id]
-        if geom_id == ground_id:
-            bit, affinity = 1, 2 | 4 | 8
-        elif geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
-            bit, affinity = 2, 1 | 2 | 8
-        elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
-            bit, affinity = 4, 1 | 4 | 8
-        else:
-            bit, affinity = 8, 1 | 2 | 4 | 8
-        model.geom_contype[geom_id] = bit
-        model.geom_conaffinity[geom_id] = affinity
-
-    # Visual meshes have contact disabled and every body has an explicit
-    # inertial.  Replacing them only in the MJX copy avoids unsupported convex
-    # mesh preprocessing without changing dynamics, contacts or the viewer.
+    # Only replace meshes absent from explicit pairs. The rear mesh is a
+    # physical collider even with contype=0 and must remain a mesh in MJX.
     mesh_ids = np.flatnonzero(model.geom_type == mujoco.mjtGeom.mjGEOM_MESH)
+    paired_geoms = np.union1d(model.pair_geom1, model.pair_geom2)
+    mesh_ids = np.setdiff1d(mesh_ids, paired_geoms)
     model.geom_type[mesh_ids] = mujoco.mjtGeom.mjGEOM_SPHERE
     model.geom_size[mesh_ids, 0] = 1e-9
     return model
@@ -159,8 +131,11 @@ class GpuBatchEvaluator:
         dof_idx = jnp.asarray([jmap.dof_adr[name] for name in names])
         act_idx = jnp.asarray([jmap.act_id[name] for name in names])
         gear = jnp.asarray([jmap.gear[name] for name in names])
-        ctrl_low = jnp.asarray(self.cpu_model.actuator_ctrlrange[:, 0])[act_idx]
-        ctrl_high = jnp.asarray(self.cpu_model.actuator_ctrlrange[:, 1])[act_idx]
+        joint_ids = self.cpu_model.actuator_trnid[act_idx, 0]
+        joint_ranges = jnp.asarray(self.cpu_model.jnt_range[joint_ids])
+        joint_limited = jnp.asarray(self.cpu_model.jnt_limited[joint_ids], dtype=bool)
+        max_qvel = jnp.asarray(jmap.max_qvel)
+        control_substeps = max(1, int(round(cpu.CONTROL_TIMESTEP / timestep)))
         nominal = jnp.asarray([cpu.NOMINAL_POSE[name] for name in names])
         leg_mask = jnp.asarray([name != "sp_j0" for name in names])
         spine_index = names.index("sp_j0")
@@ -231,6 +206,17 @@ class GpuBatchEvaluator:
                 kp = kp.at[spine_index].set(params[spine_gain_start])
                 kd = kd.at[spine_index].set(params[spine_gain_start + 1])
 
+            candidate_model = model.replace(
+                actuator_gainprm=model.actuator_gainprm.at[act_idx, 0].set(kp / gear**2),
+                actuator_biasprm=model.actuator_biasprm.at[act_idx, 1].set(-kp / gear**2)
+                    .at[act_idx, 2].set(-kd / gear**2),
+            )
+            control_targets = jnp.where(
+                joint_limited,
+                jnp.clip(targets, joint_ranges[:, 0], joint_ranges[:, 1]),
+                targets,
+            ) * gear
+
             qpos = jnp.asarray(self.cpu_model.qpos0)
             qpos = qpos.at[0].set(0.0)
             qpos = qpos.at[1].set(0.0)
@@ -240,9 +226,9 @@ class GpuBatchEvaluator:
             data = empty_data.replace(
                 qpos=qpos,
                 qvel=jnp.zeros_like(empty_data.qvel),
-                ctrl=jnp.zeros_like(empty_data.ctrl),
+                ctrl=empty_data.ctrl.at[act_idx].set(control_targets),
             )
-            data = mjx.forward(model, data)
+            data = mjx.forward(candidate_model, data)
 
             # min height, seven peaks, two efforts, two current peaks, and four flags
             initial_stats = (
@@ -258,18 +244,18 @@ class GpuBatchEvaluator:
             )
             initial_foot_force_samples = jnp.asarray(0)
 
-            def step(carry, _):
+            def step(carry, step_index):
                 (
                     data, stats, acceleration_history, acceleration_samples,
                     foot_force_history, foot_force_samples,
                 ) = carry
-                q = data.qpos[qpos_idx]
-                qd = data.qvel[dof_idx]
-                torque = kp * (targets - q) - kd * qd
-                torque = jnp.where(jnp.abs(torque) < cpu.STATIC_FRICTION, 0.0, torque)
-                command = jnp.clip(torque / gear, ctrl_low, ctrl_high)
-                data = data.replace(ctrl=data.ctrl.at[act_idx].set(command))
-                data = mjx.step(model, data)
+                data = mjx.step(candidate_model, data)
+                data = data.replace(qvel=jnp.where(
+                    (step_index + 1) % control_substeps == 0,
+                    jnp.clip(data.qvel, -max_qvel, max_qvel),
+                    data.qvel,
+                ))
+                command = data.actuator_force[act_idx]
 
                 (
                     min_height, peak_torque, peak_foot_force,
@@ -355,8 +341,7 @@ class GpuBatchEvaluator:
                     initial_acceleration_samples, initial_foot_force_history,
                     initial_foot_force_samples,
                 ),
-                xs=None,
-                length=self.steps,
+                xs=jnp.arange(self.steps),
             )
             (
                 min_height, peak_torque, peak_foot_force,
@@ -418,7 +403,7 @@ class GpuBatchEvaluator:
         for point, row in zip(params[:count], values):
             # A numerically divergent MJX rollout must remain a bad candidate,
             # rather than injecting NaN into the Gaussian-process training set.
-            row = np.asarray(row, dtype=float)
+            row = np.array(row, dtype=float, copy=True)
             row[0] = np.nan_to_num(
                 row[0], nan=1e30, posinf=1e30, neginf=1e30
             )

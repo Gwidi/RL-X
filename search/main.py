@@ -3,11 +3,18 @@ import csv
 from concurrent.futures import ProcessPoolExecutor
 import os
 from pathlib import Path
+import sys
 import time
 
 import mujoco
 import mujoco.viewer
 import numpy as np
+
+# Support both `python search/main.py` and execution from the search directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+from rl_x.environments.custom_mujoco.robot_locomotion.robots.silver_badger.robot_config import robot_config
 
     # self.nominal_joint_positions = np.array([
     #     -0.1, 0.8, -1.5,
@@ -32,8 +39,14 @@ LEG_JOINTS = {
 }
 
 START_HEIGHT = 1.5
-# Same dead zone as STATIC_FRICTION in simulation/src/joint_control.cpp.
-STATIC_FRICTION = 0.37
+# Match PDControl's interval and LocomotionEnv's velocity clipping.
+CONTROL_TIMESTEP = 0.02
+JOINT_NAMES = {"sp_j0": "spine_joint"}
+ACTUATOR_NAMES = {"sp_j0": "spine"}
+for _leg in ("rl", "rr", "fr", "fl"):
+    for _index, _part in enumerate(("hip", "thigh", "calf")):
+        JOINT_NAMES[f"{_leg}_j{_index}"] = f"{_leg.upper()}_{_part}_joint"
+        ACTUATOR_NAMES[f"{_leg}_j{_index}"] = f"{_leg.upper()}_{_part}"
 
 # Screen structural load on each leg separately.  The total force across all
 # feet is retained as a diagnostic, but does not decide safety.
@@ -89,21 +102,25 @@ def configure_spine(model, lock_spine):
     """Optionally constrain the spine at its nominal zero position."""
     if not lock_spine:
         return
-    spine_joint = model.joint("sp_j0")
+    spine_joint = model.joint(JOINT_NAMES["sp_j0"])
     model.jnt_limited[spine_joint.id] = 1
-    # A tiny symmetric range gives MuJoCo a bilateral-like joint-limit lock
-    # without rebuilding a second XML model.
-    model.jnt_range[spine_joint.id] = [-1e-6, 1e-6]
-    # A mechanical lock does not consume actuator current.
-    spine_actuator = model.actuator("sp_j0")
-    model.actuator_ctrlrange[spine_actuator.id] = [0.0, 0.0]
+    # Match LocomotionEnv's locked joint. Keep an inert actuator slot so
+    # candidate/report indexing stays the same in both search modes.
+    model.jnt_range[spine_joint.id] = [-0.0001, 0.0001]
+    model.jnt_stiffness[spine_joint.id] = 10000.0
+    model.dof_damping[spine_joint.dofadr[0]] = 1000.0
+    model.dof_armature[spine_joint.dofadr[0]] = 10.0
+    spine_actuator = model.actuator(ACTUATOR_NAMES["sp_j0"])
+    model.actuator_forcerange[spine_actuator.id] = [0.0, 0.0]
+    # Armature changes also affect precomputed constraint reference weights.
+    mujoco.mj_setConst(model, mujoco.MjData(model))
 
 
 def configure_safety_factor(model, safety_factor):
-    """Scale each actuator's available motor command/torque range."""
+    """Scale each position actuator's available motor torque range."""
     if safety_factor >= 1.0:
         return
-    model.actuator_ctrlrange[:] *= safety_factor
+    model.actuator_forcerange[:] *= safety_factor
 
 
 class JointMap:
@@ -117,8 +134,8 @@ class JointMap:
         self.gear = {}
 
         for name in self.names:
-            joint = model.joint(name)
-            actuator = model.actuator(name)
+            joint = model.joint(JOINT_NAMES[name])
+            actuator = model.actuator(ACTUATOR_NAMES[name])
             act_id = actuator.id
             gear = float(model.actuator_gear[act_id, 0])
             if gear == 0.0:
@@ -129,12 +146,22 @@ class JointMap:
             self.act_id[name] = act_id
             self.gear[name] = gear
 
+        self.max_qvel = np.full(model.nv, 100.0)
+        self.max_qvel[model.jnt_dofadr[model.actuator_trnid[:, 0]]] = (
+            robot_config["actuator_joint_max_velocities"]
+        )
+        spine_id = self.act_id["sp_j0"]
+        if np.all(model.actuator_forcerange[spine_id] == 0.0):
+            # RL removes this actuator when locked, so its joint is covered
+            # by the generic 100 rad/s clamp instead of the active motor cap.
+            self.max_qvel[self.dof_adr["sp_j0"]] = 100.0
+
 
 class ContactMap:
     """Geometry IDs for foot support and disallowed robot contacts."""
 
     def __init__(self, model):
-        self.ground_geom_id = model.geom("ground_2").id
+        self.ground_geom_id = model.geom("floor").id
         self.support_geom_ids = {self.ground_geom_id}
         landing_box_id = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_GEOM, "front_landing_box"
@@ -153,14 +180,10 @@ class ContactMap:
         if not self.shin_geom_ids:
             raise ValueError("No lower-leg collision cylinders found in the MuJoCo model")
 
-        # Each lower leg has a visible non-colliding sphere and a colliding
-        # spherical foot. Only the latter has a non-zero contact type.
+        # RL enables contacts through explicit pairs despite contype=0.
+        # Named feet exclude the extra visual and reward spheres.
         self.foot_geom_ids = {
-            geom_id
-            for geom_id in range(model.ngeom)
-            if model.geom_bodyid[geom_id] in calf_body_ids
-            and model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_SPHERE
-            and model.geom_contype[geom_id] != 0
+            model.geom(f"{leg}_foot").id for leg in ("RL", "RR", "FR", "FL")
         }
         if not self.foot_geom_ids:
             raise ValueError("No colliding foot spheres found in the MuJoCo model")
@@ -322,28 +345,26 @@ def parameter_bounds(optimize_nominal_position, lock_spine, individual_gains=Fal
 
 
 def apply_position_pd(model, data, jmap, targets, kp, kd):
-    """Match JointController::perform(): joint PD torque -> motor-side ctrl."""
+    """Use RL's native position actuators with candidate joint-side gains."""
     for name in jmap.names:
-        q = data.qpos[jmap.qpos_adr[name]]
-        qd = data.qvel[jmap.dof_adr[name]]
-        joint_torque = kp[name] * (targets[name] - q) - kd[name] * qd
-
-        if abs(joint_torque) < STATIC_FRICTION:
-            joint_torque = 0.0
-
         act_id = jmap.act_id[name]
-        motor_command = joint_torque / jmap.gear[name]
-        if model.actuator_ctrllimited[act_id]:
-            low, high = model.actuator_ctrlrange[act_id]
-            motor_command = np.clip(motor_command, low, high)
-        data.ctrl[act_id] = motor_command
+        gear = jmap.gear[name]
+        model.actuator_gainprm[act_id, 0] = kp[name] / gear**2
+        model.actuator_biasprm[act_id, 1] = -kp[name] / gear**2
+        model.actuator_biasprm[act_id, 2] = -kd[name] / gear**2
+        joint_id = model.actuator_trnid[act_id, 0]
+        target = targets[name]
+        if model.jnt_limited[joint_id]:
+            target = np.clip(target, *model.jnt_range[joint_id])
+        data.ctrl[act_id] = target * gear
 
 
 def controlled_step(model, data, jmap, targets, kp, kd):
-    # Same ordering as the ROS simulator: state update, controller, dynamics.
-    mujoco.mj_step1(model, data)
     apply_position_pd(model, data, jmap, targets, kp, kd)
-    mujoco.mj_step2(model, data)
+    mujoco.mj_step(model, data)
+    control_substeps = max(1, int(round(CONTROL_TIMESTEP / model.opt.timestep)))
+    if int(round(data.time / model.opt.timestep)) % control_substeps == 0:
+        data.qvel[:] = np.clip(data.qvel, -jmap.max_qvel, jmap.max_qvel)
 
 
 def episode_steps(model, start_height):
@@ -407,10 +428,10 @@ def evaluate_drop(
         # qfrc_actuator is joint-side generalized torque after transmission.
         joint_torque = data.qfrc_actuator[leg_dof_idx]
         leg_ctrl = np.asarray([
-            data.ctrl[jmap.act_id[name]]
+            data.actuator_force[jmap.act_id[name]]
             for name in jmap.names if name != "sp_j0"
         ])
-        spine_ctrl = float(data.ctrl[jmap.act_id["sp_j0"]])
+        spine_ctrl = float(data.actuator_force[jmap.act_id["sp_j0"]])
         total_leg_effort += float(np.sum(np.square(leg_ctrl))) * model.opt.timestep
         total_spine_effort += spine_ctrl**2 * model.opt.timestep
         peak_leg_current_proxy = max(peak_leg_current_proxy, float(np.max(np.abs(leg_ctrl))))
@@ -1023,11 +1044,11 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
     )
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
-    print(f"Calka kwadratu komend wszystkich silnikow: {best['total_motor_effort']:.3f}")
-    print(f"Calka kwadratu komend silnikow nog: {best['total_leg_effort']:.3f}")
-    print(f"Calka kwadratu komendy kregoslupa: {best['total_spine_effort']:.3f}")
-    print(f"Szczytowa komenda silnika nogi: {best['peak_leg_current_proxy']:.3f}")
-    print(f"Szczytowa komenda silnika kregoslupa: {best['peak_spine_current_proxy']:.3f}")
+    print(f"Calka kwadratu momentow wszystkich silnikow: {best['total_motor_effort']:.3f}")
+    print(f"Calka kwadratu momentow silnikow nog: {best['total_leg_effort']:.3f}")
+    print(f"Calka kwadratu momentu silnika kregoslupa: {best['total_spine_effort']:.3f}")
+    print(f"Szczytowy moment silnika nogi: {best['peak_leg_current_proxy']:.3f}")
+    print(f"Szczytowy moment silnika kregoslupa: {best['peak_spine_current_proxy']:.3f}")
     print(
         f"Szczytowe srednie przyspieszenie korpusu (okno 50 ms): "
         f"{best['peak_body_acceleration']:.1f} m/s^2 "
@@ -1160,6 +1181,7 @@ def validate_candidate(
     base_mass = model.body_mass.copy()
     base_inertia = model.body_inertia.copy()
     base_friction = model.geom_friction.copy()
+    base_pair_friction = model.pair_friction.copy()
     trial_results = []
 
     for trial_index, scenario in enumerate(scenarios):
@@ -1169,6 +1191,12 @@ def validate_candidate(
         model.geom_friction[:] = (
             base_friction * scenario["friction_scales"][:, None]
         )
+        # Explicit contact pairs override geom friction in the RL model.
+        pair_scales = np.sqrt(
+            scenario["friction_scales"][model.pair_geom1]
+            * scenario["friction_scales"][model.pair_geom2]
+        )
+        model.pair_friction[:] = base_pair_friction * pair_scales[:, None]
         mujoco.mj_setConst(model, data)
 
         disturbed_height = max(1e-4, height + scenario["height_offset"])
@@ -1506,7 +1534,7 @@ def save_plots(results, output_dir, optimize_nominal_position, individual_gains=
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     metrics = [
-        ("total_motor_effort", "Całkowity wysiłek silników", "Całka u²"),
+        ("total_motor_effort", "Całkowity wysiłek silników", "Całka τ²"),
         ("total_leg_effort", "Wysiłek nóg", "Całka u²"),
         ("total_spine_effort", "Wysiłek kręgosłupa", "Całka u²"),
     ]
