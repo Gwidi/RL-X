@@ -14,7 +14,7 @@ def get_config(environment_name):
         # or simulator linear-velocity measurement is exposed to the actor.
         "imu_history_length": 5,
         "control_type": "pd",
-        "async_skip_percentage": 0.5,
+        "async_skip_percentage": 0.0,
         "command": {
             "type": "random",
             "sampling_type": "step_probability",
