@@ -168,11 +168,12 @@ def get_config(environment_name):
             # MJCF includes the physical transmission gear.
             "torque_measurement_mode": "mujoco_actuator",
 
-            # thermal proxy
+            # Thermal proxy is logged; its uncalibrated limit is optional.
+            "thermal_limit_enabled": False,
             "thermal_dose_limit": 0.5,
             "thermal_cooling_rate": 0.0,
 
-            "thermal_penalty_coeff": 2.0,
+            "thermal_penalty_coeff": 0.0,
             "saturation_start_ratio": 0.90,
             "saturation_penalty_coeff": 1.0,
 

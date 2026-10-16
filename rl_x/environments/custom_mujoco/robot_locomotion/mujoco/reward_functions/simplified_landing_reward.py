@@ -10,7 +10,7 @@ class SimplifiedLandingReward:
     Główne cele:
     1. Robot ma przeżyć zrzut.
     2. Nie może przekroczyć fizycznego limitu momentu silników.
-    3. Nie może nadmiernie obciążać termicznie silników.
+    3. Obciążenie termiczne jest monitorowane; limit jest opcjonalny.
     4. Duży, krótki moment podczas amortyzacji jest dozwolony.
     5. Sukces oznacza zakończenie upadku bez końcowego podparcia korpusem.
        Chwilowy łagodny kontakt jest dozwolony; mocny impact jest porażką.
@@ -99,6 +99,7 @@ class SimplifiedLandingReward:
         # ~2.0 s przy 50%
         #
         # Jest to PROXY termiczne. Docelowo skalibrować z hardware.
+        self.thermal_limit_enabled = bool(cfg.get("thermal_limit_enabled", False))
         self.thermal_dose_limit = float(
             cfg.get("thermal_dose_limit", 0.5)
         )
@@ -111,7 +112,7 @@ class SimplifiedLandingReward:
 
         # Delikatny continuous shaping.
         self.thermal_penalty_coeff = float(
-            cfg.get("thermal_penalty_coeff", 2.0)
+            cfg.get("thermal_penalty_coeff", 0.0)
         )
 
         # Kara zaczyna działać dopiero np. powyżej 90% momentu.
@@ -935,7 +936,7 @@ class SimplifiedLandingReward:
             else 0.0
         )
 
-        thermal_failure = (
+        thermal_failure = self.thermal_limit_enabled and (
             max_leg_dose
             >= self.thermal_dose_limit
             or
