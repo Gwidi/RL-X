@@ -158,7 +158,7 @@ class JointMap:
 
 
 class ContactMap:
-    """Geometry IDs for foot support and disallowed robot contacts."""
+    """Feet and calves may contact the floor; other robot contacts fail."""
 
     def __init__(self, model):
         self.ground_geom_id = model.geom("floor").id
@@ -179,6 +179,9 @@ class ContactMap:
         }
         if not self.shin_geom_ids:
             raise ValueError("No lower-leg collision cylinders found in the MuJoCo model")
+        self.allowed_shin_geom_ids = {
+            model.geom(f"{leg}_calf").id for leg in ("RL", "RR", "FR", "FL")
+        }
 
         # RL enables contacts through explicit pairs despite contype=0.
         # Named feet exclude the extra visual and reward spheres.
@@ -194,12 +197,12 @@ class ContactMap:
         self.foot_legs = sorted(set(self.foot_geom_to_leg.values()))
 
     def support_contact_forces(self, model, data):
-        """Measure support forces and flag contacts other than foot-on-support."""
+        """Measure foot/calf support forces and flag other robot contacts."""
         foot_normal_forces = {
             leg: 0.0 for leg in self.foot_geom_to_leg.values()
         }
         shin_normal_force = 0.0
-        non_foot_contact = False
+        disallowed_contact = False
         contact_force = np.zeros(6)
         for contact_id in range(data.ncon):
             contact = data.contact[contact_id]
@@ -209,11 +212,11 @@ class ContactMap:
             }
             if robot_geoms and not (
                 pair & self.support_geom_ids
-                and robot_geoms <= self.foot_geom_ids
+                and robot_geoms <= (self.foot_geom_ids | self.allowed_shin_geom_ids)
             ):
                 # A torso/leg self-collision can absorb a landing impact even
                 # when every robot geom remains above the floor.
-                non_foot_contact = True
+                disallowed_contact = True
             if not (pair & self.support_geom_ids):
                 continue
             mujoco.mj_contactForce(model, data, contact_id, contact_force)
@@ -234,7 +237,7 @@ class ContactMap:
             max_single_foot_force,
             force_by_foot,
             shin_normal_force,
-            non_foot_contact,
+            disallowed_contact,
         )
 
 
@@ -406,7 +409,7 @@ def evaluate_drop(
     peak_spine_current_proxy = 0.0
     foot_contact = False
     shin_contact = False
-    non_foot_contact = False
+    disallowed_contact = False
     crashed = False
     acceleration_window_steps = max(
         1, int(np.ceil(BODY_ACCELERATION_WINDOW / model.opt.timestep))
@@ -442,9 +445,9 @@ def evaluate_drop(
             max_single_foot_force,
             force_by_foot,
             shin_force,
-            current_non_foot_contact,
+            current_disallowed_contact,
         ) = contact_map.support_contact_forces(model, data)
-        non_foot_contact = non_foot_contact or current_non_foot_contact
+        disallowed_contact = disallowed_contact or current_disallowed_contact
         peak_foot_force_raw = max(
             peak_foot_force_raw, max_single_foot_force
         )
@@ -495,7 +498,7 @@ def evaluate_drop(
         cost += NOMINAL_POSITION_REGULARIZATION * float(np.sum(position_deltas**2))
     if not foot_contact:
         cost += LANDING_QUALITY_PENALTY
-    if non_foot_contact:
+    if disallowed_contact:
         cost += LANDING_QUALITY_PENALTY
     if crashed:
         penetration = max(0.0, 0.05 - min_body_height)
@@ -511,7 +514,7 @@ def evaluate_drop(
         cost,
         crashed,
         foot_contact,
-        non_foot_contact,
+        disallowed_contact,
         min_body_height,
         peak_leg_torque,
         shin_contact,
@@ -531,27 +534,50 @@ def evaluate_drop(
 def show_best(
     model, data, jmap, params, steps, start_height, optimize_nominal_position,
     lock_spine, playback_speed=1.0, individual_gains=False,
+    show_contacts=False, show_colliders=False, contact_pause=0.0,
 ):
     if playback_speed <= 0.0:
         raise ValueError("playback_speed must be positive")
+    if contact_pause < 0.0:
+        raise ValueError("contact_pause must be non-negative")
     kp, kd = build_gains(params, lock_spine, individual_gains)
     nominal_pose = nominal_pose_from_params(
         params, optimize_nominal_position, lock_spine, individual_gains
     )
+    contact_map = ContactMap(model)
+    original_rgba = model.geom_rgba.copy()
+    if show_colliders:
+        for leg in ("RL", "RR", "FR", "FL"):
+            model.geom_rgba[model.geom(f"{leg}_calf").id] = [1.0, 0.2, 0.05, 0.6]
     with mujoco.viewer.launch_passive(model, data) as viewer:
+        with viewer.lock():
+            viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = show_contacts
+            viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = show_contacts
         while viewer.is_running():
             targets = reset_drop(data, model, jmap, start_height, nominal_pose)
+            paused_at_contact = False
             for _ in range(steps):
                 if not viewer.is_running():
+                    model.geom_rgba[:] = original_rgba
                     return
                 step_start = time.time()
                 controlled_step(model, data, jmap, targets, kp, kd)
                 viewer.sync()
+                if contact_pause > 0.0 and not paused_at_contact:
+                    *_, shin_force, disallowed_contact = contact_map.support_contact_forces(model, data)
+                    if disallowed_contact or shin_force > 0.0:
+                        paused_at_contact = True
+                        print(f"Kontakt poza stopa przy t={data.time:.3f} s; pauza {contact_pause:g} s")
+                        pause_end = time.monotonic() + contact_pause
+                        while viewer.is_running() and time.monotonic() < pause_end:
+                            viewer.sync()
+                            time.sleep(0.02)
                 frame_duration = model.opt.timestep / playback_speed
                 remaining = frame_duration - (time.time() - step_start)
                 if remaining > 0.0:
                     time.sleep(remaining)
             time.sleep(1.0)
+    model.geom_rgba[:] = original_rgba
 
 
 def sample_params(rng, bounds):
@@ -566,7 +592,7 @@ def result_from_params(
         cost,
         crashed,
         foot_contact,
-        non_foot_contact,
+        disallowed_contact,
         min_height,
         peak_leg_torque,
         shin_contact,
@@ -588,7 +614,7 @@ def result_from_params(
         "cost": cost,
         "crashed": crashed,
         "foot_contact": foot_contact,
-        "non_foot_contact": non_foot_contact,
+        "disallowed_contact": disallowed_contact,
         "min_height": min_height,
         "peak_leg_torque": peak_leg_torque,
         "shin_contact": shin_contact,
@@ -1011,7 +1037,7 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
     print(
         f"TOP WYNIK - Koszt: {best['cost']:.2f} | "
         f"Wysokosc bazy: {best['min_height']:.3f}m | Safe: {is_safe(best)} | "
-        f"Kontakt inny niz stopa: {best['non_foot_contact']}"
+        f"Niedozwolony kontakt (poza stopa/lydka): {best['disallowed_contact']}"
     )
     kp, kd = build_gains(best["params"], lock_spine, individual_gains)
     if individual_gains:
@@ -1042,6 +1068,7 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
         f"Szczytowa suma sil wszystkich stop: "
         f"{best['peak_total_foot_force']:.1f} N"
     )
+    print(f"Kontakt lydki (dozwolony): {best['shin_contact']}")
     print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
     print(f"Calka kwadratu momentow wszystkich silnikow: {best['total_motor_effort']:.3f}")
@@ -1096,7 +1123,7 @@ def is_safe(result):
     return (
         result["foot_contact"]
         and not result["crashed"]
-        and not result["non_foot_contact"]
+        and not result["disallowed_contact"]
         and result["peak_foot_force"] <= MAX_LANDING_FOOT_FORCE
         and result["peak_body_acceleration"] <= MAX_LANDING_BODY_ACCELERATION
     )
@@ -1251,8 +1278,8 @@ def validate_candidate(
             not result["foot_contact"] for result in trial_results
         ),
         "fail_crashed": sum(result["crashed"] for result in trial_results),
-        "fail_non_foot_contact": sum(
-            result["non_foot_contact"] for result in trial_results
+        "fail_disallowed_contact": sum(
+            result["disallowed_contact"] for result in trial_results
         ),
         "fail_foot_force": int(np.sum(
             foot_forces > MAX_LANDING_FOOT_FORCE
@@ -1286,7 +1313,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
     summary_columns = [
         "height", "spine", "trials", "successes", "success_rate",
         "confidence_low", "confidence_high", "fail_no_foot_contact",
-        "fail_crashed", "fail_non_foot_contact", "fail_foot_force",
+        "fail_crashed", "fail_disallowed_contact", "fail_foot_force",
         "fail_body_acceleration", "foot_force_p95", "foot_force_p99",
         "foot_force_max", "raw_foot_force_p95", "raw_foot_force_p99",
         "raw_foot_force_max", "total_foot_force_p95", "total_foot_force_p99",
@@ -1313,7 +1340,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
 
     trial_columns = [
         "height", "spine", "trial", "disturbed_height", "safe",
-        "crashed", "foot_contact", "non_foot_contact", "min_height",
+        "crashed", "foot_contact", "disallowed_contact", "min_height",
         "peak_foot_force", "peak_foot_force_raw", "peak_total_foot_force",
         "peak_body_acceleration", "peak_body_acceleration_raw", "roll_deg",
         "pitch_deg", "yaw_deg", "linear_speed", "angular_speed_deg_s",
@@ -1334,7 +1361,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
                         "safe": result["safe"],
                         "crashed": result["crashed"],
                         "foot_contact": result["foot_contact"],
-                        "non_foot_contact": result["non_foot_contact"],
+                        "disallowed_contact": result["disallowed_contact"],
                         "min_height": result["min_height"],
                         "peak_foot_force": result["peak_foot_force"],
                         "peak_foot_force_raw": result["peak_foot_force_raw"],
