@@ -173,6 +173,12 @@
     <!-- The rear mesh includes the spine housing. Explicit pairing enables
          ground contact while keeping robot self-collisions disabled. -->
     <pair geom1="rear_mesh" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <!-- Calves also need explicit floor pairs: default geom collision masks
+         are zero, so these cylinders otherwise pass through the ground. -->
+    <pair geom1="RL_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="RR_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="FR_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="FL_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="RL_foot" geom2="floor"/>
     <pair geom1="RR_foot" geom2="floor"/>
     <pair geom1="FR_foot" geom2="floor"/>

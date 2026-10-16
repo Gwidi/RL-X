@@ -56,7 +56,7 @@ def get_config(environment_name):
                 # },
             "energy_dissipation_curriculum": {
                 "start_height": 1.0,
-                "target_height": 5.0,
+                "target_height": 3.0,
                 # Independent eval/test environments use a fixed challenge.
                 "eval_difficulty": 1.0,
 
