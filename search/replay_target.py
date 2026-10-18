@@ -9,31 +9,31 @@ import main
 
 DEFAULT_SAFETY_FACTOR = 1.0
 GAINS = {
-    "kp_rl_j0": 78.29790238325148, "kp_rr_j0": 78.29790238325148,
-    "kp_fr_j0": 78.29790238325148, "kp_fl_j0": 78.29790238325148,
-    "kp_rl_j1": 34.55019222159159, "kp_rr_j1": 34.55019222159159,
-    "kp_fr_j1": 34.55019222159159, "kp_fl_j1": 34.55019222159159,
-    "kp_rl_j2": 70.23450465243452, "kp_rr_j2": 70.23450465243452,
-    "kp_fr_j2": 70.23450465243452, "kp_fl_j2": 70.23450465243452,
-    "kd_rl_j0": 4.120761713956751, "kd_rr_j0": 4.120761713956751,
-    "kd_fr_j0": 4.120761713956751, "kd_fl_j0": 4.120761713956751,
-    "kd_rl_j1": 3.8116563934277656, "kd_rr_j1": 3.8116563934277656,
-    "kd_fr_j1": 3.8116563934277656, "kd_fl_j1": 3.8116563934277656,
-    "kd_rl_j2": 1.8898610610930175, "kd_rr_j2": 1.8898610610930175,
-    "kd_fr_j2": 1.8898610610930175, "kd_fl_j2": 1.8898610610930175,
-    "kp_spine": 76.29336012180711, "kd_spine": 5.707560370178117,
+    "kp_rl_j0": 58.09479648934883, "kp_rr_j0": 58.09479648934883,
+    "kp_fr_j0": 58.09479648934883, "kp_fl_j0": 58.09479648934883,
+    "kp_rl_j1": 52.80778600694903, "kp_rr_j1": 52.80778600694903,
+    "kp_fr_j1": 52.80778600694903, "kp_fl_j1": 52.80778600694903,
+    "kp_rl_j2": 26.47990980211776, "kp_rr_j2": 26.47990980211776,
+    "kp_fr_j2": 26.47990980211776, "kp_fl_j2": 26.47990980211776,
+    "kd_rl_j0": 0.8238884722767676, "kd_rr_j0": 0.8238884722767676,
+    "kd_fr_j0": 0.8238884722767676, "kd_fl_j0": 0.8238884722767676,
+    "kd_rl_j1": 2.9008560450560466, "kd_rr_j1": 2.9008560450560466,
+    "kd_fr_j1": 2.9008560450560466, "kd_fl_j1": 2.9008560450560466,
+    "kd_rl_j2": 5.51261940468796, "kd_rr_j2": 5.51261940468796,
+    "kd_fr_j2": 5.51261940468796, "kd_fl_j2": 5.51261940468796,
+    "kp_spine": 55.674070964772085, "kd_spine": 4.7500745112296885,
 }
 
 TARGET_POSE = {
-    "rl_j0": -0.13927784509755228, "rl_j1": -0.7970243693190545,
-    "rl_j2": 1.2269909750004113,
-    "rr_j0": 0.07883064076202409, "rr_j1": 0.871019917290016,
-    "rr_j2": -2.076092219982915,
-    "fr_j0": -0.038510704532694146, "fr_j1": 0.8785414591207148,
-    "fr_j2": -2.0259944183220675,
-    "fl_j0": -0.14699264218755745, "fl_j1": -0.609438804223659,
-    "fl_j2": 1.4055736643922827,
-    "sp_j0": -0.49934998209733805,
+    "rl_j0": -0.41171856408561114, "rl_j1": -0.5570486148551262,
+    "rl_j2": 1.1690932541029424,
+    "rr_j0": -0.21451776249894913, "rr_j1": 0.9546235042547561,
+    "rr_j2": -1.3457963120954846,
+    "fr_j0": -0.6786961214908629, "fr_j1": 0.9637337413006044,
+    "fr_j2": -1.4839694192500061,
+    "fl_j0": -0.15542555790314902, "fl_j1": -1.0489715078078325,
+    "fl_j2": 1.8830434949818602,
+    "sp_j0": 0.5356723828513866,
 }
 
 
@@ -55,8 +55,8 @@ def parse_args():
     parser.add_argument(
         "--height",
         type=float,
-        default=3.0,
-        help="drop height in metres (default: 3 m)",
+        default=2.5,
+        help="drop height in metres (default: 2.5 m)",
     )
     parser.add_argument(
         "--no-viewer",
@@ -70,6 +70,17 @@ def parse_args():
         help="3D playback speed relative to real time (default: 0.25)",
     )
     parser.add_argument(
+        "--show-colliders",
+        action="store_true",
+        help="show calf collision cylinders in translucent orange",
+    )
+    parser.add_argument(
+        "--contact-pause",
+        type=float,
+        default=1.0,
+        help="pause at first non-foot contact for this many seconds (default: 1; 0 disables)",
+    )
+    parser.add_argument(
         "--safety-factor", type=float, default=DEFAULT_SAFETY_FACTOR, metavar="F",
         help="maksymalny uzywany moment jako czesc limitu aktuatora (0<F<=1; domyslnie 0.4)",
     )
@@ -78,6 +89,8 @@ def parse_args():
         parser.error("--height must be positive")
     if args.speed <= 0.0:
         parser.error("--speed must be positive")
+    if args.contact_pause < 0.0:
+        parser.error("--contact-pause must be non-negative")
     if not 0.0 < args.safety_factor <= 1.0:
         parser.error("--safety-factor must be greater than 0 and at most 1")
     return args
@@ -134,6 +147,9 @@ def cli():
             lock_spine=False,
             playback_speed=args.speed,
             individual_gains=True,
+            show_contacts=True,
+            show_colliders=args.show_colliders,
+            contact_pause=args.contact_pause,
         )
 
 

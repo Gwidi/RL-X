@@ -56,6 +56,25 @@ FOOT_FORCE_WINDOW = 0.010                      # seconds
 BODY_ACCELERATION_WINDOW = 0.050               # seconds
 LANDING_QUALITY_PENALTY = 1_000_000.0
 NOMINAL_POSITION_REGULARIZATION = 2.0
+# Optimization weights, not calibrated structural safety limits.
+CALF_FORCE_WINDOW = 0.010
+MAX_LANDING_CALF_FORCE = 1_000.0             # 10 ms average per calf, N
+CALF_FORCE_COST_WEIGHT = 1.0
+CALF_SUPPORT_COST_PER_SECOND = 5.0
+CALF_CONTACT_FORCE_EPS = 1.0                  # N; ignore numerical chatter
+CALF_LEGS = ("RL", "RR", "FR", "FL")
+CALF_RESULT_KEYS = tuple(
+    f"{metric}_{leg}"
+    for metric in ("peak_calf_force_raw", "peak_calf_force", "calf_contact_duration")
+    for leg in CALF_LEGS
+) + ("calf_contact_duration", "calf_force_cost", "calf_support_cost")
+
+
+def calf_cost_increment(average_forces, contact, body_weight, dt, xp=np):
+    """Smooth load cost per calf and cost of any calf supporting the robot."""
+    force_cost = CALF_FORCE_COST_WEIGHT * xp.sum(xp.square(average_forces / body_weight)) * dt
+    support_cost = CALF_SUPPORT_COST_PER_SECOND * xp.any(contact) * dt
+    return force_cost, support_cost
 
 SIM_DURATION = 2.0
 XML_PATH = Path(__file__).resolve().with_name("intention.xml")
@@ -182,6 +201,9 @@ class ContactMap:
         self.allowed_shin_geom_ids = {
             model.geom(f"{leg}_calf").id for leg in ("RL", "RR", "FR", "FL")
         }
+        self.calf_geom_to_index = {
+            model.geom(f"{leg}_calf").id: i for i, leg in enumerate(CALF_LEGS)
+        }
 
         # RL enables contacts through explicit pairs despite contype=0.
         # Named feet exclude the extra visual and reward spheres.
@@ -196,12 +218,13 @@ class ContactMap:
         }
         self.foot_legs = sorted(set(self.foot_geom_to_leg.values()))
 
-    def support_contact_forces(self, model, data):
+    def support_contact_forces(self, model, data, include_calf_forces=False):
         """Measure foot/calf support forces and flag other robot contacts."""
         foot_normal_forces = {
             leg: 0.0 for leg in self.foot_geom_to_leg.values()
         }
         shin_normal_force = 0.0
+        force_by_calf = np.zeros(len(CALF_LEGS))
         disallowed_contact = False
         contact_force = np.zeros(6)
         for contact_id in range(data.ncon):
@@ -227,18 +250,21 @@ class ContactMap:
                 ] += normal_force
             if pair & self.shin_geom_ids:
                 shin_normal_force += normal_force
+            for geom_id in pair & self.allowed_shin_geom_ids:
+                force_by_calf[self.calf_geom_to_index[geom_id]] += normal_force
         total_foot_force = sum(foot_normal_forces.values())
         max_single_foot_force = max(foot_normal_forces.values(), default=0.0)
         force_by_foot = np.asarray([
             foot_normal_forces[leg] for leg in self.foot_legs
         ])
-        return (
+        result = (
             total_foot_force,
             max_single_foot_force,
             force_by_foot,
             shin_normal_force,
             disallowed_contact,
         )
+        return result + (force_by_calf,) if include_calf_forces else result
 
 
 def quaternion_from_euler(roll, pitch, yaw):
@@ -419,6 +445,13 @@ def evaluate_drop(
         1, int(np.ceil(FOOT_FORCE_WINDOW / model.opt.timestep))
     )
     foot_force_history = []
+    calf_window_steps = max(1, int(np.ceil(CALF_FORCE_WINDOW / model.opt.timestep)))
+    calf_history = np.zeros((calf_window_steps, len(CALF_LEGS)))
+    calf_peak_raw = np.zeros(len(CALF_LEGS))
+    calf_peak_average = np.zeros(len(CALF_LEGS))
+    calf_duration = np.zeros(len(CALF_LEGS))
+    calf_any_duration = calf_force_cost = calf_support_cost = 0.0
+    body_weight = max(1e-6, float(np.sum(model.body_mass) * np.linalg.norm(model.opt.gravity)))
 
     for _ in range(steps):
         controlled_step(model, data, jmap, targets, kp, kd)
@@ -446,7 +479,20 @@ def evaluate_drop(
             force_by_foot,
             shin_force,
             current_disallowed_contact,
-        ) = contact_map.support_contact_forces(model, data)
+            force_by_calf,
+        ) = contact_map.support_contact_forces(model, data, include_calf_forces=True)
+        calf_history = np.roll(calf_history, -1, axis=0)
+        calf_history[-1] = force_by_calf
+        calf_average = np.mean(calf_history, axis=0)
+        calf_peak_raw = np.maximum(calf_peak_raw, force_by_calf)
+        calf_peak_average = np.maximum(calf_peak_average, calf_average)
+        calf_contact = force_by_calf > CALF_CONTACT_FORCE_EPS
+        calf_duration += calf_contact * model.opt.timestep
+        calf_any_duration += float(np.any(calf_contact)) * model.opt.timestep
+        force_cost, support_cost = calf_cost_increment(
+            calf_average, calf_contact, body_weight, model.opt.timestep)
+        calf_force_cost += force_cost
+        calf_support_cost += support_cost
         disallowed_contact = disallowed_contact or current_disallowed_contact
         peak_foot_force_raw = max(
             peak_foot_force_raw, max_single_foot_force
@@ -489,7 +535,7 @@ def evaluate_drop(
 
     # Minimize total motor-current proxy subject to survival. Including the
     # spine prevents the unlocked model from shifting load there for free.
-    cost = total_leg_effort + total_spine_effort
+    cost = total_leg_effort + total_spine_effort + calf_force_cost + calf_support_cost
     if optimize_nominal_position:
         # Avoid using a highly asymmetric, boundary pose as a free impact
         # brace.  The position variables are deltas from NOMINAL_POSE.
@@ -500,6 +546,10 @@ def evaluate_drop(
         cost += LANDING_QUALITY_PENALTY
     if disallowed_contact:
         cost += LANDING_QUALITY_PENALTY
+    peak_calf_force = float(np.max(calf_peak_average))
+    if peak_calf_force > MAX_LANDING_CALF_FORCE:
+        excess = peak_calf_force / MAX_LANDING_CALF_FORCE - 1.0
+        cost += LANDING_QUALITY_PENALTY * (1.0 + excess)
     if crashed:
         penetration = max(0.0, 0.05 - min_body_height)
         cost += LANDING_QUALITY_PENALTY + penetration * LANDING_QUALITY_PENALTY
@@ -528,6 +578,8 @@ def evaluate_drop(
         total_spine_effort,
         peak_leg_current_proxy,
         peak_spine_current_proxy,
+        *calf_peak_raw, *calf_peak_average, *calf_duration,
+        calf_any_duration, calf_force_cost, calf_support_cost,
     )
 
 
@@ -606,6 +658,7 @@ def result_from_params(
         total_spine_effort,
         peak_leg_current_proxy,
         peak_spine_current_proxy,
+        *calf_metrics,
     ) = evaluate_drop(
         model, data, jmap, contact_map, params, steps, start_height,
         optimize_nominal_position, lock_spine, initial_state, individual_gains,
@@ -630,6 +683,7 @@ def result_from_params(
         "peak_leg_current_proxy": peak_leg_current_proxy,
         "peak_spine_current_proxy": peak_spine_current_proxy,
         "params": params,
+        **dict(zip(CALF_RESULT_KEYS, map(float, calf_metrics))),
     }
 
 
@@ -1068,8 +1122,18 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
         f"Szczytowa suma sil wszystkich stop: "
         f"{best['peak_total_foot_force']:.1f} N"
     )
-    print(f"Kontakt lydki (dozwolony): {best['shin_contact']}")
-    print(f"Szczytowa sila lydki: {best['peak_shin_force']:.1f} N")
+    print(f"Kontakt lydki (wykryty): {best['shin_contact']}")
+    print(f"Limit sredniej sily jednej lydki (okno 10 ms): {MAX_LANDING_CALF_FORCE:.0f} N")
+    print(f"Limit sily lydki przekroczony: "
+          f"{max(best[f'peak_calf_force_{leg}'] for leg in CALF_LEGS) > MAX_LANDING_CALF_FORCE}")
+    print(f"Szczytowa suma sil lydek: {best['peak_shin_force']:.1f} N")
+    for leg in CALF_LEGS:
+        print(f"  Lydka {leg}: pik {best[f'peak_calf_force_raw_{leg}']:.1f} N | "
+              f"srednia 10 ms {best[f'peak_calf_force_{leg}']:.1f} N | "
+              f"kontakt {best[f'calf_contact_duration_{leg}']:.3f} s")
+    print(f"Czas kontaktu dowolnej lydki: {best['calf_contact_duration']:.3f} s")
+    print(f"Koszt obciazenia lydek: {best['calf_force_cost']:.3f} | "
+          f"koszt podparcia lydkami: {best['calf_support_cost']:.3f}")
     print(f"Szczytowy moment stawow nog: {best['peak_leg_torque']:.2f} Nm")
     print(f"Calka kwadratu momentow wszystkich silnikow: {best['total_motor_effort']:.3f}")
     print(f"Calka kwadratu momentow silnikow nog: {best['total_leg_effort']:.3f}")
@@ -1124,6 +1188,7 @@ def is_safe(result):
         result["foot_contact"]
         and not result["crashed"]
         and not result["disallowed_contact"]
+        and max(result[f"peak_calf_force_{leg}"] for leg in CALF_LEGS) <= MAX_LANDING_CALF_FORCE
         and result["peak_foot_force"] <= MAX_LANDING_FOOT_FORCE
         and result["peak_body_acceleration"] <= MAX_LANDING_BODY_ACCELERATION
     )
@@ -1284,6 +1349,10 @@ def validate_candidate(
         "fail_foot_force": int(np.sum(
             foot_forces > MAX_LANDING_FOOT_FORCE
         )),
+        "fail_calf_force": sum(
+            max(result[f"peak_calf_force_{leg}"] for leg in CALF_LEGS) > MAX_LANDING_CALF_FORCE
+            for result in trial_results
+        ),
         "fail_body_acceleration": int(np.sum(
             accelerations > MAX_LANDING_BODY_ACCELERATION
         )),
@@ -1313,7 +1382,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
     summary_columns = [
         "height", "spine", "trials", "successes", "success_rate",
         "confidence_low", "confidence_high", "fail_no_foot_contact",
-        "fail_crashed", "fail_disallowed_contact", "fail_foot_force",
+        "fail_crashed", "fail_disallowed_contact", "fail_foot_force", "fail_calf_force",
         "fail_body_acceleration", "foot_force_p95", "foot_force_p99",
         "foot_force_max", "raw_foot_force_p95", "raw_foot_force_p99",
         "raw_foot_force_max", "total_foot_force_p95", "total_foot_force_p99",
@@ -1344,6 +1413,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
         "peak_foot_force", "peak_foot_force_raw", "peak_total_foot_force",
         "peak_body_acceleration", "peak_body_acceleration_raw", "roll_deg",
         "pitch_deg", "yaw_deg", "linear_speed", "angular_speed_deg_s",
+        *CALF_RESULT_KEYS,
     ]
     with (output_dir / "walidacja_proby.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=trial_columns)
@@ -1375,6 +1445,7 @@ def save_validation_results(validation, output_dir, args, validation_seed):
                         "angular_speed_deg_s": np.rad2deg(
                             np.linalg.norm(result["angular_velocity"])
                         ),
+                        **{key: result[key] for key in CALF_RESULT_KEYS},
                     })
 
     with (output_dir / "walidacja_ustawienia.csv").open(
@@ -1748,6 +1819,7 @@ def save_plots(results, output_dir, optimize_nominal_position, individual_gains=
             "peak_foot_force_raw", "peak_total_foot_force",
             "peak_body_acceleration",
             "peak_body_acceleration_raw",
+            *CALF_RESULT_KEYS,
         ])
         for height in heights:
             for lock_spine, label in modes.items():
@@ -1760,6 +1832,7 @@ def save_plots(results, output_dir, optimize_nominal_position, individual_gains=
                     result["peak_total_foot_force"],
                     result["peak_body_acceleration"],
                     result["peak_body_acceleration_raw"],
+                    *(result[key] for key in CALF_RESULT_KEYS),
                 ])
 
     gain_names = INDIVIDUAL_GAIN_NAMES if individual_gains else LEG_GAIN_PARAMETER_NAMES
