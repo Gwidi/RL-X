@@ -120,6 +120,11 @@ class LocomotionEnv(gym.Env):
         
         if not self.spine_locked:
             self.spine_joint_limit = 1.5
+        elif self.spine_joint_id >= 0:
+            # The unlocked home pose may bend the spine. A locked model must
+            # start at the joint's zero lock position instead.
+            spine_qpos = self.initial_mj_model.jnt_qposadr[self.spine_joint_id]
+            self.initial_mj_model.key_qpos[:, spine_qpos] = 0.0
         self.c_model = deepcopy(self.initial_mj_model)
         self.c_data = mujoco.MjData(self.c_model)
         self.c_data.qpos = self.initial_mj_model.keyframe("home").qpos
