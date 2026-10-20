@@ -10,8 +10,7 @@ robot_config = {
         25.0, 25.0, 25.0
     ],
 
-    # Policy actions are joint-position offsets around the 2.3 m landing
-    # pose stored in the XML home keyframe.
+    # Policy actions are joint-position offsets around the XML home keyframe.
     "scaling_factor": 0.6,
 
     "actuator_joints_to_stay_near_nominal": []

@@ -15,6 +15,16 @@ def get_config(environment_name):
         "imu_history_length": 5,
         "control_type": "pd",
         "async_skip_percentage": 0.0,
+        "landing_evaluation": {
+            "enabled": False,
+            "heights": "1.0,1.5,2.0,2.3,2.5,3.0",
+            "seed": 104771,
+            "frequency_multiplier": 8,
+            "max_angle_deg": 3.0,
+            "max_lateral_velocity": 3.0,
+            "randomize_physics": True,
+            "randomization_coefficient": 0.99,
+        },
         "command": {
             "type": "random",
             "sampling_type": "step_probability",
@@ -55,15 +65,15 @@ def get_config(environment_name):
                 #     "max_lateral_velocity": 2.0,
                 # },
             "energy_dissipation_curriculum": {
-                "start_height": 1.0,
+                "start_height": 2.1,
                 "target_height": 3.0,
                 # Independent eval/test environments use a fixed challenge.
                 "eval_difficulty": 1.0,
 
-                "min_angle_deg": 0.0,
+                "min_angle_deg": 1.0,
                 "max_angle_deg": 3.0,
 
-                "min_lateral_velocity": 0.0,
+                "min_lateral_velocity": 1.6,
                 "max_lateral_velocity": 3.0,
 
                 "ema_alpha": 0.05,
@@ -175,7 +185,7 @@ def get_config(environment_name):
 
             "thermal_penalty_coeff": 0.0,
             "saturation_start_ratio": 0.90,
-            "saturation_penalty_coeff": 1.0,
+            "saturation_penalty_coeff": 0.0,
 
             # success
             "success_confirmation_time": 2.0,

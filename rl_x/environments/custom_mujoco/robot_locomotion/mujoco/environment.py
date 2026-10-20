@@ -439,6 +439,12 @@ class LocomotionEnv(gym.Env):
             data = self.internal_state["data"]
             for substep in range(self.nr_substeps):
                 mujoco.mj_step(model, data)
+                safety = self.internal_state.get("landing_safety")
+                if safety is not None:
+                    safety.update(model, data)
+                loads = getattr(self, "_landing_evaluation_loads", None)
+                if loads is not None:
+                    loads.update(model, data)
                 self.internal_state["physics_base_accelerations"][substep] = (
                     np.linalg.norm(data.qacc[:3])
                 )

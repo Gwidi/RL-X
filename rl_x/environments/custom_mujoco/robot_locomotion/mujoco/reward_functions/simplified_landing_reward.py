@@ -2,6 +2,10 @@ from collections import deque
 
 import numpy as np
 
+from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_safety import (
+    LandingSafetyMonitor,
+)
+
 
 class SimplifiedLandingReward:
     """
@@ -12,8 +16,8 @@ class SimplifiedLandingReward:
     2. Nie może przekroczyć fizycznego limitu momentu silników.
     3. Obciążenie termiczne jest monitorowane; limit jest opcjonalny.
     4. Duży, krótki moment podczas amortyzacji jest dozwolony.
-    5. Sukces oznacza zakończenie upadku bez końcowego podparcia korpusem.
-       Chwilowy łagodny kontakt jest dozwolony; mocny impact jest porażką.
+    5. Kontakt poza stopami i łydkami oraz przekroczenie wspólnych limitów
+       sił/przyspieszenia oznaczają porażkę. Sukces wymaga też stabilizacji.
     6. Spine locked nie ma aktywnego silnika spine i nie jest monitorowany
        jako actuator torque.
 
@@ -110,7 +114,8 @@ class SimplifiedLandingReward:
             cfg.get("thermal_cooling_rate", 0.0)
         )
 
-        # Delikatny continuous shaping.
+        # Legacy configuration attributes retained for checkpoint compatibility.
+        # Motor effort/dose is diagnostic only; these no longer affect reward.
         self.thermal_penalty_coeff = float(
             cfg.get("thermal_penalty_coeff", 0.0)
         )
@@ -121,7 +126,7 @@ class SimplifiedLandingReward:
         )
 
         self.saturation_penalty_coeff = float(
-            cfg.get("saturation_penalty_coeff", 1.0)
+            cfg.get("saturation_penalty_coeff", 0.0)
         )
 
         # ==============================================================
@@ -330,6 +335,10 @@ class SimplifiedLandingReward:
         # Safety state
         # --------------------------------------------------------------
 
+        state["landing_safety"] = LandingSafetyMonitor(state["mj_model"])
+        state["landing_safety"].min_height = float(state["data"].qpos[2])
+        for reason in ("disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height"):
+            state[f"safety_failure_{reason}"] = False
         state["base_crash_detected"] = False
         state["base_contact_window_remaining"] = 0
         state["peak_base_impact_acceleration"] = 0.0
@@ -701,7 +710,12 @@ class SimplifiedLandingReward:
         state = self.env.internal_state
         data = state["data"]
 
-        # Any ground contact starts confirmation, including body-first landing.
+        safety = state["landing_safety"]
+        for reason, violated in safety.violations().items():
+            if reason != "missing_foot_contact":
+                state[f"safety_failure_{reason}"] |= bool(violated)
+
+        # Ground contact starts confirmation; forbidden contact still fails.
         # Use all physics substeps, so a brief contact cannot be missed.
         ground_contact = bool(np.any(state["physics_floor_contacts"]))
         state["has_touched_ground"] |= ground_contact
@@ -958,7 +972,7 @@ class SimplifiedLandingReward:
 
         # No target height or joint pose, but the trunk/rear (including the
         # spine) must clear the floor throughout the final stability window.
-        # Transient gentle body contact during rescue only resets this timer.
+        # Any physical body contact is also rejected by the shared monitor.
         linear_speed = float(np.linalg.norm(lin_vel))
         angular_speed = float(np.linalg.norm(ang_vel))
         body_contact = bool(np.any(state["physics_body_floor_contacts"]))
@@ -986,53 +1000,10 @@ class SimplifiedLandingReward:
         # CONTINUOUS MOTOR COST
         # ==============================================================
 
-        all_util_parts = []
-
-        if leg_util.size:
-            all_util_parts.append(leg_util)
-
-        if spine_util.size:
-            all_util_parts.append(spine_util)
-
-        if all_util_parts:
-            all_util = np.concatenate(
-                all_util_parts
-            )
-
-            thermal_reward = (
-                -self.thermal_penalty_coeff
-                * np.mean(
-                    np.square(all_util)
-                )
-                * self.dt
-            )
-
-            sat_normalized = np.maximum(
-                0.0,
-                (
-                    all_util
-                    - self.saturation_start_ratio
-                )
-                / max(
-                    1e-6,
-                    1.0
-                    - self.saturation_start_ratio,
-                )
-            )
-
-            saturation_reward = (
-                -self.saturation_penalty_coeff
-                * np.mean(
-                    np.square(
-                        sat_normalized
-                    )
-                )
-                * self.dt
-            )
-
-        else:
-            thermal_reward = 0.0
-            saturation_reward = 0.0
+        # Motor effort/dose remains diagnostic only. Reaching the available
+        # torque during landing carries no continuous reward penalty.
+        thermal_reward = 0.0
+        saturation_reward = 0.0
 
         # ==============================================================
         # FREE FALL / POST TOUCHDOWN SHAPING
@@ -1186,12 +1157,20 @@ class SimplifiedLandingReward:
                     )
                 )
 
+            elif any(state[f"safety_failure_{reason}"] for reason in
+                     ("disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height")):
+                reason = next(reason for reason in
+                              ("disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height")
+                              if state[f"safety_failure_{reason}"])
+                landing_event_reward = self._finalize_landing(False, failure_reason=reason)
+
             # Success dopiero po przeżyciu całego safety window.
             elif (
                 has_touched
                 and
                 time_since_touch
                 >= self.success_confirmation_time
+                and safety.foot_contact
                 and state["landing_stable_time"] >= self.success_stability_time
             ):
                 landing_event_reward = (
@@ -1388,6 +1367,12 @@ class SimplifiedLandingReward:
         ] = float(
             state["actuator_overload_detected"]
         )
+
+        for name, value in safety.metrics().items():
+            info[f"metrics/{name}"] = value
+        for reason in ("disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height"):
+            info[f"metrics/safety_failure_{reason}"] = float(state[f"safety_failure_{reason}"])
+            info[f"outcome/failure_{reason}"] = float(state["landing_failure_reason"] == reason)
 
         # landing
         info["curriculum/landing_evaluated"] = float(

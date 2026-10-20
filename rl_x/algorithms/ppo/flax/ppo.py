@@ -64,6 +64,11 @@ class PPO:
         self.nr_hidden_units = config.algorithm.nr_hidden_units
         self.evaluation_frequency = config.algorithm.evaluation_frequency
         self.evaluation_episodes = config.algorithm.evaluation_episodes
+        self.landing_evaluation_config = config.environment.get("landing_evaluation", {})
+        self.paired_landing_evaluation = self.landing_evaluation_config.get("enabled", False)
+        self.last_evaluation_metrics = {}
+        if self.paired_landing_evaluation and self.evaluation_frequency > 0:
+            self.evaluation_frequency *= self.landing_evaluation_config["frequency_multiplier"]
         self.batch_size = config.environment.nr_envs * config.algorithm.nr_steps
         self.nr_updates = config.algorithm.total_timesteps // self.batch_size
         self.nr_minibatches = self.batch_size // self.minibatch_size
@@ -271,6 +276,11 @@ class PPO:
             "failure_motor_hard_limit_rate": "outcome/failure_motor_hard_limit",
             "failure_thermal_limit_rate": "outcome/failure_thermal_limit",
             "failure_base_crash_rate": "outcome/failure_base_crash",
+            "failure_disallowed_contact_rate": "outcome/failure_disallowed_contact",
+            "failure_calf_force_rate": "outcome/failure_calf_force",
+            "failure_foot_force_rate": "outcome/failure_foot_force",
+            "failure_body_acceleration_rate": "outcome/failure_body_acceleration",
+            "failure_base_height_rate": "outcome/failure_base_height",
             "landing_unresolved_rate": "outcome/unresolved",
             "landing_initial_height": "curriculum/initial_height",
             "landing_difficulty": "curriculum/difficulty",
@@ -360,38 +370,49 @@ class PPO:
             evaluation_metrics = {}
             if global_step % self.evaluation_frequency == 0 and self.evaluation_frequency != -1:
                 self.set_eval_mode()
-                eval_state, _ = self.eval_env.reset()
-                eval_nr_episodes = 0
-                # Take a fixed quota from each environment. Selecting the first
-                # completed episodes biases evaluation toward fast failures.
-                nr_eval_envs = len(eval_state)
-                eval_target_per_env = np.full(
-                    nr_eval_envs, self.evaluation_episodes // nr_eval_envs, dtype=int
-                )
-                eval_target_per_env[:self.evaluation_episodes % nr_eval_envs] += 1
-                eval_completed_per_env = np.zeros(nr_eval_envs, dtype=int)
-                evaluation_metrics = {"eval/episode_return": [], "eval/episode_length": []}
-                while True:
-                    eval_processed_action = get_deterministic_action(self.policy_state, eval_state)
-                    eval_state, eval_reward, eval_terminated, eval_truncated, eval_info = self.eval_env.step(jax.device_get(eval_processed_action))
-                    eval_done = eval_terminated | eval_truncated
-                    for i, single_done in enumerate(eval_done):
-                        if single_done and eval_completed_per_env[i] < eval_target_per_env[i]:
-                            eval_completed_per_env[i] += 1
-                            eval_nr_episodes += 1
-                            final_info = eval_info["final_info"][i]
-                            evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
-                            evaluation_metrics["eval/episode_length"].append(final_info["episode_length"])
-                            for name, info_key in landing_episode_info_keys.items():
-                                if info_key in final_info:
-                                    evaluation_metrics.setdefault(f"eval/{name}", []).append(final_info[info_key])
-                            if eval_nr_episodes == self.evaluation_episodes:
-                                break
-                    if eval_nr_episodes == self.evaluation_episodes:
-                        break
-                evaluation_metrics = {key: np.mean(value) for key, value in evaluation_metrics.items()}
-                if "eval/landing_success_rate" in evaluation_metrics:
-                    evaluation_metrics["eval/landing_episode_count"] = eval_nr_episodes
+                if self.paired_landing_evaluation:
+                    from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_evaluation import evaluate_landing_suite
+                    evaluation_metrics = evaluate_landing_suite(
+                        self.eval_env,
+                        lambda state: jax.device_get(get_deterministic_action(self.policy_state, state)),
+                        self.landing_evaluation_config,
+                        self.evaluation_episodes,
+                        os.path.dirname(self.save_path),
+                        global_step,
+                    )
+                else:
+                    eval_state, _ = self.eval_env.reset()
+                    eval_nr_episodes = 0
+                    # Take a fixed quota from each environment. Selecting the first
+                    # completed episodes biases evaluation toward fast failures.
+                    nr_eval_envs = len(eval_state)
+                    eval_target_per_env = np.full(
+                        nr_eval_envs, self.evaluation_episodes // nr_eval_envs, dtype=int
+                    )
+                    eval_target_per_env[:self.evaluation_episodes % nr_eval_envs] += 1
+                    eval_completed_per_env = np.zeros(nr_eval_envs, dtype=int)
+                    evaluation_metrics = {"eval/episode_return": [], "eval/episode_length": []}
+                    while True:
+                        eval_processed_action = get_deterministic_action(self.policy_state, eval_state)
+                        eval_state, eval_reward, eval_terminated, eval_truncated, eval_info = self.eval_env.step(jax.device_get(eval_processed_action))
+                        eval_done = eval_terminated | eval_truncated
+                        for i, single_done in enumerate(eval_done):
+                            if single_done and eval_completed_per_env[i] < eval_target_per_env[i]:
+                                eval_completed_per_env[i] += 1
+                                eval_nr_episodes += 1
+                                final_info = eval_info["final_info"][i]
+                                evaluation_metrics["eval/episode_return"].append(final_info["episode_return"])
+                                evaluation_metrics["eval/episode_length"].append(final_info["episode_length"])
+                                for name, info_key in landing_episode_info_keys.items():
+                                    if info_key in final_info:
+                                        evaluation_metrics.setdefault(f"eval/{name}", []).append(final_info[info_key])
+                                if eval_nr_episodes == self.evaluation_episodes:
+                                    break
+                        if eval_nr_episodes == self.evaluation_episodes:
+                            break
+                    evaluation_metrics = {key: np.mean(value) for key, value in evaluation_metrics.items()}
+                    if "eval/landing_success_rate" in evaluation_metrics:
+                        evaluation_metrics["eval/landing_episode_count"] = eval_nr_episodes
                 self.set_train_mode()
             
             evaluating_end_time = time.time()
@@ -401,16 +422,21 @@ class PPO:
             # Compare checkpoints on the independent evaluation task. Training
             # returns at different curriculum levels are not comparable.
             if self.save_model:
+                if evaluation_metrics:
+                    self.last_evaluation_metrics = {
+                        "evaluation_nr_env_steps": global_step, **evaluation_metrics,
+                    }
                 self.checkpoint_metrics = {
                     "nr_env_steps": global_step,
-                    **evaluation_metrics,
+                    **self.last_evaluation_metrics,
                 }
                 independent_eval = (
                     self.eval_env is not self.train_env
                     and self.evaluation_frequency != -1
                 )
                 if independent_eval:
-                    mean_return = evaluation_metrics.get("eval/episode_return")
+                    selection_metric = "eval/landing_success_rate" if self.paired_landing_evaluation else "eval/episode_return"
+                    mean_return = evaluation_metrics.get(selection_metric)
                 else:
                     mean_return = np.mean(saving_return_buffer) if dones_this_rollout > 0 else None
                 if mean_return is not None and mean_return > self.best_mean_return:
@@ -590,6 +616,11 @@ class PPO:
                         for key in (
                             "curriculum/landing_success",
                             "outcome/failure_base_crash",
+                            "outcome/failure_disallowed_contact",
+                            "outcome/failure_calf_force",
+                            "outcome/failure_foot_force",
+                            "outcome/failure_body_acceleration",
+                            "outcome/failure_base_height",
                             "outcome/failure_motor_hard_limit",
                             "outcome/failure_thermal_limit",
                             "outcome/unresolved",
