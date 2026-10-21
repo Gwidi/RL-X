@@ -65,15 +65,15 @@ def get_config(environment_name):
                 #     "max_lateral_velocity": 2.0,
                 # },
             "energy_dissipation_curriculum": {
-                "start_height": 2.1,
+                "start_height": 1.0,
                 "target_height": 3.0,
                 # Independent eval/test environments use a fixed challenge.
                 "eval_difficulty": 1.0,
 
-                "min_angle_deg": 1.0,
+                "min_angle_deg": 0.0,
                 "max_angle_deg": 3.0,
 
-                "min_lateral_velocity": 1.6,
+                "min_lateral_velocity": 0.0,
                 "max_lateral_velocity": 3.0,
 
                 "ema_alpha": 0.05,
