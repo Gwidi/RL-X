@@ -12,3 +12,5 @@ experiments/*.sh
 rlx/
 tests/
 search/output*
+docs/
+out_and_err*

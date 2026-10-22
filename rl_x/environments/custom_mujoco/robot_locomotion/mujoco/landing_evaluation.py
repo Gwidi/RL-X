@@ -35,7 +35,10 @@ def evaluation_heights(config):
 
 
 class LandingLoads:
-    """Capture contact peaks at every physics step, not just policy steps."""
+    """Capture foot/proximal calf peaks at every physics step.
+
+    The permitted distal calf third is excluded, as in LandingSafetyMonitor.
+    """
 
     def __init__(self, model, feet):
         self.groups = {"foot": {int(g): i for i, g in enumerate(feet)}, "calf": {}}

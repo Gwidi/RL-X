@@ -30,7 +30,12 @@ def landing_violations(foot_contact, disallowed_contact, min_height,
 
 
 class LandingContactMap:
-    """Only named feet and calf shafts may support the robot."""
+    """Allow feet and the distal calf third on support; reject proximal calves.
+
+    Historical calf/shin force metrics and penalties refer to the upper part.
+    Lower calf contact stays physical, but is exempt from these penalties and
+    never counts as foot support. Models without a split retain strict calves.
+    """
 
     def __init__(self, model):
         self.ground_geom_id = model.geom("floor").id
@@ -39,9 +44,15 @@ class LandingContactMap:
         if box >= 0:
             self.support_geom_ids.add(box)
         self.foot_geom_ids = {model.geom(f"{leg}_foot").id for leg in CALF_LEGS}
-        self.allowed_shin_geom_ids = {model.geom(f"{leg}_calf").id for leg in CALF_LEGS}
-        calf_bodies = {model.geom_bodyid[g] for g in self.allowed_shin_geom_ids}
-        self.shin_geom_ids = {g for g in range(model.ngeom)
+        self.calf_geom_ids = {model.geom(f"{leg}_calf").id for leg in CALF_LEGS}
+        self.lower_calf_geom_ids = set()
+        for leg in CALF_LEGS:
+            lower = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{leg}_calf_lower")
+            if lower >= 0:
+                self.lower_calf_geom_ids.add(lower)
+        self.allowed_support_geom_ids = self.foot_geom_ids | self.lower_calf_geom_ids
+        calf_bodies = {model.geom_bodyid[g] for g in self.calf_geom_ids}
+        self.shin_geom_ids = self.calf_geom_ids | {g for g in range(model.ngeom)
                               if model.geom_bodyid[g] in calf_bodies
                               and model.geom_type[g] == mujoco.mjtGeom.mjGEOM_CYLINDER}
         self.calf_geom_to_index = {model.geom(f"{leg}_calf").id: i
@@ -55,7 +66,7 @@ class LandingContactMap:
         shin = 0.0
         forbidden = False
         force = np.zeros(6)
-        allowed = self.foot_geom_ids | self.allowed_shin_geom_ids
+        allowed = self.allowed_support_geom_ids
         for i, contact in enumerate(data.contact):
             pair = {int(contact.geom1), int(contact.geom2)}
             robot = {g for g in pair if model.geom_bodyid[g] != 0}
@@ -69,7 +80,7 @@ class LandingContactMap:
                 feet[self.foot_geom_to_leg[g]] += normal
             if pair & self.shin_geom_ids:
                 shin += normal
-            for g in pair & self.allowed_shin_geom_ids:
+            for g in pair & self.calf_geom_ids:
                 calves[self.calf_geom_to_index[g]] += normal
         by_foot = np.array([feet[leg] for leg in self.foot_legs])
         result = (float(by_foot.sum()), float(by_foot.max()), by_foot, shin, forbidden)

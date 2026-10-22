@@ -9,31 +9,31 @@ import main
 
 DEFAULT_SAFETY_FACTOR = 1.0
 GAINS = {
-    "kp_rl_j0": 58.09479648934883, "kp_rr_j0": 58.09479648934883,
-    "kp_fr_j0": 58.09479648934883, "kp_fl_j0": 58.09479648934883,
-    "kp_rl_j1": 52.80778600694903, "kp_rr_j1": 52.80778600694903,
-    "kp_fr_j1": 52.80778600694903, "kp_fl_j1": 52.80778600694903,
-    "kp_rl_j2": 26.47990980211776, "kp_rr_j2": 26.47990980211776,
-    "kp_fr_j2": 26.47990980211776, "kp_fl_j2": 26.47990980211776,
-    "kd_rl_j0": 0.8238884722767676, "kd_rr_j0": 0.8238884722767676,
-    "kd_fr_j0": 0.8238884722767676, "kd_fl_j0": 0.8238884722767676,
-    "kd_rl_j1": 2.9008560450560466, "kd_rr_j1": 2.9008560450560466,
-    "kd_fr_j1": 2.9008560450560466, "kd_fl_j1": 2.9008560450560466,
-    "kd_rl_j2": 5.51261940468796, "kd_rr_j2": 5.51261940468796,
-    "kd_fr_j2": 5.51261940468796, "kd_fl_j2": 5.51261940468796,
-    "kp_spine": 55.674070964772085, "kd_spine": 4.7500745112296885,
+    "kp_rl_j0": 47.08596923496373, "kp_rr_j0": 47.08596923496373,
+    "kp_fr_j0": 47.08596923496373, "kp_fl_j0": 47.08596923496373,
+    "kp_rl_j1": 27.917316744291625, "kp_rr_j1": 27.917316744291625,
+    "kp_fr_j1": 27.917316744291625, "kp_fl_j1": 27.917316744291625,
+    "kp_rl_j2": 35.12551071141482, "kp_rr_j2": 35.12551071141482,
+    "kp_fr_j2": 35.12551071141482, "kp_fl_j2": 35.12551071141482,
+    "kd_rl_j0": 4.982580586614543, "kd_rr_j0": 4.982580586614543,
+    "kd_fr_j0": 4.982580586614543, "kd_fl_j0": 4.982580586614543,
+    "kd_rl_j1": 4.097134814994861, "kd_rr_j1": 4.097134814994861,
+    "kd_fr_j1": 4.097134814994861, "kd_fl_j1": 4.097134814994861,
+    "kd_rl_j2": 4.736790692908366, "kd_rr_j2": 4.736790692908366,
+    "kd_fr_j2": 4.736790692908366, "kd_fl_j2": 4.736790692908366,
+    "kp_spine": 93.72874168562895, "kd_spine": 6.452430889459536,
 }
 
 TARGET_POSE = {
-    "rl_j0": -0.41171856408561114, "rl_j1": -0.5570486148551262,
-    "rl_j2": 1.1690932541029424,
-    "rr_j0": -0.21451776249894913, "rr_j1": 0.9546235042547561,
-    "rr_j2": -1.3457963120954846,
-    "fr_j0": -0.6786961214908629, "fr_j1": 0.9637337413006044,
-    "fr_j2": -1.4839694192500061,
-    "fl_j0": -0.15542555790314902, "fl_j1": -1.0489715078078325,
-    "fl_j2": 1.8830434949818602,
-    "sp_j0": 0.5356723828513866,
+    "rl_j0": -0.35526737949810094, "rl_j1": -0.5414327949563804,
+    "rl_j2": 1.7844124379552,
+    "rr_j0": -0.305742365720427, "rr_j1": 0.8910097959948484,
+    "rr_j2": -1.8914502524731234,
+    "fr_j0": 0.20936793090716296, "fr_j1": 0.6683483071033249,
+    "fr_j2": -1.511636207634632,
+    "fl_j0": -0.01361010976020341, "fl_j1": -0.5962346129233117,
+    "fl_j2": 1.3203758695715557,
+    "sp_j0": 0.14655053593988143,
 }
 
 
@@ -55,8 +55,8 @@ def parse_args():
     parser.add_argument(
         "--height",
         type=float,
-        default=2.5,
-        help="drop height in metres (default: 2.5 m)",
+        default=2.3,
+        help="drop height in metres (default: 2.3 m)",
     )
     parser.add_argument(
         "--no-viewer",
@@ -72,17 +72,17 @@ def parse_args():
     parser.add_argument(
         "--show-colliders",
         action="store_true",
-        help="show calf collision cylinders in translucent orange",
+        help="feet green, permitted lower calf third blue, upper two thirds orange (red on contact)",
     )
     parser.add_argument(
         "--contact-pause",
         type=float,
         default=1.0,
-        help="pause at first non-foot contact for this many seconds (default: 1; 0 disables)",
+        help="pause at first forbidden contact (upper calf or other body part); default: 1 s, 0 disables",
     )
     parser.add_argument(
         "--safety-factor", type=float, default=DEFAULT_SAFETY_FACTOR, metavar="F",
-        help="maksymalny uzywany moment jako czesc limitu aktuatora (0<F<=1; domyslnie 0.4)",
+        help=f"maksymalny uzywany moment jako czesc limitu aktuatora (0<F<=1; domyslnie {DEFAULT_SAFETY_FACTOR:g})",
     )
     args = parser.parse_args()
     if args.height <= 0.0:
@@ -132,6 +132,9 @@ def cli():
     )
 
     if not args.no_viewer:
+        if args.show_colliders:
+            print("Collidery: zielone = stopy, niebieskie = dolna 1/3 lydki (dozwolona), "
+                  "pomaranczowe = gorne 2/3, czerwone = ich niedozwolony kontakt.")
         print(
             f"\nOtwieram symulacje 3D z predkoscia {args.speed:g}x "
             "... Zamknij okno, by zakonczyc skrypt."

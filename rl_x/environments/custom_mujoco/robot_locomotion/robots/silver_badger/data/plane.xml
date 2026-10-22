@@ -35,6 +35,15 @@
     <mesh name="l0l" file="l0l.stl" scale="0.001 0.001 0.001"/>
     <mesh name="l1lf" file="l1lf.stl" scale="0.001 0.001 0.001"/>
     <mesh name="l2l" file="l2l.stl" scale="0.001 0.001 0.001"/>
+    <!-- Split the collider's longitudinal extent at |y|=0.1077073809 m.
+         Includes the knee housing: upper length 0.144585 m, lower 0.072293 m.
+         Upper 2/3: forbidden contact. Lower 1/3: physical contact permitted.
+         Foot remains a separate sphere; its proximal tangent is |y|=0.180 m.
+         The two closed hulls partition the previous STL-derived calf hull. -->
+    <mesh name="l2l_calf_upper_collision" file="l2l_calf_upper_collision.obj"/>
+    <mesh name="l2l_calf_lower_collision" file="l2l_calf_lower_collision.obj"/>
+    <mesh name="l2r_calf_upper_collision" file="l2r_calf_upper_collision.obj"/>
+    <mesh name="l2r_calf_lower_collision" file="l2r_calf_lower_collision.obj"/>
   </asset>
 
   <worldbody>
@@ -83,7 +92,8 @@
                 <joint name="RL_calf_joint" pos="0 0 0" axis="1 0 0" limited="true" range="0 2.53" />
                 <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="l2l" />
                 <geom size="0.01 0.03125" pos="0 -0.01 0.0055" quat="0.796084 -0.605186 0 0" type="cylinder" rgba="0.6 0.6 0.6 0" />
-                <geom name="RL_calf" size="0.015 0.1" pos="0 0.1 0.005" quat="0.670968 -0.741065 0.0185305 -0.0167777" type="cylinder" rgba="0.6 0.6 0.6 0" />
+                <geom name="RL_calf" type="mesh" mesh="l2l_calf_upper_collision" rgba="0.6 0.6 0.6 0" />
+                <geom name="RL_calf_lower" type="mesh" mesh="l2l_calf_lower_collision" rgba="0.6 0.6 0.6 0" />
                 <geom size="0.021" pos="0.0054 0.2 0" contype="0" conaffinity="0" group="2" rgba="0.1 0.1 0.1 1" />
                 <geom name="RL_foot" class="foot" pos="0.0054 0.2 0" rgba="0.1 0.1 0.1 1"/>
                 <site name="RL_foot" class="foot" pos="0.0054 0.2 0"/>
@@ -107,7 +117,8 @@
               <joint name="RR_calf_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-2.53 0" />
               <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="l2r" />
               <geom size="0.01 0.03125" pos="0 0.01 0.0055" quat="0.796084 0.605186 0 0" type="cylinder" rgba="0.6 0.6 0.6 0" />
-              <geom name="RR_calf" size="0.015 0.1" pos="0 -0.1 0.005" quat="0.670968 0.741065 0.0185305 0.0167777" type="cylinder" rgba="0.6 0.6 0.6 0" />
+              <geom name="RR_calf" type="mesh" mesh="l2r_calf_upper_collision" rgba="0.6 0.6 0.6 0" />
+              <geom name="RR_calf_lower" type="mesh" mesh="l2r_calf_lower_collision" rgba="0.6 0.6 0.6 0" />
               <geom size="0.021" pos="0.0054 -0.2 0" contype="0" conaffinity="0" group="2" rgba="0.1 0.1 0.1 1" />
               <geom name="RR_foot" class="foot" pos="0.0054 -0.2 0" rgba="0.1 0.1 0.1 1"/>
               <site name="RR_foot" class="foot" pos="0.0054 -0.2 0"/>
@@ -132,7 +143,8 @@
             <joint name="FR_calf_joint" pos="0 0 0" axis="1 0 0" limited="true" range="-2.53 0" />
             <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="l2r" />
             <geom size="0.01 0.03125" pos="0 0.01 0.0055" quat="0.796084 0.605186 0 0" type="cylinder" rgba="0.6 0.6 0.6 0" />
-            <geom name="FR_calf" size="0.015 0.1" pos="0 -0.1 0.005" quat="0.670968 0.741065 0.0185305 0.0167777" type="cylinder" rgba="1 0 0 0" />
+            <geom name="FR_calf" type="mesh" mesh="l2r_calf_upper_collision" rgba="0.6 0.6 0.6 0" />
+            <geom name="FR_calf_lower" type="mesh" mesh="l2r_calf_lower_collision" rgba="0.6 0.6 0.6 0" />
             <geom size="0.021" pos="0.0054 -0.2 0" contype="0" conaffinity="0" group="2" rgba="0.1 0.1 0.1 1" />
             <geom name="FR_foot" class="foot" pos="0.0054 -0.2 0" rgba="0.1 0.1 0.1 1"/>
             <site name="FR_foot" class="foot" pos="0.0054 -0.2 0"/>
@@ -156,7 +168,8 @@
             <joint name="FL_calf_joint" pos="0 0 0" axis="1 0 0" limited="true" range="0 2.53" />
             <geom type="mesh" contype="0" conaffinity="0" group="2" rgba="0.6 0.6 0.6 1" mesh="l2l" />
             <geom size="0.01 0.03125" pos="0 -0.01 0.0055" quat="0.796084 -0.605186 0 0" type="cylinder" rgba="0.6 0.6 0.6 0" />
-            <geom name="FL_calf" size="0.015 0.1" pos="0 0.1 0.005" quat="0.670968 -0.741065 0.0185305 -0.0167777" type="cylinder" rgba="0.6 0.6 0.6 0" />
+            <geom name="FL_calf" type="mesh" mesh="l2l_calf_upper_collision" rgba="0.6 0.6 0.6 0" />
+            <geom name="FL_calf_lower" type="mesh" mesh="l2l_calf_lower_collision" rgba="0.6 0.6 0.6 0" />
             <geom size="0.021" pos="0.0054 0.2 0" contype="0" conaffinity="0" group="2" rgba="0.1 0.1 0.1 1" />
             <geom name="FL_foot" class="foot" pos="0.0054 0.2 0" rgba="0.1 0.1 0.1 1"/>
             <site name="FL_foot" class="foot" pos="0.0054 0.2 0"/>
@@ -184,11 +197,15 @@
     <pair geom1="FL_hip_housing" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="FL_thigh_housing" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <!-- Calves also need explicit floor pairs: default geom collision masks
-         are zero, so these cylinders otherwise pass through the ground. -->
+         are zero. Both upper and lower hulls retain physical ground contact. -->
     <pair geom1="RL_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="RL_calf_lower" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="RR_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="RR_calf_lower" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="FR_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="FR_calf_lower" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="FL_calf" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
+    <pair geom1="FL_calf_lower" geom2="floor" solref="0.01 1" solimp="0.95 0.99 0.001"/>
     <pair geom1="RL_foot" geom2="floor"/>
     <pair geom1="RR_foot" geom2="floor"/>
     <pair geom1="FR_foot" geom2="floor"/>

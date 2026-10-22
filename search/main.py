@@ -16,6 +16,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from rl_x.environments.custom_mujoco.robot_locomotion.robots.silver_badger.robot_config import robot_config
 
+from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_safety import (
+    LandingContactMap, LandingSafetyMonitor, landing_violations,
+    MAX_LANDING_FOOT_FORCE, MAX_LANDING_CALF_FORCE, MAX_LANDING_BODY_ACCELERATION,
+    FOOT_FORCE_WINDOW, CALF_FORCE_WINDOW, BODY_ACCELERATION_WINDOW, CALF_LEGS,
+    MIN_LANDING_BASE_HEIGHT,
+)
+
     # self.nominal_joint_positions = np.array([
     #     -0.1, 0.8, -1.5,
     #     0.1, -0.8, 1.5,
@@ -50,19 +57,12 @@ for _leg in ("rl", "rr", "fr", "fl"):
 
 # Screen structural load on each leg separately.  The total force across all
 # feet is retained as a diagnostic, but does not decide safety.
-MAX_LANDING_FOOT_FORCE = 3_000.0               # 10 ms average per foot, N
-MAX_LANDING_BODY_ACCELERATION = 10.0 * 9.81   # 50 ms average, m/s^2 (10 g)
-FOOT_FORCE_WINDOW = 0.010                      # seconds
-BODY_ACCELERATION_WINDOW = 0.050               # seconds
 LANDING_QUALITY_PENALTY = 1_000_000.0
 NOMINAL_POSITION_REGULARIZATION = 2.0
 # Optimization weights, not calibrated structural safety limits.
-CALF_FORCE_WINDOW = 0.010
-MAX_LANDING_CALF_FORCE = 1_000.0             # 10 ms average per calf, N
 CALF_FORCE_COST_WEIGHT = 1.0
 CALF_SUPPORT_COST_PER_SECOND = 5.0
 CALF_CONTACT_FORCE_EPS = 1.0                  # N; ignore numerical chatter
-CALF_LEGS = ("RL", "RR", "FR", "FL")
 CALF_RESULT_KEYS = tuple(
     f"{metric}_{leg}"
     for metric in ("peak_calf_force_raw", "peak_calf_force", "calf_contact_duration")
@@ -176,95 +176,7 @@ class JointMap:
             self.max_qvel[self.dof_adr["sp_j0"]] = 100.0
 
 
-class ContactMap:
-    """Feet and calves may contact the floor; other robot contacts fail."""
-
-    def __init__(self, model):
-        self.ground_geom_id = model.geom("floor").id
-        self.support_geom_ids = {self.ground_geom_id}
-        landing_box_id = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_GEOM, "front_landing_box"
-        )
-        if landing_box_id != -1:
-            self.support_geom_ids.add(landing_box_id)
-        calf_body_ids = {
-            model.body(name).id for name in ("fr_l2", "fl_l2", "rl_l2", "rr_l2")
-        }
-        self.shin_geom_ids = {
-            geom_id
-            for geom_id in range(model.ngeom)
-            if model.geom_bodyid[geom_id] in calf_body_ids
-            and model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_CYLINDER
-        }
-        if not self.shin_geom_ids:
-            raise ValueError("No lower-leg collision cylinders found in the MuJoCo model")
-        self.allowed_shin_geom_ids = {
-            model.geom(f"{leg}_calf").id for leg in ("RL", "RR", "FR", "FL")
-        }
-        self.calf_geom_to_index = {
-            model.geom(f"{leg}_calf").id: i for i, leg in enumerate(CALF_LEGS)
-        }
-
-        # RL enables contacts through explicit pairs despite contype=0.
-        # Named feet exclude the extra visual and reward spheres.
-        self.foot_geom_ids = {
-            model.geom(f"{leg}_foot").id for leg in ("RL", "RR", "FR", "FL")
-        }
-        if not self.foot_geom_ids:
-            raise ValueError("No colliding foot spheres found in the MuJoCo model")
-        self.foot_geom_to_leg = {
-            geom_id: model.body(model.geom_bodyid[geom_id]).name[:2]
-            for geom_id in self.foot_geom_ids
-        }
-        self.foot_legs = sorted(set(self.foot_geom_to_leg.values()))
-
-    def support_contact_forces(self, model, data, include_calf_forces=False):
-        """Measure foot/calf support forces and flag other robot contacts."""
-        foot_normal_forces = {
-            leg: 0.0 for leg in self.foot_geom_to_leg.values()
-        }
-        shin_normal_force = 0.0
-        force_by_calf = np.zeros(len(CALF_LEGS))
-        disallowed_contact = False
-        contact_force = np.zeros(6)
-        for contact_id in range(data.ncon):
-            contact = data.contact[contact_id]
-            pair = {contact.geom1, contact.geom2}
-            robot_geoms = {
-                geom_id for geom_id in pair if model.geom_bodyid[geom_id] != 0
-            }
-            if robot_geoms and not (
-                pair & self.support_geom_ids
-                and robot_geoms <= (self.foot_geom_ids | self.allowed_shin_geom_ids)
-            ):
-                # A torso/leg self-collision can absorb a landing impact even
-                # when every robot geom remains above the floor.
-                disallowed_contact = True
-            if not (pair & self.support_geom_ids):
-                continue
-            mujoco.mj_contactForce(model, data, contact_id, contact_force)
-            normal_force = abs(contact_force[0])
-            for foot_geom_id in pair & self.foot_geom_ids:
-                foot_normal_forces[
-                    self.foot_geom_to_leg[foot_geom_id]
-                ] += normal_force
-            if pair & self.shin_geom_ids:
-                shin_normal_force += normal_force
-            for geom_id in pair & self.allowed_shin_geom_ids:
-                force_by_calf[self.calf_geom_to_index[geom_id]] += normal_force
-        total_foot_force = sum(foot_normal_forces.values())
-        max_single_foot_force = max(foot_normal_forces.values(), default=0.0)
-        force_by_foot = np.asarray([
-            foot_normal_forces[leg] for leg in self.foot_legs
-        ])
-        result = (
-            total_foot_force,
-            max_single_foot_force,
-            force_by_foot,
-            shin_normal_force,
-            disallowed_contact,
-        )
-        return result + (force_by_calf,) if include_calf_forces else result
+ContactMap = LandingContactMap
 
 
 def quaternion_from_euler(roll, pitch, yaw):
@@ -437,14 +349,6 @@ def evaluate_drop(
     shin_contact = False
     disallowed_contact = False
     crashed = False
-    acceleration_window_steps = max(
-        1, int(np.ceil(BODY_ACCELERATION_WINDOW / model.opt.timestep))
-    )
-    acceleration_history = []
-    foot_force_window_steps = max(
-        1, int(np.ceil(FOOT_FORCE_WINDOW / model.opt.timestep))
-    )
-    foot_force_history = []
     calf_window_steps = max(1, int(np.ceil(CALF_FORCE_WINDOW / model.opt.timestep)))
     calf_history = np.zeros((calf_window_steps, len(CALF_LEGS)))
     calf_peak_raw = np.zeros(len(CALF_LEGS))
@@ -453,12 +357,14 @@ def evaluate_drop(
     calf_any_duration = calf_force_cost = calf_support_cost = 0.0
     body_weight = max(1e-6, float(np.sum(model.body_mass) * np.linalg.norm(model.opt.gravity)))
 
+    safety = LandingSafetyMonitor(model)
     for _ in range(steps):
         controlled_step(model, data, jmap, targets, kp, kd)
 
+        contact_forces = safety.update(model, data)
         current_height = data.qpos[2]
         min_body_height = min(min_body_height, current_height)
-        if current_height < 0.05:
+        if current_height < MIN_LANDING_BASE_HEIGHT:
             crashed = True
 
         # qfrc_actuator is joint-side generalized torque after transmission.
@@ -480,7 +386,7 @@ def evaluate_drop(
             shin_force,
             current_disallowed_contact,
             force_by_calf,
-        ) = contact_map.support_contact_forces(model, data, include_calf_forces=True)
+        ) = contact_forces
         calf_history = np.roll(calf_history, -1, axis=0)
         calf_history[-1] = force_by_calf
         calf_average = np.mean(calf_history, axis=0)
@@ -501,35 +407,10 @@ def evaluate_drop(
             peak_total_foot_force, total_foot_force
         )
         peak_shin_force = max(peak_shin_force, shin_force)
-        if total_foot_force > 0.0:
-            foot_contact = True
-        if foot_contact:
-            foot_force_history.append(force_by_foot)
-            if len(foot_force_history) > foot_force_window_steps:
-                foot_force_history.pop(0)
-            if len(foot_force_history) == foot_force_window_steps:
-                window_average_by_foot = np.mean(
-                    foot_force_history, axis=0
-                )
-                peak_foot_force = max(
-                    peak_foot_force,
-                    float(np.max(window_average_by_foot)),
-                )
-        # Measure impact acceleration only once landing has started; this
-        # excludes the constant gravitational acceleration during free fall.
-        if foot_contact or shin_force > 0.0:
-            body_acceleration = float(np.linalg.norm(data.qacc[0:3]))
-            peak_body_acceleration_raw = max(
-                peak_body_acceleration_raw, body_acceleration
-            )
-            acceleration_history.append(body_acceleration)
-            if len(acceleration_history) > acceleration_window_steps:
-                acceleration_history.pop(0)
-            if len(acceleration_history) == acceleration_window_steps:
-                window_average = float(np.mean(acceleration_history))
-                peak_body_acceleration = max(
-                    peak_body_acceleration, window_average
-                )
+        foot_contact = safety.foot_contact
+        peak_foot_force = float(safety.peak_foot.max())
+        peak_body_acceleration = safety.peak_acceleration
+        peak_body_acceleration_raw = safety.peak_acceleration_raw
         if shin_force > 0.0:
             shin_contact = True
 
@@ -551,7 +432,7 @@ def evaluate_drop(
         excess = peak_calf_force / MAX_LANDING_CALF_FORCE - 1.0
         cost += LANDING_QUALITY_PENALTY * (1.0 + excess)
     if crashed:
-        penetration = max(0.0, 0.05 - min_body_height)
+        penetration = max(0.0, MIN_LANDING_BASE_HEIGHT - min_body_height)
         cost += LANDING_QUALITY_PENALTY + penetration * LANDING_QUALITY_PENALTY
     if peak_foot_force > MAX_LANDING_FOOT_FORCE:
         excess = peak_foot_force / MAX_LANDING_FOOT_FORCE - 1.0
@@ -583,6 +464,38 @@ def evaluate_drop(
     )
 
 
+def configure_landing_collider_view(model):
+    """Expose physical calf/foot shapes without the opaque visual shells."""
+    for leg in CALF_LEGS:
+        calf = model.geom(f"{leg}_calf").id
+        lower = model.geom(f"{leg}_calf_lower").id
+        foot = model.geom(f"{leg}_foot").id
+        body = model.geom_bodyid[calf]
+        for geom in np.flatnonzero(model.geom_bodyid == body):
+            if geom not in (calf, lower, foot):
+                model.geom_rgba[geom, 3] = 0.08
+        model.geom_rgba[calf] = [1.0, 0.5, 0.05, 0.55]
+        model.geom_rgba[lower] = [0.05, 0.65, 1.0, 0.7]
+        model.geom_rgba[foot] = [0.05, 0.8, 0.3, 0.9]
+
+
+def update_landing_collider_view(model, data):
+    """Upper calf turns red; permitted lower calf stays blue on contact."""
+    floor = model.geom("floor").id
+    touching = {int(g) for contact in data.contact if floor in contact.geom
+                for g in contact.geom if g != floor}
+    for leg in CALF_LEGS:
+        calf = model.geom(f"{leg}_calf").id
+        lower = model.geom(f"{leg}_calf_lower").id
+        foot = model.geom(f"{leg}_foot").id
+        model.geom_rgba[calf] = ([1.0, 0.05, 0.05, 0.9] if calf in touching
+                                 else [1.0, 0.5, 0.05, 0.55])
+        model.geom_rgba[lower] = ([0.1, 0.85, 1.0, 1.0] if lower in touching
+                                  else [0.05, 0.65, 1.0, 0.7])
+        model.geom_rgba[foot] = ([0.05, 1.0, 0.3, 1.0] if foot in touching
+                                 else [0.05, 0.8, 0.3, 0.9])
+
+
 def show_best(
     model, data, jmap, params, steps, start_height, optimize_nominal_position,
     lock_spine, playback_speed=1.0, individual_gains=False,
@@ -599,8 +512,7 @@ def show_best(
     contact_map = ContactMap(model)
     original_rgba = model.geom_rgba.copy()
     if show_colliders:
-        for leg in ("RL", "RR", "FR", "FL"):
-            model.geom_rgba[model.geom(f"{leg}_calf").id] = [1.0, 0.2, 0.05, 0.6]
+        configure_landing_collider_view(model)
     with mujoco.viewer.launch_passive(model, data) as viewer:
         with viewer.lock():
             viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = show_contacts
@@ -614,12 +526,14 @@ def show_best(
                     return
                 step_start = time.time()
                 controlled_step(model, data, jmap, targets, kp, kd)
+                if show_colliders:
+                    update_landing_collider_view(model, data)
                 viewer.sync()
                 if contact_pause > 0.0 and not paused_at_contact:
                     *_, shin_force, disallowed_contact = contact_map.support_contact_forces(model, data)
                     if disallowed_contact or shin_force > 0.0:
                         paused_at_contact = True
-                        print(f"Kontakt poza stopa przy t={data.time:.3f} s; pauza {contact_pause:g} s")
+                        print(f"Niedozwolony kontakt przy t={data.time:.3f} s; pauza {contact_pause:g} s")
                         pause_end = time.monotonic() + contact_pause
                         while viewer.is_running() and time.monotonic() < pause_end:
                             viewer.sync()
@@ -1091,7 +1005,7 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
     print(
         f"TOP WYNIK - Koszt: {best['cost']:.2f} | "
         f"Wysokosc bazy: {best['min_height']:.3f}m | Safe: {is_safe(best)} | "
-        f"Niedozwolony kontakt (poza stopa/lydka): {best['disallowed_contact']}"
+        f"Niedozwolony kontakt (poza stopa i dolna 1/3 lydki): {best['disallowed_contact']}"
     )
     kp, kd = build_gains(best["params"], lock_spine, individual_gains)
     if individual_gains:
@@ -1126,9 +1040,9 @@ def print_result(best, model, optimize_nominal_position, lock_spine, individual_
     print(f"Limit sredniej sily jednej lydki (okno 10 ms): {MAX_LANDING_CALF_FORCE:.0f} N")
     print(f"Limit sily lydki przekroczony: "
           f"{max(best[f'peak_calf_force_{leg}'] for leg in CALF_LEGS) > MAX_LANDING_CALF_FORCE}")
-    print(f"Szczytowa suma sil lydek: {best['peak_shin_force']:.1f} N")
+    print(f"Szczytowa suma sil gornych czesci lydek: {best['peak_shin_force']:.1f} N")
     for leg in CALF_LEGS:
-        print(f"  Lydka {leg}: pik {best[f'peak_calf_force_raw_{leg}']:.1f} N | "
+        print(f"  Gorna lydka {leg}: pik {best[f'peak_calf_force_raw_{leg}']:.1f} N | "
               f"srednia 10 ms {best[f'peak_calf_force_{leg}']:.1f} N | "
               f"kontakt {best[f'calf_contact_duration_{leg}']:.3f} s")
     print(f"Czas kontaktu dowolnej lydki: {best['calf_contact_duration']:.3f} s")
@@ -1184,14 +1098,14 @@ def optimize_configuration(
 
 
 def is_safe(result):
-    return (
-        result["foot_contact"]
-        and not result["crashed"]
-        and not result["disallowed_contact"]
-        and max(result[f"peak_calf_force_{leg}"] for leg in CALF_LEGS) <= MAX_LANDING_CALF_FORCE
-        and result["peak_foot_force"] <= MAX_LANDING_FOOT_FORCE
-        and result["peak_body_acceleration"] <= MAX_LANDING_BODY_ACCELERATION
+    violations = landing_violations(
+        result["foot_contact"], result["disallowed_contact"],
+        result.get("min_height", 0.0 if result["crashed"] else 1.0),
+        result["peak_foot_force"],
+        max(result[f"peak_calf_force_{leg}"] for leg in CALF_LEGS),
+        result["peak_body_acceleration"],
     )
+    return not result["crashed"] and not any(violations.values())
 
 
 def wilson_interval(successes, trials, z=1.959963984540054):
