@@ -15,6 +15,9 @@ class EnergyDissipationCurriculumInitialState:
 
         self.start_height = curriculum_config.get("start_height", 0.5)
         self.target_height = curriculum_config.get("target_height", 6.0)
+        self.height_reference = curriculum_config.get("height_reference", "clearance")
+        if self.height_reference not in ("clearance", "base"):
+            raise ValueError("height_reference must be 'clearance' or 'base'")
         self.eval_difficulty = float(curriculum_config.get("eval_difficulty", 1.0))
         if not np.isfinite(self.eval_difficulty) or not 0.0 <= self.eval_difficulty <= 1.0:
             raise ValueError("eval_difficulty must be between 0 and 1")
@@ -285,11 +288,9 @@ class EnergyDissipationCurriculumInitialState:
             "center_height"
         ]
 
-        initial_z = (
-            nominal_height
-            + center_height
-            + height
-        )
+        initial_z = center_height + height
+        if self.height_reference == "clearance":
+            initial_z += nominal_height
 
         linear_positions = np.array([
             0.0,
@@ -384,6 +385,7 @@ class EnergyDissipationCurriculumInitialState:
         info["curriculum/applied_difficulty"] = difficulty
         info["curriculum/replay_easy"] = float(curriculum["replay_easy"])
         info["curriculum/initial_height"] = height
+        info["curriculum/initial_base_height"] = float(qpos[2])
         info["curriculum/max_angle_deg"] = np.rad2deg(max_angle)
         info["curriculum/max_lateral_velocity"] = (
             max_lateral_velocity

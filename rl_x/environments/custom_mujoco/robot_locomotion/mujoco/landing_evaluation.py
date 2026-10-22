@@ -13,6 +13,8 @@ import numpy as np
 
 
 def evaluation_heights(config):
+    if config.get("height_reference", "clearance") not in ("clearance", "base"):
+        raise ValueError("landing_evaluation.height_reference must be 'clearance' or 'base'")
     values = config["heights"]
     if isinstance(values, str):
         values = values.split(",")
@@ -130,6 +132,7 @@ class LandingEvaluationWrapper(gym.Wrapper):
         env.internal_state["env_curriculum_coeff"] = coefficient
         env.internal_state["in_eval_mode"] = False
         initial = env.initial_state_function
+        initial.height_reference = self.case.get("height_reference", "clearance")
         initial.start_height = initial.target_height = self.case["height"]
         initial.min_angle_deg = initial.max_angle_deg = self.case["max_angle_deg"] if perturbed else 0.0
         initial.min_lateral_velocity = initial.max_lateral_velocity = self.case["max_lateral_velocity"] if perturbed else 0.0
@@ -151,6 +154,7 @@ class LandingEvaluationWrapper(gym.Wrapper):
         self.case_info = dict(worker=self.worker_index, episode=self.episode,
                               seed=self.case["seed"], scenario_hash=fingerprint.hexdigest(),
                               base_z=float(data.qpos[2]),
+                              height_reference=initial.height_reference,
                               initial_qpos=data.qpos.tolist(), initial_qvel=data.qvel.tolist())
         env._landing_evaluation_loads = LandingLoads(model, env.foot_geom_indices)
         return observation, info
@@ -267,7 +271,8 @@ def evaluate_landing_suite(env, deterministic_action, config, episodes, output_d
     directory = Path(output_dir) / "landing_evaluation"
     directory.mkdir(parents=True, exist_ok=True)
     manifest = dict(config, episodes_per_height_per_controller=episodes,
-                    height_definition="drop above nominal base height, as in the training curriculum",
+                    height_definition=("base above terrain center" if config.get("height_reference", "clearance") == "base"
+                                       else "drop above nominal base height, as in the training curriculum"),
                     perturbed_physics="sampled at reset and frozen within each episode")
     (directory / "config.json").write_text(json.dumps(manifest, indent=2))
     for suffix, records in (("episodes", rows), ("summary", summaries)):

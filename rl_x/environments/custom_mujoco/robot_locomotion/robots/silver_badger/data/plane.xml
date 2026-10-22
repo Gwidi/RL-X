@@ -213,19 +213,19 @@
   </contact>
   
   <actuator>
-    <position name="spine" joint="spine_joint" gear="36" kp="0.07232155994261492" kv="0.004978727538163222" forcerange="-0.785 0.785"/>
-    <position name="RL_hip" joint="RL_hip_joint" gear="9" kp="0.581308262160046" kv="0.061513340575488185" forcerange="-3 3"/>
-    <position name="RL_thigh" joint="RL_thigh_joint" gear="9" kp="0.3446582314110077" kv="0.05058191129623286" forcerange="-3 3"/>
-    <position name="RL_calf" joint="RL_calf_joint" gear="9" kp="0.43364828038783726" kv="0.058478897443313166" forcerange="-3 3"/>
-    <position name="RR_hip" joint="RR_hip_joint" gear="9" kp="0.581308262160046" kv="0.061513340575488185" forcerange="-3 3"/>
-    <position name="RR_thigh" joint="RR_thigh_joint" gear="9" kp="0.3446582314110077" kv="0.05058191129623286" forcerange="-3 3"/>
-    <position name="RR_calf" joint="RR_calf_joint" gear="9" kp="0.43364828038783726" kv="0.058478897443313166" forcerange="-3 3"/>
-    <position name="FR_hip" joint="FR_hip_joint" gear="9" kp="0.581308262160046" kv="0.061513340575488185" forcerange="-3 3"/>
-    <position name="FR_thigh" joint="FR_thigh_joint" gear="9" kp="0.3446582314110077" kv="0.05058191129623286" forcerange="-3 3"/>
-    <position name="FR_calf" joint="FR_calf_joint" gear="9" kp="0.43364828038783726" kv="0.058478897443313166" forcerange="-3 3"/>
-    <position name="FL_hip" joint="FL_hip_joint" gear="9" kp="0.581308262160046" kv="0.061513340575488185" forcerange="-3 3"/>
-    <position name="FL_thigh" joint="FL_thigh_joint" gear="9" kp="0.3446582314110077" kv="0.05058191129623286" forcerange="-3 3"/>
-    <position name="FL_calf" joint="FL_calf_joint" gear="9" kp="0.43364828038783726" kv="0.058478897443313166" forcerange="-3 3"/>
+    <position name="spine" joint="spine_joint" gear="36" kp="0.056712962962962965" kv="0.004012345679012346" forcerange="-0.785 0.785"/>
+    <position name="RL_hip" joint="RL_hip_joint" gear="9" kp="0.83209876543209882" kv="0.017283950617283949" forcerange="-3 3"/>
+    <position name="RL_thigh" joint="RL_thigh_joint" gear="9" kp="0.93086419753086425" kv="0.059259259259259255" forcerange="-3 3"/>
+    <position name="RL_calf" joint="RL_calf_joint" gear="9" kp="0.42962962962962958" kv="0.090123456790123457" forcerange="-3 3"/>
+    <position name="RR_hip" joint="RR_hip_joint" gear="9" kp="0.83209876543209882" kv="0.017283950617283949" forcerange="-3 3"/>
+    <position name="RR_thigh" joint="RR_thigh_joint" gear="9" kp="0.93086419753086425" kv="0.059259259259259255" forcerange="-3 3"/>
+    <position name="RR_calf" joint="RR_calf_joint" gear="9" kp="0.42962962962962958" kv="0.090123456790123457" forcerange="-3 3"/>
+    <position name="FR_hip" joint="FR_hip_joint" gear="9" kp="0.83209876543209882" kv="0.017283950617283949" forcerange="-3 3"/>
+    <position name="FR_thigh" joint="FR_thigh_joint" gear="9" kp="0.93086419753086425" kv="0.059259259259259255" forcerange="-3 3"/>
+    <position name="FR_calf" joint="FR_calf_joint" gear="9" kp="0.42962962962962958" kv="0.090123456790123457" forcerange="-3 3"/>
+    <position name="FL_hip" joint="FL_hip_joint" gear="9" kp="0.83209876543209882" kv="0.017283950617283949" forcerange="-3 3"/>
+    <position name="FL_thigh" joint="FL_thigh_joint" gear="9" kp="0.93086419753086425" kv="0.059259259259259255" forcerange="-3 3"/>
+    <position name="FL_calf" joint="FL_calf_joint" gear="9" kp="0.42962962962962958" kv="0.090123456790123457" forcerange="-3 3"/>
   </actuator>
 
   <sensor>
@@ -238,11 +238,6 @@
   </sensor>
 
   <keyframe>
-    <key name="home" qpos="0 0 0.316 1 0 0 0
-      0.14655053593988143
-      -0.35526737949810094 -0.5414327949563804 1.7844124379552
-      -0.305742365720427 0.8910097959948484 -1.8914502524731234
-      0.20936793090716296 0.6683483071033249 -1.511636207634632
-      -0.01361010976020341 -0.5962346129233117 1.3203758695715557"/>
+    <key name="home" qpos="0 0 0.316 1 0 0 0 -0.5259 -0.2253 -1.231 1.842 0.617 1.1323 -1.7688 0.2687 0.7958 -1.8889 -0.2804 -0.8784 2.0951"/>
   </keyframe>
 </mujoco>

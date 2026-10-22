@@ -13,11 +13,16 @@ def get_config(environment_name):
         # Control-rate history of local accelerometer + gyro samples. No range
         # or simulator linear-velocity measurement is exposed to the actor.
         "imu_history_length": 5,
+        # Optional provenance of the fixed controller used by an experiment.
+        "landing_controller_id": "",
+        "landing_controller_sha256": "",
+        "landing_model_sha256": "",
         "control_type": "pd",
         "async_skip_percentage": 0.0,
         "landing_evaluation": {
             "enabled": False,
             "heights": "1.0,1.5,2.0,2.3,2.5,3.0",
+            "height_reference": "clearance",
             "seed": 104771,
             "frequency_multiplier": 8,
             "max_angle_deg": 3.0,
@@ -67,6 +72,9 @@ def get_config(environment_name):
             "energy_dissipation_curriculum": {
                 "start_height": 1.0,
                 "target_height": 3.0,
+                # Legacy: drop above nominal base height. "base" uses the
+                # absolute base height above the terrain's center height.
+                "height_reference": "clearance",
                 # Independent eval/test environments use a fixed challenge.
                 "eval_difficulty": 1.0,
 
