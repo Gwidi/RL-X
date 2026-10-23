@@ -24,8 +24,14 @@ fi
 PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
 if [[ -z "${PYTHON_BIN:-}" ]]; then
     if [[ -f /mnt/storage_6/project_data/pl0467-01/soft/miniconda3/bin/conda ]]; then
-        eval "$(/mnt/storage_6/project_data/pl0467-01/soft/miniconda3/bin/conda shell.bash hook)"
+        # Conda compiler activation/deactivation hooks may read unset backup
+        # variables. Run third-party hooks without nounset, then restore it.
+        set +u
+        CONDA_HOOK="$(/mnt/storage_6/project_data/pl0467-01/soft/miniconda3/bin/conda shell.bash hook)"
+        eval "$CONDA_HOOK"
+        unset CONDA_HOOK
         conda activate /mnt/storage_6/project_data/pl0467-01/conda_filip/conda_envs/rlx_filip
+        set -u
     fi
     PYTHON_BIN=python
 fi
