@@ -211,6 +211,14 @@ def build_report(output, report, pd, policy):
     p = load_preset()
     status = 'Polityka: dodana z checkpointu' if policy else 'Polityka: oczekuje na trening'
     fingerprint = model_fingerprint()
+    result_note = ''
+    if policy:
+        checkpoint = policy['checkpoint']
+        result_note = (f'<section><h2>Wynik pobranego checkpointu</h2>'
+            f'<p>Checkpoint: <code>{html.escape(checkpoint["path"])}</code>. '
+            f'SHA256: <code>{checkpoint["sha256"]}</code>.</p>'
+            '<p>Poniżej pokazano deterministyczne próby nominalne pobranego checkpointu; nie zastępują one '
+            'ewaluacji statystycznej z zaburzeniami.</p></section>')
     text = f'''<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Seed606 — stały PD i przyszłe porównanie PPO</title><style>
 *{{box-sizing:border-box}}body{{margin:0;background:#f2f5f7;color:#193346;font:16px/1.65 system-ui,sans-serif}}main{{max-width:1450px;margin:auto;padding:30px}}h1{{font-size:40px;line-height:1.18;max-width:1000px}}h2{{font-size:28px;line-height:1.3}}h3{{font-size:18px}}section{{background:white;border:1px solid #dbe5ec;padding:28px;border-radius:10px;margin:24px 0}}a{{color:#226e9d}}.two{{display:grid;grid-template-columns:1fr 1fr;gap:28px}}video{{width:100%;height:auto;border-radius:8px;background:#102a3b}}.small{{font-size:13px;color:#607789}}.empty{{min-height:280px;border:2px dashed #cad8e2;background:#f7fafb;border-radius:8px;display:flex;flex-direction:column;justify-content:center;padding:30px;color:#607789;text-align:center}}.callout{{background:#edf4f8;border-left:3px solid #347e9f;padding:18px 22px}}table{{border-collapse:collapse;width:100%;font-size:14px}}td,th{{padding:10px;text-align:left;border-bottom:1px solid #dbe5ec}}th{{background:#edf4f8}}pre{{overflow:auto;background:#edf3f7;padding:18px;border-radius:6px;font-size:13px}}code{{overflow-wrap:anywhere}}.status{{font-size:13px;letter-spacing:.04em;color:#347965;font-weight:700}}.scroll{{overflow-x:auto}}@media(max-width:900px){{.two{{grid-template-columns:1fr}}main{{padding:16px}}section{{padding:18px}}h1{{font-size:31px}}}}@media print{{video{{display:none}}.two{{grid-template-columns:1fr 1fr}}section{{break-inside:avoid}}}}
 </style></head><body><main><p><a href="{link(ROOT/'docs/landing_status_2026-10-22.html')}">Historia analizy PPO i search</a></p><div class="status">NOWY EKSPERYMENT · STAŁE KP/KD · {status.upper()}</div><h1>Regulator 606 jako baza treningu PPO</h1>
@@ -225,6 +233,9 @@ def build_report(output, report, pd, policy):
 <p>Domyślny raport zachowa zapisane filmy PD i doda politykę do prawej kolumny. Odtwarzanie samej bazy: <code>rlx/bin/python experiments/report_landing_seed606.py</code>.</p>
 <div class="callout"><strong>Interpretacja fizyczna:</strong> parametry miękkiego kontaktu stóp pozostały takie same. Raport zachowuje pomiary penetracji w JSON; wysokiej skuteczności w tej symulacji nie należy utożsamiać z kalibracją kontaktu na sprzęcie. Krok czasu i model kontaktu muszą pozostać wspólne w porównaniu PD–PPO.</div>
 <p class="small">Dane: <a href="{link(output/'pd_results.json')}">wyniki regulatora</a> · <a href="{link(output/'protocol.json')}">zamrożony protokół i hashe</a> · <a href="{link(output/'training_profile.json')}">profil uruchomienia</a> · <a href="{link(output/'environment.json')}">pełna konfiguracja środowiska</a> · <a href="{link(PRESET_PATH)}">preset PD/home</a>. Model: <code>{fingerprint['combined_sha256']}</code>.</p></section></main></body></html>'''
+    text = text.replace('<section><h2>Konfiguracja uczenia</h2>', result_note + '<section><h2>Konfiguracja uczenia</h2>')
+    if policy:
+        text = text.replace('Przygotowano i sprawdzono lokalną próbą 32 przejść PPO; pełnego zadania klastrowego nie uruchomiono. To kontrola działania ścieżki uczenia, nie wynik wytrenowanej polityki.', 'Trening klastrowy został zakończony; filmy PPO pochodzą z checkpointu wskazanego powyżej.')
     report.write_text(text)
 
 

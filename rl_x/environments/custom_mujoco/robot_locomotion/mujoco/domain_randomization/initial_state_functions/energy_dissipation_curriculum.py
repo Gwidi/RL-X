@@ -63,6 +63,11 @@ class EnergyDissipationCurriculumInitialState:
             initial_state_config.get("type")
             == "energy_dissipation_curriculum"
         )
+        self.nominal_replay_probability = float(curriculum_config.get("nominal_replay_probability", 0.0))
+        self.nominal_replay_top_probability = float(curriculum_config.get("nominal_replay_top_probability", 0.5))
+        for value in (self.nominal_replay_probability, self.nominal_replay_top_probability):
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError("Nominal replay probabilities must be between 0 and 1")
 
     # ------------------------------------------------------------------
     # CURRICULUM STATE
@@ -104,7 +109,7 @@ class EnergyDissipationCurriculumInitialState:
 
         curriculum = self._get_curriculum_state()
 
-        if curriculum["replay_easy"]:
+        if curriculum["replay_easy"] or curriculum.get("replay_nominal", False):
             return
 
         success = float(bool(success))
@@ -200,8 +205,14 @@ class EnergyDissipationCurriculumInitialState:
             return None
 
         curriculum = self._get_curriculum_state()
+        curriculum["replay_nominal"] = bool(
+            self.env.runner_mode == "train"
+            and self.nominal_replay_probability > 0.0
+            and self.env.np_rng.random() < self.nominal_replay_probability
+        )
         curriculum["replay_easy"] = bool(
             self.env.runner_mode == "train"
+            and not curriculum["replay_nominal"]
             and curriculum["difficulty"] > 0.0
             and self.env.np_rng.random() < self.replay_easy_probability
         )
@@ -215,6 +226,11 @@ class EnergyDissipationCurriculumInitialState:
             max_lateral_velocity,
             difficulty,
         ) = self._get_curriculum_schedule(curriculum["applied_difficulty"])
+
+        if curriculum["replay_nominal"]:
+            height = (self.target_height if self.env.np_rng.random() < self.nominal_replay_top_probability
+                      else self.env.np_rng.uniform(self.start_height, self.target_height))
+            max_angle = max_lateral_velocity = 0.0
 
         # --------------------------------------------------------------
         # ORIENTATION
@@ -384,6 +400,7 @@ class EnergyDissipationCurriculumInitialState:
         info["curriculum/difficulty"] = curriculum["difficulty"]
         info["curriculum/applied_difficulty"] = difficulty
         info["curriculum/replay_easy"] = float(curriculum["replay_easy"])
+        info["curriculum/replay_nominal"] = float(curriculum["replay_nominal"])
         info["curriculum/initial_height"] = height
         info["curriculum/initial_base_height"] = float(qpos[2])
         info["curriculum/max_angle_deg"] = np.rad2deg(max_angle)

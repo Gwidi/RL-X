@@ -92,6 +92,8 @@ def get_config(environment_name):
                 "difficulty_step_up": 0.005,
                 "difficulty_step_down": 0.01,
                 "replay_easy_probability": 0.15,
+                "nominal_replay_probability": 0.0,
+                "nominal_replay_top_probability": 0.5,
                 },
             },
             "joint_dropout": {

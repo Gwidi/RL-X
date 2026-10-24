@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --mem=128G
 #SBATCH --gpus-per-task=1
 #SBATCH --gres=gpu:1
 #SBATCH --time=7:30:00
@@ -38,5 +38,9 @@ fi
 export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+# Cluster nodes do not provide an X11 display.
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
 cd "$PROJECT_ROOT"
-exec "$PYTHON_BIN" "$SCRIPT_DIR/train_landing_seed606.py" "$@"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/${LANDING_TRAIN_ENTRY:-train_landing_seed606.py}" "$@"
