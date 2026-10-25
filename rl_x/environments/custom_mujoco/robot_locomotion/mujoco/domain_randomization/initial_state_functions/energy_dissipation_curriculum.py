@@ -68,6 +68,10 @@ class EnergyDissipationCurriculumInitialState:
         for value in (self.nominal_replay_probability, self.nominal_replay_top_probability):
             if not np.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError("Nominal replay probabilities must be between 0 and 1")
+        self.factorized = None
+        if curriculum_config.get("factorized_enabled", False):
+            from .factorized_landing import FactorizedLanding
+            self.factorized = FactorizedLanding(self, curriculum_config)
 
     # ------------------------------------------------------------------
     # CURRICULUM STATE
@@ -108,6 +112,10 @@ class EnergyDissipationCurriculumInitialState:
     def update_landing_result(self, success):
 
         curriculum = self._get_curriculum_state()
+
+        if self.factorized is not None and self.env.runner_mode == "train" and not curriculum["fixed_difficulty"]:
+            self.factorized.update(success)
+            return
 
         if curriculum["replay_easy"] or curriculum.get("replay_nominal", False):
             return
@@ -207,11 +215,13 @@ class EnergyDissipationCurriculumInitialState:
         curriculum = self._get_curriculum_state()
         curriculum["replay_nominal"] = bool(
             self.env.runner_mode == "train"
+            and self.factorized is None
             and self.nominal_replay_probability > 0.0
             and self.env.np_rng.random() < self.nominal_replay_probability
         )
         curriculum["replay_easy"] = bool(
             self.env.runner_mode == "train"
+            and self.factorized is None
             and not curriculum["replay_nominal"]
             and curriculum["difficulty"] > 0.0
             and self.env.np_rng.random() < self.replay_easy_probability
@@ -227,7 +237,9 @@ class EnergyDissipationCurriculumInitialState:
             difficulty,
         ) = self._get_curriculum_schedule(curriculum["applied_difficulty"])
 
-        if curriculum["replay_nominal"]:
+        if self.factorized is not None and self.env.runner_mode == "train" and not curriculum["fixed_difficulty"]:
+            height, max_angle, max_lateral_velocity, difficulty = self.factorized.sample(curriculum)
+        elif curriculum["replay_nominal"]:
             height = (self.target_height if self.env.np_rng.random() < self.nominal_replay_top_probability
                       else self.env.np_rng.uniform(self.start_height, self.target_height))
             max_angle = max_lateral_velocity = 0.0
@@ -403,6 +415,11 @@ class EnergyDissipationCurriculumInitialState:
         info["curriculum/replay_nominal"] = float(curriculum["replay_nominal"])
         info["curriculum/initial_height"] = height
         info["curriculum/initial_base_height"] = float(qpos[2])
+        info["curriculum/initial_roll_deg"] = float(np.rad2deg(roll_angle))
+        info["curriculum/initial_pitch_deg"] = float(np.rad2deg(pitch_angle))
+        info["curriculum/initial_vx"] = float(linear_vel_x)
+        info["curriculum/initial_vy"] = float(linear_vel_y)
+        info["curriculum/initial_speed_xy"] = float(np.hypot(linear_vel_x, linear_vel_y))
         info["curriculum/max_angle_deg"] = np.rad2deg(max_angle)
         info["curriculum/max_lateral_velocity"] = (
             max_lateral_velocity

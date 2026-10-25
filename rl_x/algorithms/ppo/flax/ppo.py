@@ -308,6 +308,7 @@ class PPO:
             current_landing_successes = []
             replay_landing_successes = []
             nominal_landing_successes = []
+            factorized_successes = {name: [] for name in ("nominal", "angles", "velocity", "combined")}
             for step in range(self.nr_steps):
                 processed_action, action, value, log_prob, self.key = get_action_and_value(self.policy_state, self.critic_state, state, self.key)
                 next_state, reward, terminated, truncated, info = self.train_env.step(jax.device_get(processed_action))
@@ -322,6 +323,10 @@ class PPO:
                             if info_key in final_info:
                                 rollout_landing_episodes[name].append(final_info[info_key])
                         if "curriculum/landing_success" in final_info:
+                            if "curriculum/factorized_group" in final_info:
+                                group = int(final_info["curriculum/factorized_group"])
+                                name = ("nominal", "angles", "velocity", "combined")[group]
+                                factorized_successes[name].append(final_info["curriculum/landing_success"])
                             successes = (
                                 nominal_landing_successes
                                 if final_info.get("curriculum/replay_nominal", 0.0) > 0.5 else
@@ -371,7 +376,9 @@ class PPO:
 
             # Evaluating
             evaluation_metrics = {}
-            if global_step % self.evaluation_frequency == 0 and self.evaluation_frequency != -1:
+            if self.evaluation_frequency != -1 and (global_step % self.evaluation_frequency == 0 or (
+                    self.paired_landing_evaluation and self.landing_evaluation_config.get("evaluate_final", False)
+                    and global_step >= self.total_timesteps)):
                 self.set_eval_mode()
                 if self.paired_landing_evaluation:
                     from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_evaluation import evaluate_landing_suite
@@ -440,6 +447,10 @@ class PPO:
                 if independent_eval:
                     selection_metric = "eval/landing_success_rate" if self.paired_landing_evaluation else "eval/episode_return"
                     mean_return = evaluation_metrics.get(selection_metric)
+                    if self.paired_landing_evaluation and self.landing_evaluation_config.get("require_nominal_for_best", False):
+                        mean_return = (evaluation_metrics["eval/worst_height_success_rate"] +
+                                       .001 * evaluation_metrics["eval/landing_success_rate"]
+                                       if evaluation_metrics.get("eval/nominal_eligible") == 1. else None)
                 else:
                     mean_return = np.mean(saving_return_buffer) if dones_this_rollout > 0 else None
                 if mean_return is not None and mean_return > self.best_mean_return:
@@ -469,6 +480,10 @@ class PPO:
             for name, values in rollout_landing_episodes.items():
                 if values:
                     rollout_info_metrics[f"rollout/{name}"] = np.mean(values)
+            for name, values in factorized_successes.items():
+                if values:
+                    rollout_info_metrics[f"rollout/group_{name}_success_rate"] = float(np.mean(values))
+                    rollout_info_metrics[f"rollout/group_{name}_count"] = len(values)
             for name, values in (
                 ("landing_current_success_rate", current_landing_successes),
                 ("landing_replay_success_rate", replay_landing_successes),

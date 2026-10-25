@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_seed606_replay
-#SBATCH --output=out_and_err_landing_seed606_replay_%j.txt
-#SBATCH --error=out_and_err_landing_seed606_replay_%j.txt
+#SBATCH --job-name=landing_seed606_factorized
+#SBATCH --output=out_and_err_landing_seed606_factorized_%j.txt
+#SBATCH --error=out_and_err_landing_seed606_factorized_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,5 +22,5 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY=train_landing_seed606_replay.py
+export LANDING_TRAIN_ENTRY=train_landing_seed606_factorized.py
 exec bash "$SCRIPT_DIR/train_landing_seed606.sh" "$@"

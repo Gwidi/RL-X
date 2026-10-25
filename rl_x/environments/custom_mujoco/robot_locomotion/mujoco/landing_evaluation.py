@@ -198,12 +198,18 @@ def evaluate_landing_suite(env, deterministic_action, config, episodes, output_d
     if episodes < 1:
         raise ValueError("evaluation_episodes must be positive")
     metrics, rows, summaries = {}, [], []
+    conditions = (("nominal", "angles", "velocity", "perturbed")
+                  if config.get("factorized_conditions", False) else ("nominal", "perturbed"))
     for height in heights:
         height_tag = f"h_{height:g}".replace(".", "p")
-        for condition in ("nominal", "perturbed"):
+        for condition in conditions:
             results = {}
             for controller in ("policy", "zero"):
-                case = dict(config, height=height, perturbed=condition == "perturbed")
+                case = dict(config, height=height, perturbed=condition != "nominal")
+                if condition == "angles":
+                    case["max_lateral_velocity"] = 0.
+                elif condition == "velocity":
+                    case["max_angle_deg"] = 0.
                 env.call("configure_landing_evaluation", case)
                 state, _ = env.reset()
                 workers = len(state)
@@ -257,7 +263,7 @@ def evaluate_landing_suite(env, deterministic_action, config, episodes, output_d
                 differences = [policy[name] - results["zero"][key][1][name]
                                for key, (_, policy) in results["policy"].items()]
                 metrics[f"{prefix}/{name}_policy_minus_zero"] = float(np.mean(differences))
-    for condition in ("nominal", "perturbed"):
+    for condition in conditions:
         for controller in ("policy", "zero"):
             selected = [s for s in summaries if s["condition"] == condition and s["controller"] == controller]
             for name in ("success_rate", "episode_return"):
@@ -268,6 +274,12 @@ def evaluate_landing_suite(env, deterministic_action, config, episodes, output_d
     metrics["eval/episode_return"] = metrics["eval/perturbed/policy/episode_return"]
     metrics["eval/landing_success_rate"] = metrics["eval/perturbed/policy/success_rate"]
     metrics["eval/landing_episode_count"] = episodes * len(heights)
+    if config.get("require_nominal_for_best", False):
+        tags = [f"h_{h:g}".replace(".", "p") for h in heights]
+        nominal = [metrics[f"eval/nominal/policy/{tag}/success_rate"] for tag in tags]
+        robust = [metrics[f"eval/perturbed/policy/{tag}/success_rate"] for tag in tags]
+        metrics["eval/nominal_eligible"] = float(all(x == 1. for x in nominal))
+        metrics["eval/worst_height_success_rate"] = float(min(robust))
     directory = Path(output_dir) / "landing_evaluation"
     directory.mkdir(parents=True, exist_ok=True)
     manifest = dict(config, episodes_per_height_per_controller=episodes,
