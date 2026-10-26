@@ -614,6 +614,13 @@ class SimplifiedLandingReward:
     # ==================================================================
 
     def _update_curriculum(self, success):
+        # Landing outcomes are finalized here, not through the initial-state
+        # callback. Route v3 outcomes to its independent factor curricula.
+        initial = getattr(self.env, "initial_state_function", None)
+        if getattr(initial, "factorized", None) is not None:
+            initial.update_landing_result(success)
+            return
+
         curriculum = self.env.internal_state.get(
             "landing_curriculum"
         )
@@ -623,7 +630,7 @@ class SimplifiedLandingReward:
 
         # Rehearsal episodes train the policy but must not promote the
         # curriculum based on an easier landing.
-        if curriculum.get("replay_easy", False):
+        if curriculum.get("replay_easy", False) or curriculum.get("replay_nominal", False):
             return
 
         success_float = float(bool(success))
