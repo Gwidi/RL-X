@@ -151,8 +151,14 @@ class LandingEvaluationWrapper(gym.Wrapper):
                       model.actuator_gainprm, model.actuator_biasprm,
                       env.internal_state["actuator_joint_nominal_positions"]):
             fingerprint.update(np.asarray(value).tobytes())
+        physics_sha = env.env_config.get("landing_physics_sha256", "")
+        if physics_sha:
+            fingerprint.update(physics_sha.encode())
+            fingerprint.update(np.array([model.opt.timestep, int(model.opt.integrator)], dtype=np.float64).tobytes())
         self.case_info = dict(worker=self.worker_index, episode=self.episode,
                               seed=self.case["seed"], scenario_hash=fingerprint.hexdigest(),
+                              physics_profile_sha256=physics_sha,
+                              physics_timestep=float(model.opt.timestep), physics_integrator=int(model.opt.integrator),
                               base_z=float(data.qpos[2]),
                               height_reference=initial.height_reference,
                               initial_qpos=data.qpos.tolist(), initial_qvel=data.qvel.tolist())

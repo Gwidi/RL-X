@@ -574,6 +574,8 @@ class PPO:
                     json.loads(archive.read("config_environment.json"))
                     if "config_environment.json" in archive.namelist() else {}
                 )
+            if saved_env.get("landing_physics_sha256", "") != config.environment.get("landing_physics_sha256", ""):
+                raise ValueError("Checkpoint uses a different landing physics profile; start fresh or restore its original profile")
             saved_history = saved_env.get("imu_history_length", 0)
             if saved_history != config.environment.imu_history_length:
                 raise ValueError(

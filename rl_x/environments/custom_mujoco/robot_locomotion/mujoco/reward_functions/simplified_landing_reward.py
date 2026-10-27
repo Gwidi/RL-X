@@ -335,7 +335,7 @@ class SimplifiedLandingReward:
         # Safety state
         # --------------------------------------------------------------
 
-        state["landing_safety"] = LandingSafetyMonitor(state["mj_model"])
+        state["landing_safety"] = LandingSafetyMonitor(state["mj_model"], motor_diagnostics=bool(self.env.env_config.get("landing_motor_diagnostics", False)))
         state["landing_safety"].min_height = float(state["data"].qpos[2])
         for reason in ("disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height"):
             state[f"safety_failure_{reason}"] = False

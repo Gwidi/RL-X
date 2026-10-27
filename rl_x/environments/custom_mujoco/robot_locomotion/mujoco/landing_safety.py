@@ -94,7 +94,7 @@ class LandingSafetyMonitor:
     ground contact, also zero padded; subsequent samples include gaps in contact.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, motor_diagnostics=False):
         self.contacts = LandingContactMap(model)
         self.dt = float(model.opt.timestep)
         self.force_steps = max(1, int(np.ceil(FOOT_FORCE_WINDOW / self.dt)))
@@ -106,6 +106,12 @@ class LandingSafetyMonitor:
         self.peak_foot_raw = np.zeros(4)
         self.peak_calf_raw = np.zeros(4)
         self.foot_contact = self.disallowed_contact = self.touched = False
+        self.motor_diagnostics = motor_diagnostics
+        self.motor_calves = np.array([i for i in range(model.nu) if "calf" in (model.actuator(i).name or "")], dtype=int)
+        self.motor_limits = np.maximum(np.max(np.abs(model.actuator_forcerange), axis=1), 1e-12)
+        self.motor_flight_samples = self.motor_flight_pairs = 0
+        self.motor_saturation_sum = self.calf_saturation_sum = self.calf_flip_sum = 0.0
+        self.previous_motor_force = None
         self.samples = 0
         self.min_height = np.inf
         self.peak_acceleration = self.peak_acceleration_raw = self.acceleration = 0.0
@@ -125,8 +131,22 @@ class LandingSafetyMonitor:
         self.peak_calf = np.maximum(self.peak_calf, average[1])
         self.peak_foot_raw = np.maximum(self.peak_foot_raw, feet)
         self.peak_calf_raw = np.maximum(self.peak_calf_raw, calves)
-        self.touched |= any(bool({int(c.geom1), int(c.geom2)} & self.contacts.support_geom_ids)
-                            for c in data.contact)
+        contact_now = any(bool({int(c.geom1), int(c.geom2)} & self.contacts.support_geom_ids)
+                          for c in data.contact)
+        if self.motor_diagnostics and not self.touched and not contact_now:
+            torque = np.asarray(data.actuator_force)
+            self.motor_flight_samples += 1
+            self.motor_saturation_sum += float(np.mean(np.abs(torque) / self.motor_limits >= .95))
+            if self.motor_calves.size:
+                calf = self.motor_calves
+                self.calf_saturation_sum += float(np.mean(np.abs(torque[calf]) / self.motor_limits[calf] >= .95))
+                if self.previous_motor_force is not None:
+                    # Ignore near-zero sign crossings; count reversals above 10% of limit.
+                    meaningful = np.minimum(np.abs(torque[calf]), np.abs(self.previous_motor_force[calf])) >= .1*self.motor_limits[calf]
+                    self.calf_flip_sum += float(np.mean((torque[calf]*self.previous_motor_force[calf] < 0) & meaningful))
+                    self.motor_flight_pairs += 1
+            self.previous_motor_force = torque.copy()
+        self.touched |= contact_now
         if self.touched:
             acceleration = float(np.linalg.norm(data.qacc[:3]))
             self.acceleration_history.append(acceleration)
@@ -142,8 +162,14 @@ class LandingSafetyMonitor:
                                   self.peak_acceleration)
 
     def metrics(self):
-        return dict(peak_foot_force_10ms=float(self.peak_foot.max()),
+        result = dict(peak_foot_force_10ms=float(self.peak_foot.max()),
                     peak_calf_force_10ms=float(self.peak_calf.max()),
                     safety_peak_body_acceleration=self.peak_acceleration,
                     safety_disallowed_contact=float(self.disallowed_contact),
                     safety_min_base_height=self.min_height)
+        if self.motor_diagnostics:
+            result.update(flight_motor_saturation_fraction=self.motor_saturation_sum/max(1,self.motor_flight_samples),
+                          flight_calf_saturation_fraction=self.calf_saturation_sum/max(1,self.motor_flight_samples),
+                          flight_calf_sign_flip_fraction=self.calf_flip_sum/max(1,self.motor_flight_pairs),
+                          flight_motor_samples=float(self.motor_flight_samples))
+        return result

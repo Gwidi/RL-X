@@ -92,6 +92,11 @@ class LocomotionEnv(gym.Env):
 
         self.initial_mj_model = mujoco.MjModel.from_xml_string(xml=xml_handle.to_xml_string(), assets=xml_handle.get_assets())
         self.initial_mj_model.opt.timestep = env_config["timestep"]
+        if env_config.get("landing_physics_profile"):
+            from .landing_physics import apply_landing_physics
+            apply_landing_physics(self.initial_mj_model, env_config["landing_physics_profile"],
+                                  expected_timestep=env_config["timestep"],
+                                  expected_sha256=env_config.get("landing_physics_sha256"))
 
         self.spine_actuator_index = mujoco.mj_name2id(
             self.initial_mj_model,

@@ -17,6 +17,9 @@ def get_config(environment_name):
         "landing_controller_id": "",
         "landing_controller_sha256": "",
         "landing_model_sha256": "",
+        "landing_physics_profile": "",
+        "landing_physics_sha256": "",
+        "landing_motor_diagnostics": False,
         "control_type": "pd",
         "async_skip_percentage": 0.0,
         "landing_evaluation": {

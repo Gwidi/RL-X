@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_seed606_factorized
-#SBATCH --output=out_and_err_landing_seed606_factorized_%j.txt
-#SBATCH --error=out_and_err_landing_seed606_factorized_%j.txt
+#SBATCH --job-name=landing_seed606_stable_v4
+#SBATCH --output=out_and_err_landing_seed606_stable_v4_%j.txt
+#SBATCH --error=out_and_err_landing_seed606_stable_v4_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -9,7 +9,7 @@
 #SBATCH --mem=128G
 #SBATCH --gpus-per-task=1
 #SBATCH --gres=gpu:1
-#SBATCH --time=7:30:00
+#SBATCH --time=12:00:00
 
 # Keep the established entry point and one shared training profile.
 set -euo pipefail
@@ -22,5 +22,5 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY=train_landing_seed606_factorized.py
+export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v4.py}"
 exec bash "$SCRIPT_DIR/train_landing_seed606.sh" "$@"
