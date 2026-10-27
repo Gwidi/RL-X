@@ -576,6 +576,9 @@ class PPO:
                 )
             if saved_env.get("landing_physics_sha256", "") != config.environment.get("landing_physics_sha256", ""):
                 raise ValueError("Checkpoint uses a different landing physics profile; start fresh or restore its original profile")
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.policy_velocity import velocity_observation_contract
+            if velocity_observation_contract(saved_env.get("policy_velocity", {})) != velocity_observation_contract(config.environment.get("policy_velocity", {})):
+                raise ValueError("Checkpoint has a different policy velocity observation contract; use matching mode/scale/sensor settings or train fresh")
             saved_history = saved_env.get("imu_history_length", 0)
             if saved_history != config.environment.imu_history_length:
                 raise ValueError(

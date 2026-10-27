@@ -40,6 +40,8 @@ class LocomotionEnv(gym.Env):
         if not isinstance(self.imu_history_length, int) or self.imu_history_length < 0:
             raise ValueError("imu_history_length must be a non-negative integer")
 
+        from .policy_velocity import PolicyVelocityObservation
+        self.policy_velocity_observation = PolicyVelocityObservation(env_config.get("policy_velocity", {}))
         self.np_rng = np.random.default_rng(seed)
 
         xml_path = (self.robot_config["directory_path"] / "data" / "plane.xml").as_posix()
@@ -408,6 +410,7 @@ class LocomotionEnv(gym.Env):
         self.handle_domain_randomization(is_episode_start=True)
 
         self.internal_state["imu_history"].fill(0.0)
+        self.policy_velocity_observation.reset(self)
 
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
@@ -539,6 +542,7 @@ class LocomotionEnv(gym.Env):
                 self.imu_linear_acceleration_sensor_adr:self.imu_linear_acceleration_sensor_adr + 3
             ],
             self.internal_state["imu_history"].reshape(-1),
+            self.policy_velocity_observation.observe(self),
         ])
 
         # Add noise
@@ -627,6 +631,8 @@ class LocomotionEnv(gym.Env):
         current_observation_idx += 3
         self.imu_history_obs_idx = np.arange(current_observation_idx, current_observation_idx + 6 * self.imu_history_length)
         current_observation_idx += 6 * self.imu_history_length
+        self.policy_velocity_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_velocity_observation.dimension)
+        current_observation_idx += self.policy_velocity_observation.dimension
 
         self.policy_observation_indices = np.concatenate([
             self.joint_positions_obs_idx,
@@ -637,6 +643,7 @@ class LocomotionEnv(gym.Env):
             self.gravity_vector_obs_idx,
             self.policy_exteroception_obs_idx,
             self.imu_history_obs_idx,
+            self.policy_velocity_obs_idx,
         ], dtype=int)
 
         self.critic_observation_indices = np.concatenate([

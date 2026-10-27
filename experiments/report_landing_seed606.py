@@ -62,6 +62,11 @@ def load_policy(path, env):
                 raise ValueError("Checkpoint and current XML/assets differ; use the original experiment model")
             if saved_env.get("imu_history_length") != env.imu_history_length:
                 raise ValueError("Checkpoint IMU history does not match this experiment")
+            if saved_env.get("landing_physics_sha256", "") != env.env_config.get("landing_physics_sha256", ""):
+                raise ValueError("Checkpoint and evaluation use different landing physics profiles")
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.policy_velocity import velocity_observation_contract
+            if velocity_observation_contract(saved_env.get("policy_velocity", {})) != velocity_observation_contract(env.env_config.get("policy_velocity", {})):
+                raise ValueError("Checkpoint and evaluation have different policy velocity observation contracts")
             for key in ("train_robot", "spine_locked", "timestep", "control_type"):
                 if saved_env.get(key) != env.env_config[key]:
                     raise ValueError(f"Checkpoint environment differs in {key}")
@@ -80,6 +85,13 @@ def load_policy(path, env):
         restored = checkpointer.restore(str(destination), restore_args=restore_args)
         state = restored["policy"]
         params = state.params if hasattr(state, "params") else state["params"]
+    weights_hash = hashlib.sha256()
+    for tree_path, leaf in jax.tree_util.tree_flatten_with_path(params)[0]:
+        array = np.asarray(leaf)
+        weights_hash.update(str(tree_path).encode())
+        weights_hash.update(str(array.dtype).encode())
+        weights_hash.update(str(array.shape).encode())
+        weights_hash.update(array.tobytes())
     meta = SimpleNamespace(general_properties=GeneralProperties,
         single_observation_space=env.observation_space, single_action_space=env.action_space,
         policy_observation_indices=env.policy_observation_indices)
@@ -93,7 +105,7 @@ def load_policy(path, env):
         if value.shape != (13,) or not np.all(np.isfinite(value)):
             raise ValueError("Invalid policy action")
         return value
-    return action, dict(path=str(path.resolve()), sha256=sha(path), algorithm=algorithm,
+    return action, dict(path=str(path.resolve()), sha256=sha(path), policy_weights_sha256=weights_hash.hexdigest(), algorithm=algorithm,
                         saved_environment=saved_env, inference="deterministic mean, clipped/rescaled as in PPO evaluation")
 
 

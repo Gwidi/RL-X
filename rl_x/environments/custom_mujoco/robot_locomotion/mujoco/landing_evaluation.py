@@ -155,8 +155,12 @@ class LandingEvaluationWrapper(gym.Wrapper):
         if physics_sha:
             fingerprint.update(physics_sha.encode())
             fingerprint.update(np.array([model.opt.timestep, int(model.opt.integrator)], dtype=np.float64).tobytes())
+        from .policy_velocity import velocity_observation_contract
+        velocity_contract = velocity_observation_contract(env.env_config.get("policy_velocity", {}))
         self.case_info = dict(worker=self.worker_index, episode=self.episode,
                               seed=self.case["seed"], scenario_hash=fingerprint.hexdigest(),
+                              policy_velocity_mode=velocity_contract['mode'],
+                              policy_velocity_contract=json.dumps(velocity_contract, sort_keys=True),
                               physics_profile_sha256=physics_sha,
                               physics_timestep=float(model.opt.timestep), physics_integrator=int(model.opt.integrator),
                               base_z=float(data.qpos[2]),

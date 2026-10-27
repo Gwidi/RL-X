@@ -11,8 +11,17 @@ def get_config(environment_name):
         "train_robot": "unitree_go2",
         "spine_locked": False,
         # Control-rate history of local accelerometer + gyro samples. No range
-        # or simulator linear-velocity measurement is exposed to the actor.
+        # or simulator linear-velocity measurement is exposed by default.
         "imu_history_length": 5,
+        "policy_velocity": {
+            "mode": "none",  # Legacy 78 inputs; masked/heading_xy add two actor inputs.
+            "schema": "base_heading_xy_v1",
+            "source": "simulated_base_truth",
+            "scale_mps": 4.0,
+            "noise_std_mps": 0.0,
+            "bias_std_mps": 0.0,
+            "delay_steps": 0,
+        },
         # Optional provenance of the fixed controller used by an experiment.
         "landing_controller_id": "",
         "landing_controller_sha256": "",
