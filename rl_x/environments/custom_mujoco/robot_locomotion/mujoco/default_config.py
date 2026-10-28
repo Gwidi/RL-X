@@ -42,6 +42,7 @@ def get_config(environment_name):
             "evaluate_final": False,
             "max_angle_deg": 3.0,
             "max_lateral_velocity": 3.0,
+            "velocity_sampling": "component_box",
             "randomize_physics": True,
             "randomization_coefficient": 0.99,
         },
@@ -98,6 +99,7 @@ def get_config(environment_name):
 
                 "min_lateral_velocity": 0.0,
                 "max_lateral_velocity": 3.0,
+                "velocity_sampling": "component_box",
 
                 "ema_alpha": 0.05,
 

@@ -15,6 +15,8 @@ import numpy as np
 def evaluation_heights(config):
     if config.get("height_reference", "clearance") not in ("clearance", "base"):
         raise ValueError("landing_evaluation.height_reference must be 'clearance' or 'base'")
+    from .domain_randomization.initial_state_functions.horizontal_velocity import validate_velocity_sampling
+    validate_velocity_sampling(config.get("velocity_sampling", "component_box"))
     values = config["heights"]
     if isinstance(values, str):
         values = values.split(",")
@@ -134,6 +136,7 @@ class LandingEvaluationWrapper(gym.Wrapper):
         initial = env.initial_state_function
         initial.height_reference = self.case.get("height_reference", "clearance")
         initial.start_height = initial.target_height = self.case["height"]
+        initial.velocity_sampling = self.case.get("velocity_sampling", "component_box")
         initial.min_angle_deg = initial.max_angle_deg = self.case["max_angle_deg"] if perturbed else 0.0
         initial.min_lateral_velocity = initial.max_lateral_velocity = self.case["max_lateral_velocity"] if perturbed else 0.0
         initial.replay_easy_probability = 0.0
@@ -159,6 +162,7 @@ class LandingEvaluationWrapper(gym.Wrapper):
         velocity_contract = velocity_observation_contract(env.env_config.get("policy_velocity", {}))
         self.case_info = dict(worker=self.worker_index, episode=self.episode,
                               seed=self.case["seed"], scenario_hash=fingerprint.hexdigest(),
+                              velocity_sampling=initial.velocity_sampling,
                               policy_velocity_mode=velocity_contract['mode'],
                               policy_velocity_contract=json.dumps(velocity_contract, sort_keys=True),
                               physics_profile_sha256=physics_sha,

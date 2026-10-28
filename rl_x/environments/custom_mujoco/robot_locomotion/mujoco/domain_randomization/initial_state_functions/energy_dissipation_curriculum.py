@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
 import mujoco
+from .horizontal_velocity import sample_horizontal_velocity, validate_velocity_sampling
 
 class EnergyDissipationCurriculumInitialState:
 
@@ -31,6 +32,8 @@ class EnergyDissipationCurriculumInitialState:
         self.max_lateral_velocity = curriculum_config.get(
             "max_lateral_velocity", 2.5
         )
+
+        self.velocity_sampling = validate_velocity_sampling(curriculum_config.get("velocity_sampling", "component_box"))
 
         # Curriculum parameters
         self.ema_alpha = curriculum_config.get("ema_alpha", 0.05)
@@ -288,15 +291,8 @@ class EnergyDissipationCurriculumInitialState:
         # LATERAL VELOCITY
         # --------------------------------------------------------------
 
-        linear_vel_x = self.env.np_rng.uniform(
-            -max_lateral_velocity,
-            max_lateral_velocity,
-        )
-
-        linear_vel_y = self.env.np_rng.uniform(
-            -max_lateral_velocity,
-            max_lateral_velocity,
-        )
+        linear_vel_x, linear_vel_y = sample_horizontal_velocity(
+            self.env.np_rng, max_lateral_velocity, self.velocity_sampling)
 
         # Swobodny spadek -> początkowe v_z = 0.
         linear_vel_z = 0.0
