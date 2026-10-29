@@ -72,7 +72,12 @@ class EnergyDissipationCurriculumInitialState:
             if not np.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError("Nominal replay probabilities must be between 0 and 1")
         self.factorized = None
-        if curriculum_config.get("factorized_enabled", False):
+        if curriculum_config.get("height_then_velocity_enabled", False):
+            if curriculum_config.get("factorized_enabled", False):
+                raise ValueError("Sequential and factorized curricula are mutually exclusive")
+            from .height_then_velocity import HeightThenVelocity
+            self.factorized = HeightThenVelocity(self, curriculum_config)
+        elif curriculum_config.get("factorized_enabled", False):
             from .factorized_landing import FactorizedLanding
             self.factorized = FactorizedLanding(self, curriculum_config)
 

@@ -1,11 +1,11 @@
 """Shared initial horizontal velocity distributions for training/evaluation."""
 import numpy as np
 
-MODES=('component_box','speed_disk')
+MODES=('component_box','speed_disk','speed_ring')
 
 def validate_velocity_sampling(mode):
     if mode not in MODES:
-        raise ValueError('velocity_sampling must be component_box or speed_disk')
+        raise ValueError('velocity_sampling must be component_box, speed_disk or speed_ring')
     return mode
 
 def sample_horizontal_velocity(rng, limit, mode='component_box'):
@@ -14,6 +14,6 @@ def sample_horizontal_velocity(rng, limit, mode='component_box'):
         # Preserve historical two scalar draws and ordering exactly.
         return rng.uniform(-limit,limit),rng.uniform(-limit,limit)
     # Uniform area in a disk: P(speed <= r) = (r/limit)^2.
-    speed=limit*np.sqrt(rng.uniform(0.,1.))
+    speed=limit if mode=='speed_ring' else limit*np.sqrt(rng.uniform(0.,1.))
     azimuth=rng.uniform(0.,2*np.pi)
     return speed*np.cos(azimuth),speed*np.sin(azimuth)

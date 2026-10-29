@@ -208,12 +208,16 @@ def _episode(final_info):
 
 def evaluate_landing_suite(env, deterministic_action, config, episodes, output_dir, global_step):
     """Run four conditions; quotas prevent selection of only fast failures."""
+    if config.get("velocity_grid", ""):
+        from .landing_velocity_grid import evaluate_velocity_grid
+        return evaluate_velocity_grid(env, deterministic_action, config, episodes, output_dir, global_step)
     heights = evaluation_heights(config)
     if episodes < 1:
         raise ValueError("evaluation_episodes must be positive")
     metrics, rows, summaries = {}, [], []
     conditions = (("nominal", "angles", "velocity", "perturbed")
                   if config.get("factorized_conditions", False) else ("nominal", "perturbed"))
+    conditions = config.get("_conditions", conditions)
     for height in heights:
         height_tag = f"h_{height:g}".replace(".", "p")
         for condition in conditions:
@@ -285,8 +289,8 @@ def evaluate_landing_suite(env, deterministic_action, config, episodes, output_d
         metrics[f"eval/{condition}/success_gain"] = (metrics[f"eval/{condition}/policy/success_rate"]
                                                      - metrics[f"eval/{condition}/zero/success_rate"])
     # Legacy keys now mean policy performance averaged over fixed perturbed heights.
-    metrics["eval/episode_return"] = metrics["eval/perturbed/policy/episode_return"]
-    metrics["eval/landing_success_rate"] = metrics["eval/perturbed/policy/success_rate"]
+    metrics["eval/episode_return"] = metrics[f"eval/{conditions[-1]}/policy/episode_return"]
+    metrics["eval/landing_success_rate"] = metrics[f"eval/{conditions[-1]}/policy/success_rate"]
     metrics["eval/landing_episode_count"] = episodes * len(heights)
     if config.get("require_nominal_for_best", False):
         tags = [f"h_{h:g}".replace(".", "p") for h in heights]
