@@ -1,7 +1,7 @@
 """Render the fixed PD baseline, then add matched policy videos after training.
 
-Baseline: rlx/bin/python experiments/report_landing_seed606.py
-Policy:   rlx/bin/python experiments/report_landing_seed606.py --checkpoint /path/best.model
+Baseline: rlx/bin/python experiments/analysis/report_landing_seed606.py
+Policy:   rlx/bin/python experiments/analysis/report_landing_seed606.py --checkpoint /path/best.model
 """
 import os
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -21,7 +21,7 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_seed606 import (
     CONTROLLER_ID, PRESET_PATH, VIDEO_HEIGHTS, environment_config, load_preset,
@@ -241,8 +241,8 @@ def build_report(output, report, pd, policy):
 <pre>sbatch experiments/test2.sh</pre><p class="small">Uruchomienie z katalogu głównego projektu albo <code>sbatch test2.sh</code> z katalogu experiments. test2.sh uruchamia wspólny profil seeda 606. Przygotowano i sprawdzono lokalną próbą 32 przejść PPO; pełnego zadania klastrowego nie uruchomiono. To kontrola działania ścieżki uczenia, nie wynik wytrenowanej polityki.</p></section>
 {''.join(rows)}
 <section><h2>Warunki porównania po treningu</h2><p>Regulator i polityka dostają ten sam model, home, Kp/Kd, stan początkowy, historię IMU przy resecie, wysokości oraz limit 5 s. Polityka działa deterministycznie, ze średnią rozkładu akcji i tym samym clippingiem co w ewaluacji PPO. Generator odrzuca niezgodny model, preset lub początkowy hash scenariusza. Filmy pokazują pojedyncze próby nominalne; skuteczność statystyczną oceniamy osobną sparowaną ewaluacją.</p>
-<pre>rlx/bin/python experiments/report_landing_seed606.py --checkpoint /sciezka/do/best.model</pre>
-<p>Domyślny raport zachowa zapisane filmy PD i doda politykę do prawej kolumny. Odtwarzanie samej bazy: <code>rlx/bin/python experiments/report_landing_seed606.py</code>.</p>
+<pre>rlx/bin/python experiments/analysis/report_landing_seed606.py --checkpoint /sciezka/do/best.model</pre>
+<p>Domyślny raport zachowa zapisane filmy PD i doda politykę do prawej kolumny. Odtwarzanie samej bazy: <code>rlx/bin/python experiments/analysis/report_landing_seed606.py</code>.</p>
 <div class="callout"><strong>Interpretacja fizyczna:</strong> parametry miękkiego kontaktu stóp pozostały takie same. Raport zachowuje pomiary penetracji w JSON; wysokiej skuteczności w tej symulacji nie należy utożsamiać z kalibracją kontaktu na sprzęcie. Krok czasu i model kontaktu muszą pozostać wspólne w porównaniu PD–PPO.</div>
 <p class="small">Dane: <a href="{link(output/'pd_results.json')}">wyniki regulatora</a> · <a href="{link(output/'protocol.json')}">zamrożony protokół i hashe</a> · <a href="{link(output/'training_profile.json')}">profil uruchomienia</a> · <a href="{link(output/'environment.json')}">pełna konfiguracja środowiska</a> · <a href="{link(PRESET_PATH)}">preset PD/home</a>. Model: <code>{fingerprint['combined_sha256']}</code>.</p></section></main></body></html>'''
     text = text.replace('<section><h2>Konfiguracja uczenia</h2>', result_note + '<section><h2>Konfiguracja uczenia</h2>')

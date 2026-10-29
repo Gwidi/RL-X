@@ -23,4 +23,5 @@ conda activate /mnt/storage_6/project_data/pl0467-01/conda_filip/conda_envs/rlx_
     --seed 42 \
     --no-viewer \
     --workers 128 \
-    --candidate-pool 8192
+    --candidate-pool 8192 \
+    "$@"

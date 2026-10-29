@@ -5,14 +5,29 @@ dist/
 .DS_Store
 runs/
 wandb/
-experiments/*.sh
-!experiments/train_landing_seed606.sh
-!experiments/test2.sh
-!experiments/slurm_experiment.sh
-!experiments/start_experiment.sh
-!experiments/stop_experiment.sh
+# Historical local launchers; new launchers remain visible to Git.
+experiments/energy_curriculum*.sh
+experiments/test.sh
+experiments/test_curriculum.sh
+experiments/test2_before_seed606.sh
+experiments/slurm_experiment2.sh
 rlx/
 tests/
 search/output*
 docs/
 out_and_err*
+
+# Local checkpoints and simulator diagnostics
+*.model
+MUJOCO_LOG.TXT
+
+# Reproducible tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+
+# Local documentation and tests stay outside version control.
+search/test_*.py
+experiments/*_README.md
+experiments/*_PLAN.md

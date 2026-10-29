@@ -1,0 +1,22 @@
+"""V7 sensor robustness preparation, independent of v6's effectiveness."""
+import json
+from pathlib import Path
+ROOT=Path(__file__).resolve().parents[2]
+OUT=ROOT/'docs/artifacts/v7_preparation_2026-10-29'
+BASE='../artifacts/v7_preparation_2026-10-29/'
+def build(table):
+ d=json.loads((OUT/'validation.json').read_text())
+ return f'''<section id="e14" class="stage"><div class="stage-label">Etap 14 / 29.10.2026 / przygotowany v7</div><h2>Szum i 20 ms opóźnienia w obserwacji prędkości.</h2>
+<p class="lead">V7 jest przygotowany niezależnie od wyniku v6. Nowe wagi, ta sama rozszerzona domena i PPO; zmienia się model dwóch kanałów prędkości aktora. test2.sh uruchamia v7. Pełnego treningu na klastrze jeszcze nie wysłano.</p>
+{table(['Parametr','Ustawienie'],[['Szum','Gaussowski, σ=0,1 m/s osobno na światowe vx/vy, co 20 ms'],['Bias epizodu','0 m/s — bez dodatkowego stałego błędu'],['Opóźnienie','Jeden krok sterowania, 20 ms; stałe, bez jitteru'],['Obserwacja sieci','Próbka opóźniona → aktualna pozioma rama bazy → /4 m/s'],['Reset','Pierwszy zaszumiony pomiar wypełnia bufor; brak fikcyjnego zera'],['Aktor / critic','80 / 94; zmieniane tylko dwa kanały aktora'],['Zadanie','1–3 m, kąty ±30° na oś, moduł prędkości do 5 m/s'],['Ewaluacja','Na 3 m, ten sam zaszumiony i opóźniony sensor, cztery warunki'],['Budżet','30 015 488 przejść; nowe wagi; Slurm 12 h']])}
+<p>Szum działa od początku i niezależnie od randomizacji fizyki. Osobny RNG nie zmienia losowań scenariuszy; identyczne akcje dają identyczną fizykę. Powtórny odczyt w tej samej chwili nie losuje nowej próbki. Historia jest zerowana między epizodami, bez używania przyszłych pomiarów. Dopiero po zebraniu próbek powstaje pełny lag; początkowo podtrzymujemy pierwszy dostępny pomiar.</p>
+<p>Po podzieleniu przez 4 m/s szum pojedynczej cechy ma σ=0,025. Rzeczywisty błąd obserwacji przy gwałtownym hamowaniu może być większy, bo obejmuje także 20 ms opóźnienia. Critic zachowuje dotychczasowe uprzywilejowane obserwacje. Nie dodano szumu do akcji, nowych zaburzeń fizyki ani większego std PPO.</p>
+<p>To jawne założenie testu odporności, nie wynik kalibracji OptiTrack. Nie dodano utraty pakietów, filtra ani losowego jitteru opóźnienia. Ich dobór powinien wynikać z pomiaru rzeczywistego toru. Kontrakt checkpointu obejmuje szum/opóźnienie; v6 nie jest niejawnie wczytywany do v7.</p>
+<h3>Co przeszło walidację?</h3>
+<p>{d['tests']} testy, w tym 4 nowe dotyczące niezmienności zadania, wspólnej fizyki, aktywnego szumu w ewaluacji i bufora opóźnienia oraz zgodności checkpointów. Rzeczywisty trening przez test2.sh: {d['training_steps']} przejścia i końcowe {d['evaluation_episodes']} sparowanych epizodów na 3 m. Potwierdzono szum w obserwacji, pełny kontrakt CSV, zapis modelu, odczyt i inferencję. To kontrola pipeline’u, nie wynik skuteczności wytrenowanego v7.</p>
+<pre><code>sbatch experiments/test2.sh</code></pre>
+<p>Log: out_and_err_landing_seed606_noisy_velocity_v7_JOBID.txt. Modele: runs/soft_landing/landing_seed606_noisy_velocity_v7/seed606_noisy_velocity_v7_heading_xy_JOBID/models/. W katalogu experiments: sbatch test2.sh. Cztery pliki uruchomienia, instrukcji i testów dodano do stagingu; podczas końcowej kontroli były już zapisane w commicie 15da5eb. Modeli i pobranych logów nie dodawano.</p>
+<p><a href="../../experiments/landing_seed606_v7_README.md">Instrukcja v7</a> · <a href="{BASE}profile.json">Profil</a> · <a href="{BASE}validation.json">Walidacja</a> · <a href="{BASE}tests.log">34 testy</a> · <a href="{BASE}smoke.log">Log smoke</a> · <a href="{BASE}landing_evaluation/1024_episodes.csv">Końcowe epizody smoke</a></p></section>'''
+
+def overview():
+ return '''<section id="aktualnie" class="stage"><div class="stage-label">Aktualny stan / v6 zakończony, v7 przygotowany</div><h2>V6 nie opanował pełnej domeny. V7 sprawdzi szum i opóźnienie prędkości.</h2><p class="lead">V6 zakończył 30 mln przejść. Na walidacji 3 m uzyskał 15,6% (best) i 14,1% (latest) dla kątów ±30° i prędkości do 5 m/s; nominalnie oba modele zaliczają 3 m. Osobne eksperymenty, kontrola wcześniejszej domeny i filmy są w etapie 13.</p><p>Zgodnie z decyzją użytkownika przygotowano v7 niezależnie od tego wyniku: ta sama domena, szum σ=0,1 m/s na składową prędkości i opóźnienie 20 ms. 34 testy oraz smoke 1024 przejść i 16 sparowanych epizodów. Potrzebne pliki są już w commicie 15da5eb; pełnego treningu nie uruchomiono.</p><p><a href="#e13">Etap 13: pełna analiza v6 i filmy →</a> · <a href="#e14">Etap 14: v7, model pomiaru i start →</a></p></section>'''

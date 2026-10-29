@@ -42,7 +42,8 @@ METRICS = (
     "peak_body_acceleration_raw", "peak_leg_torque", "total_motor_effort",
     "total_leg_effort", "total_spine_effort", "peak_leg_current_proxy",
     "peak_spine_current_proxy", "crashed", "foot_contact",
-    "non_foot_contact", "shin_contact",
+    "disallowed_contact", "shin_contact",
+    *main.CALF_RESULT_KEYS,
 )
 
 

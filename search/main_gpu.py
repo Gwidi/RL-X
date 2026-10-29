@@ -74,7 +74,7 @@ def require_gpu():
 
 def _prepare_model(lock_spine, safety_factor=1.0):
     """Keep the RL robot, solver and explicit contact pairs intact in MJX."""
-    model = mujoco.MjModel.from_xml_path(str(cpu.XML_PATH))
+    model = cpu.load_search_model()
     cpu.configure_spine(model, lock_spine)
     cpu.configure_safety_factor(model, safety_factor)
 
@@ -164,8 +164,9 @@ class GpuBatchEvaluator:
         support_ids = jnp.asarray(sorted(self.contact_map.support_geom_ids))
         foot_ids = jnp.asarray(sorted(self.contact_map.foot_geom_ids))
         shin_ids = jnp.asarray(sorted(self.contact_map.shin_geom_ids))
-        allowed_shin_ids = jnp.asarray(sorted(self.contact_map.allowed_shin_geom_ids))
         calf_ids = jnp.asarray([self.cpu_model.geom(f"{leg}_calf").id for leg in cpu.CALF_LEGS])
+        geom_body_ids = jnp.asarray(self.cpu_model.geom_bodyid)
+        allowed_ids = jnp.asarray(sorted(self.contact_map.allowed_support_geom_ids))
 
         def contact_metrics(data):
             geoms = data._impl.contact.geom
@@ -182,11 +183,14 @@ class GpuBatchEvaluator:
             )
             foot = jnp.any(foot_by_geom, axis=1)
             shin = jnp.any(geoms[:, :, None] == shin_ids, axis=(1, 2))
-            allowed_shin = jnp.any(geoms[:, :, None] == allowed_shin_ids, axis=(1, 2))
             # Equivalent of abs(mj_contactForce(...)[0]) for the pyramidal
             # condim=3 contacts used by intention.xml.
             normal = jnp.abs(jnp.sum(data._impl.efc_force[force_idx], axis=1))
             valid = active & support
+            robot_geoms = geom_body_ids[jnp.maximum(geoms, 0)] != 0
+            allowed_geoms = jnp.any(geoms[:, :, None] == allowed_ids, axis=2)
+            allowed_pair = support & jnp.all(~robot_geoms | allowed_geoms, axis=1)
+            forbidden = jnp.any(active & jnp.any(robot_geoms, axis=1) & ~allowed_pair)
             force_by_foot = jnp.sum(
                 jnp.where(valid[:, None] & foot_by_geom, normal[:, None], 0.0),
                 axis=0,
@@ -199,7 +203,7 @@ class GpuBatchEvaluator:
                 jnp.max(force_by_foot),
                 force_by_foot,
                 jnp.sum(jnp.where(valid & shin, normal, 0.0)),
-                jnp.any(valid & ~foot & ~allowed_shin),
+                forbidden,
                 force_by_calf,
             )
 
@@ -319,12 +323,9 @@ class GpuBatchEvaluator:
                 force_window_average = jnp.max(
                     jnp.mean(foot_force_history, axis=0)
                 )
-                valid_force_window_average = jnp.where(
-                    foot_force_samples >= foot_force_window_steps,
-                    force_window_average,
-                    0.0,
-                )
-                landing = foot_contact | now_foot | now_shin
+                valid_force_window_average = force_window_average
+                landing = (foot_contact | shin_contact | now_foot | now_shin
+                           | disallowed_contact | current_disallowed)
                 body_accel = jnp.linalg.norm(data.qacc[0:3])
                 current_accel = jnp.where(landing, body_accel, 0.0)
                 acceleration_history = jnp.roll(acceleration_history, -1)
@@ -338,11 +339,7 @@ class GpuBatchEvaluator:
                 window_average = jnp.sum(
                     acceleration_history
                 ) / acceleration_window_steps
-                valid_window_average = jnp.where(
-                    acceleration_samples >= acceleration_window_steps,
-                    window_average,
-                    0.0,
-                )
+                valid_window_average = window_average
                 joint_torque = data.qfrc_actuator[dof_idx]
                 leg_command = jnp.where(leg_mask, command, 0.0)
                 return (data, (
@@ -361,7 +358,7 @@ class GpuBatchEvaluator:
                     foot_contact | now_foot,
                     shin_contact | now_shin,
                     disallowed_contact | current_disallowed,
-                    crashed | (data.qpos[2] < 0.05),
+                    crashed | (data.qpos[2] < cpu.MIN_LANDING_BASE_HEIGHT),
                 ), acceleration_history, acceleration_samples,
                     foot_force_history, foot_force_samples, calf_history, calf_stats), None
 
@@ -390,30 +387,33 @@ class GpuBatchEvaluator:
                 cost += cpu.NOMINAL_POSITION_REGULARIZATION * jnp.sum(
                     jnp.square(params[position_start:])
                 )
-            cost += jnp.where(foot_contact, 0.0, cpu.LANDING_QUALITY_PENALTY)
-            cost += jnp.where(disallowed_contact, cpu.LANDING_QUALITY_PENALTY, 0.0)
+            violations = cpu.landing_violations(
+                foot_contact, disallowed_contact, min_height, peak_foot_force,
+                jnp.max(calf_peak_avg), peak_accel, xp=jnp)
+            cost += jnp.where(violations["missing_foot_contact"], cpu.LANDING_QUALITY_PENALTY, 0.0)
+            cost += jnp.where(violations["disallowed_contact"], cpu.LANDING_QUALITY_PENALTY, 0.0)
             peak_calf_force = jnp.max(calf_peak_avg)
             calf_excess = peak_calf_force / cpu.MAX_LANDING_CALF_FORCE - 1.0
             cost += jnp.where(
-                peak_calf_force > cpu.MAX_LANDING_CALF_FORCE,
+                violations["calf_force"],
                 cpu.LANDING_QUALITY_PENALTY * (1.0 + calf_excess),
                 0.0,
             )
-            penetration = jnp.maximum(0.0, 0.05 - min_height)
+            penetration = jnp.maximum(0.0, cpu.MIN_LANDING_BASE_HEIGHT - min_height)
             cost += jnp.where(
-                crashed,
+                violations["base_height"],
                 cpu.LANDING_QUALITY_PENALTY * (1.0 + penetration),
                 0.0,
             )
             foot_excess = peak_foot_force / cpu.MAX_LANDING_FOOT_FORCE - 1.0
             cost += jnp.where(
-                peak_foot_force > cpu.MAX_LANDING_FOOT_FORCE,
+                violations["foot_force"],
                 cpu.LANDING_QUALITY_PENALTY * (1.0 + foot_excess),
                 0.0,
             )
             accel_excess = peak_accel / cpu.MAX_LANDING_BODY_ACCELERATION - 1.0
             cost += jnp.where(
-                peak_accel > cpu.MAX_LANDING_BODY_ACCELERATION,
+                violations["body_acceleration"],
                 cpu.LANDING_QUALITY_PENALTY * (1.0 + accel_excess),
                 0.0,
             )
@@ -471,6 +471,8 @@ def get_evaluator(
     reference_model = _prepare_model(lock_spine, safety_factor)
     steps = cpu.episode_steps(reference_model, start_height)
     key = (
+        int(reference_model.opt.integrator), float(reference_model.opt.timestep),
+        int(reference_model.opt.iterations), int(reference_model.opt.ls_iterations),
         lock_spine,
         optimize_nominal_position,
         individual_gains,

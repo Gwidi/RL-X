@@ -29,11 +29,12 @@ export GPU_ENABLE_X64="${GPU_ENABLE_X64:-0}"
 
 python3 main_gpu.py \
     --compare-spine \
-    --heights 1.21 1.22 1.23 1.24 1.25 1.26 1.27 1.28 1.29 \
+    --heights 1.1 1.2 1.3 1.4 1.5 1.6 \
     --trials 15000 \
     --optimize-nominal-position \
     --initial-trials 64 \
     --batch-size 1024 \
     --seed 42 \
     --no-viewer \
-    --candidate-pool 8192
+    --candidate-pool 8192 \
+    "$@"
