@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_seed606_velocity_only_v8
-#SBATCH --output=out_and_err_landing_seed606_velocity_only_v8_%j.txt
-#SBATCH --error=out_and_err_landing_seed606_velocity_only_v8_%j.txt
+#SBATCH --job-name=landing_seed606_focused_velocity_v9
+#SBATCH --output=out_and_err_landing_seed606_focused_velocity_v9_%j.txt
+#SBATCH --error=out_and_err_landing_seed606_focused_velocity_v9_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,5 +22,5 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v8.py}"
+export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v9.py}"
 exec bash "$SCRIPT_DIR/train_landing_seed606.sh" "$@"

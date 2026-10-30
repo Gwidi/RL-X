@@ -52,6 +52,8 @@ def evaluate_velocity_grid(env, action, config, episodes, output_dir, global_ste
             rows.extend(dict(row,speed=speed) for row in csv.DictReader(f))
     policy=[c for c in cells if c['controller']=='policy'];nominal=[c for c in policy if c['speed']==0]
     velocity=[c for c in policy if c['speed']>0]
+    selection=[c for c in velocity if c['speed']>=config.get('selection_speed_min',0.) and (config.get('selection_speed_max',-1.)<0 or c['speed']<=config['selection_speed_max'])]
+    if not selection:raise ValueError('Empty checkpoint selection speed range')
     nominal_threshold=float(config['nominal_success_threshold'])
     if not 0<=nominal_threshold<=1:raise ValueError('Invalid nominal eligibility threshold')
     metrics.update({'eval/landing_success_rate':float(np.mean([c['success_rate'] for c in velocity])),
@@ -59,7 +61,7 @@ def evaluate_velocity_grid(env, action, config, episodes, output_dir, global_ste
         'eval/landing_episode_count':episodes*len(heights)*(len(speeds)-1),
         'eval/nominal_eligible':float(all((c['success_rate']>=1. if nominal_threshold==1. else c['success_rate']>nominal_threshold) for c in nominal)),
         'eval/nominal/policy/success_rate':float(np.mean([c['success_rate'] for c in nominal])),
-        'eval/worst_height_success_rate':min(float(np.mean([c['success_rate'] for c in velocity if c['height']==h])) for h in heights)})
+        'eval/worst_height_success_rate':min(float(np.mean([c['success_rate'] for c in selection if c['height']==h])) for h in heights)})
     boundary=boundary_summary(cells,heights,speeds,threshold)
     for h,v in boundary.items():metrics[f'eval/boundary/h_{h.replace(".","p")}/max_speed_over_80']=v if v is not None else -1.
     history_path=directory/'boundary_history.json'

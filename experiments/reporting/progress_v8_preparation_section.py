@@ -18,7 +18,7 @@ def build(table):
 rlx/bin/python -m experiments.analysis.summarize_v8_training --run-dir runs/soft_landing/landing_seed606_velocity_only_v8/NAZWA_RUNU
 rlx/bin/python -m experiments.reporting.build_progress_report</code></pre>
 <p>Historia progów jest zapisywana automatycznie w landing_evaluation/boundary_history.json, pełne epizody w CSV. Na razie v8 jest przygotowaniem treningu; próba techniczna nie jest wynikiem naukowym i nie wypełnia tabeli skuteczności.</p>'''
-    results=data.get('v8_results')
+    results=data.get('v8_results') if not data.get('v8_completed') else None
     if results:
         result+='<h3>Ostatnia pobrana ewaluacja v8</h3><p>Krok: '+str(results['latest']['step'])+'. Wyniki dotyczą tej ewaluacji; sprawdź osobno best/latest.</p>'
         rows=[]
@@ -42,6 +42,8 @@ rlx/bin/python -m experiments.reporting.build_progress_report</code></pre>
 
 def overview():
     data=json.loads((ROOT/'docs/report/report-data.json').read_text())
+    if data.get('v8_completed'):
+        return '<section id="aktualnie" class="stage"><div class="stage-label">Aktualny stan · 30.10.2026</div><h2>V8 zakończony: 3 m / 4 m/s przekracza 80%</h2><p>Best i latest mają identyczne wagi. Skrajny punkt: 64/64 w końcowej walidacji oraz 53/64 (82,8%) w nowych próbach. Przy 2,5 m / 4 m/s nowe próby dają 59/64 (92,2%). Prędkość 5 m/s nadal poza potwierdzoną domeną. Osobny tor obrotu w powietrzu pozostaje w zakładce B1.</p><p><a href="#e17">Wyniki, granice skuteczności i film</a> · <a href="#branch-aerial">Równoległy tor: obrót w powietrzu</a></p></section>'
     if data.get('v8_results'):
         step=data['v8_results']['latest']['step']
         return f'<section id="aktualnie" class="stage"><div class="stage-label">Aktualny stan</div><h2>V8: wyniki samych prędkości</h2><p>Ostatnia pobrana ewaluacja: krok {step}. Granice skuteczności, pierwsze przekroczenia progu i końcowe best/latest opisano w etapie 16.</p><p><a href="#e16">Wyniki i warunki eksperymentu</a></p></section>'
