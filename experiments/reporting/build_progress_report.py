@@ -231,6 +231,14 @@ def main():
         from experiments.reporting.progress_v9_preparation_section import build as build_v9
         sections.append(build_v9(table))
 
+    if data.get("v9_completed"):
+        from experiments.reporting.progress_v9_completed_section import build as build_v9_completed
+        sections.append(build_v9_completed(table))
+
+    if data.get("v10_prepared"):
+        from experiments.reporting.progress_v10_preparation_section import build as build_v10
+        sections.append(build_v10(table))
+
     if data.get("aerial_feasibility"):
         from experiments.reporting.progress_aerial_branch import build as build_aerial
         sections.append(build_aerial(table))
@@ -312,6 +320,15 @@ def main():
         from experiments.reporting.progress_v9_preparation_section import overview as v9_overview
         result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v9_overview(),result,count=1,flags=re.S)
         result=result.replace('dane wszystkich siedemnastu etapów','dane wszystkich osiemnastu etapów')
+    if data.get('v9_completed'):
+        from experiments.reporting.progress_v9_completed_section import overview as v9_completed_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v9_completed_overview(),result,count=1,flags=re.S)
+        result=result.replace('dane wszystkich osiemnastu etapów','dane wszystkich dziewiętnastu etapów')
+        result=result.replace('30.10.2026</div><h1>','02.11.2026</div><h1>').replace('Aktualizacja: 30 października 2026','Aktualizacja: 2 listopada 2026')
+    if data.get('v10_prepared'):
+        from experiments.reporting.progress_v10_preparation_section import overview as v10_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v10_overview(),result,count=1,flags=re.S)
+        result=result.replace('dane wszystkich dziewiętnastu etapów','dane wszystkich dwudziestu etapów')
     result=result.replace('</style>','figure.chart{margin:28px 0}figure.chart img{display:block;width:100%;height:auto}figure.chart figcaption{color:var(--muted)}</style>',1)
     from experiments.reporting.report_side_tabs import apply_side_tabs
     result=apply_side_tabs(result,data)
