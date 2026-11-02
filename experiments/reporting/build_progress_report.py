@@ -239,6 +239,10 @@ def main():
         from experiments.reporting.progress_v10_preparation_section import build as build_v10
         sections.append(build_v10(table))
 
+    if data.get("v10_grace1s_prepared"):
+        from experiments.reporting.progress_v10_grace1s_section import build as build_v10_grace1s
+        sections.append(build_v10_grace1s(table))
+
     if data.get("aerial_feasibility"):
         from experiments.reporting.progress_aerial_branch import build as build_aerial
         sections.append(build_aerial(table))
@@ -329,6 +333,10 @@ def main():
         from experiments.reporting.progress_v10_preparation_section import overview as v10_overview
         result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v10_overview(),result,count=1,flags=re.S)
         result=result.replace('dane wszystkich dziewiętnastu etapów','dane wszystkich dwudziestu etapów')
+    if data.get('v10_grace1s_prepared'):
+        from experiments.reporting.progress_v10_grace1s_section import overview as grace1s_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:grace1s_overview(),result,count=1,flags=re.S)
+        result=result.replace('dane wszystkich dwudziestu etapów','dane wszystkich dwudziestu jeden etapów')
     result=result.replace('</style>','figure.chart{margin:28px 0}figure.chart img{display:block;width:100%;height:auto}figure.chart figcaption{color:var(--muted)}</style>',1)
     from experiments.reporting.report_side_tabs import apply_side_tabs
     result=apply_side_tabs(result,data)
