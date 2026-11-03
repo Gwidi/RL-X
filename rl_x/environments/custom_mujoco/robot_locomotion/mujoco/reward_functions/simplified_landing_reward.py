@@ -989,7 +989,11 @@ class SimplifiedLandingReward:
             "no_ground_contact": not ground_contact,
             "body_floor_contact": body_contact,
         }
-        stable = has_touched and not any(blockers.values())
+        braking = getattr(self.env, "landing_braking", None)
+        braking_enabled = braking is not None and braking.enabled
+        braking_reward = braking.step() if braking_enabled else 0.0
+        braking_ready = not braking_enabled or braking.ready()
+        stable = has_touched and not any(blockers.values()) and braking_ready
         if has_touched:
             active_blockers = [name for name, blocked in blockers.items() if blocked]
             if active_blockers:
@@ -1177,6 +1181,7 @@ class SimplifiedLandingReward:
                 and
                 time_since_touch
                 >= self.success_confirmation_time
+                and (not braking_enabled or braking.elapsed() + 1e-9 >= braking.duration + self.success_stability_time)
                 and safety.foot_contact
                 and state["landing_stable_time"] >= self.success_stability_time
             ):
@@ -1243,6 +1248,7 @@ class SimplifiedLandingReward:
         reward = (
             alive_reward
             + base_vel_reward
+            + braking_reward
             + angular_position_reward
             + base_height_reward
             + joint_pos_reward

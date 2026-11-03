@@ -579,6 +579,8 @@ class PPO:
             from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.policy_velocity import velocity_observation_contract
             if velocity_observation_contract(saved_env.get("policy_velocity", {})) != velocity_observation_contract(config.environment.get("policy_velocity", {})):
                 raise ValueError("Checkpoint has a different policy velocity observation contract; use matching mode/scale/sensor settings or train fresh")
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_braking import check_braking_contract
+            check_braking_contract(saved_env, config.environment, allow_legacy_parent=True)
             saved_history = saved_env.get("imu_history_length", 0)
             if saved_history != config.environment.imu_history_length:
                 raise ValueError(

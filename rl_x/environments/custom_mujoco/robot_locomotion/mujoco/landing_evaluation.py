@@ -203,6 +203,8 @@ def _episode(final_info):
         result[key] = float(final_info.get(f"metrics/{key}", 0.0))
     for name in ("safety_peak_body_acceleration", "safety_disallowed_contact", "safety_min_base_height"):
         result[name] = float(final_info.get(f"metrics/{name}", 0.0))
+    for name in ("braking_tracking_mse", "braking_postcontact_path", "braking_elapsed"):
+        if f"metrics/{name}" in final_info:result[name]=float(final_info[f"metrics/{name}"])
     return result
 
 

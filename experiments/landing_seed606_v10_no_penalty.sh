@@ -23,4 +23,8 @@ else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
 export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v10.py}"
+# Also forward a checkpoint assigned inside this script without an explicit export.
+if [[ -n "${LANDING_V10_CHECKPOINT+x}" ]]; then
+    export LANDING_V10_CHECKPOINT
+fi
 exec bash "$SCRIPT_DIR/train_landing_seed606.sh" "$@"

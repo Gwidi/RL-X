@@ -28,7 +28,12 @@ def make_free_settling_env(mode='test'):
 
 def verify_parent(path):
     path=Path(path)
-    if not path.is_file():raise FileNotFoundError('Set LANDING_V10_CHECKPOINT to the v9 best.model or latest.model')
+    if not path.is_file():
+        raise FileNotFoundError(
+            f'V9 checkpoint not found: {str(path.resolve())!r}. '
+            'Use export LANDING_V10_CHECKPOINT="/full/path/to/v9/models/best.model" '
+            'before launching; check the full filename and filesystem visible on the compute node.'
+        )
     with zipfile.ZipFile(path) as z:
         saved=json.loads(z.read('config_environment.json'));metrics=json.loads(z.read('checkpoint_metrics.json'))
     c=saved['domain_randomization']['initial_state']['energy_dissipation_curriculum']

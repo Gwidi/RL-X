@@ -29,6 +29,7 @@ def get_config(environment_name):
         "landing_physics_profile": "",
         "landing_physics_sha256": "",
         "landing_motor_diagnostics": False,
+        "landing_braking": {"enabled": False, "duration": 2.5, "tracking_weight": 5.0, "tracking_sigma": 0.5},
         "control_type": "pd",
         "async_skip_percentage": 0.0,
         "landing_evaluation": {

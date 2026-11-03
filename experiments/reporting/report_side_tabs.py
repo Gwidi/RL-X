@@ -39,7 +39,7 @@ def apply_side_tabs(result,data):
     links=[('aktualnie','•','Aktualny stan','Podsumowanie i następny krok')]
     for i,s in enumerate(data['stages'],1):links.append((f'e{i}',f'{i:02d}',s['title'],s['date']))
     for branch in data.get('research_branches',[]):
-        links.append((branch['id'],'B1',branch['title'],branch['status']))
+        links.append((branch['id'],branch.get('badge','B1'),branch['title'],branch['status']))
     links.append(('dokumenty','↗','Dokumenty i dane','Materiały źródłowe'))
     anchors=''.join(f'<a href="#{id}" id="tab-{id}" role="tab" aria-controls="{id}" aria-selected="false" aria-label="{html.escape(title)}" title="{html.escape(title)}"><span class="tab-index">{num}</span><span class="tab-text">{html.escape(title)}<small>{html.escape(note)}</small></span></a>' for id,num,title,note in links)
     anchors=anchors.replace('<a href="#branch-aerial"','<div class="side-label">Równoległy tor badawczy</div><a href="#branch-aerial"')

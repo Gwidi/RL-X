@@ -52,6 +52,8 @@ def load_policy(path, env):
         with zipfile.ZipFile(path) as archive:
             saved_env = json.loads(archive.read("config_environment.json"))
             algorithm = json.loads(archive.read("config_algorithm.json"))
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_braking import check_braking_contract
+            check_braking_contract(saved_env, env.env_config)
             if algorithm["name"] != "ppo.flax":
                 raise ValueError("This comparison expects a ppo.flax checkpoint")
             if saved_env.get("landing_controller_id") != CONTROLLER_ID:
