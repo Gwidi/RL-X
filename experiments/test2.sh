@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_seed606_grace2s_v10
-#SBATCH --output=out_and_err_landing_seed606_grace2s_v10_%j.txt
-#SBATCH --error=out_and_err_landing_seed606_grace2s_v10_%j.txt
+#SBATCH --job-name=landing_seed606_grace3s_v10
+#SBATCH --output=out_and_err_landing_seed606_grace3s_v10_%j.txt
+#SBATCH --error=out_and_err_landing_seed606_grace3s_v10_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,7 +22,7 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v10_grace2s.py}"
+export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_seed606_v10_grace3s.py}"
 # Also forward a checkpoint assigned inside this script without an explicit export.
 if [[ -n "${LANDING_V10_CHECKPOINT+x}" ]]; then
     export LANDING_V10_CHECKPOINT
