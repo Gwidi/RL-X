@@ -9,6 +9,8 @@ class LandingBraking:
     def __init__(self,env):
         self.env=env;cfg=env.env_config.get('landing_braking',{})
         self.enabled=bool(cfg.get('enabled',False));self.duration=float(cfg.get('duration',2.5));self.weight=float(cfg.get('tracking_weight',5.));self.sigma=float(cfg.get('tracking_sigma',.5))
+        from .landing_slip import LandingSlip
+        self.slip = LandingSlip(env, cfg['slip']) if cfg.get('slip', {}).get('weight', 0) > 0 else None
         if self.enabled:
             if not all(np.isfinite(v) and v>0 for v in [self.duration,self.weight,self.sigma]):raise ValueError('Braking parameters must be finite and positive')
             if env.env_config.get('policy_velocity',{}).get('mode')!='heading_xy':raise ValueError('Braking requires heading_xy measured velocity')
@@ -38,6 +40,8 @@ class LandingBraking:
             error=float(np.sum((data.qvel[:2]-self.reference_world())**2));reward=self.weight*e.dt*np.exp(-error/self.sigma**2)
             s['error_integral']+=error*e.dt;s['tracked_time']+=e.dt;s['path']+=float(np.linalg.norm(data.qpos[:2]-s['last_xy']));s['last_xy']=data.qpos[:2].copy()
         ref=self.reference_world();info.update({'reward/braking_tracking':float(reward),'braking/reference_vx':float(ref[0]),'braking/reference_vy':float(ref[1]),'braking/elapsed':self.elapsed(),'metrics/braking_tracking_mse':s['error_integral']/max(e.dt,s['tracked_time']),'metrics/braking_postcontact_path':s['path'],'metrics/braking_elapsed':self.elapsed()})
+        if self.slip is not None and s['touch_time'] is not None:
+            reward -= self.slip.step(self.elapsed())
         return float(reward)
 
 def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
@@ -46,5 +50,15 @@ def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
     if a!=b:
         if allow_legacy_parent and not a and b:return
         raise ValueError('Checkpoint braking task differs: use its native goal-reference environment')
+    explicit_v11_warmstart = (allow_legacy_parent and a and b
+        and new.get('warm_start_from_v11', False)
+        and float(old.get('duration', 0)) == 2.5
+        and float(old.get('tracking_weight', 0)) == 5.
+        and not old.get('slip', {}).get('weight', 0))
+    if explicit_v11_warmstart:return
     if a and float(old['duration'])!=float(new['duration']):
         raise ValueError('Checkpoint braking-reference duration differs')
+    old_slip = old.get('slip', {}) if old.get('slip', {}).get('weight', 0) else {}
+    new_slip = new.get('slip', {}) if new.get('slip', {}).get('weight', 0) else {}
+    if a and old_slip != new_slip:
+        raise ValueError('Checkpoint loaded-slip task differs')

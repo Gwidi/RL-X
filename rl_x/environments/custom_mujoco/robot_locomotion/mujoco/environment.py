@@ -414,6 +414,7 @@ class LocomotionEnv(gym.Env):
         self.internal_state["imu_history"].fill(0.0)
         self.policy_velocity_observation.reset(self)
         self.internal_state.pop("landing_braking", None)
+        self.internal_state.pop("landing_slip", None)
 
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
