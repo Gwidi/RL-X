@@ -995,7 +995,12 @@ class SimplifiedLandingReward:
         braking_ready = not braking_enabled or braking.ready()
         if braking_enabled and braking.final_speed > 0:
             error_xy = float(np.linalg.norm(state['data'].qvel[:2] - braking.reference_world()))
-            blockers['linear_velocity'] = error_xy > braking.terminal_tolerance or abs(float(state['data'].qvel[2])) > .3
+            braking_cfg = self.env.env_config.get('landing_braking', {})
+            if braking_cfg.get('success_tracks_reference', True):
+                blockers['linear_velocity'] = error_xy > braking.terminal_tolerance or abs(float(state['data'].qvel[2])) > .3
+            else:
+                blockers['linear_velocity'] = (float(np.linalg.norm(state['data'].qvel[:2])) > float(braking_cfg.get('success_max_horizontal_speed', 1.))
+                    or abs(float(state['data'].qvel[2])) > .3)
             state['info']['metrics/terminal_velocity_error'] = error_xy
         stable = has_touched and not any(blockers.values()) and braking_ready
         if has_touched:

@@ -31,6 +31,7 @@ def get_config(environment_name):
         "landing_motor_diagnostics": False,
         "landing_braking": {"enabled": False, "duration": 2.5, "tracking_weight": 5.0, "tracking_sigma": 0.5,
             "warm_start_from_v11": False, "warm_start_from_v12": False,
+            "success_tracks_reference": True, "success_max_horizontal_speed": 1.0,
             "final_speed": 0.0, "terminal_velocity_tolerance": 0.25,
             "slip": {"weight": 0.0, "force_filter_s": 0.04, "load_threshold_n": 10.0,
                      "full_load_n": 50.0, "impact_grace_s": 0.1, "ramp_s": 0.2}},

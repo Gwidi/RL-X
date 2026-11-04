@@ -68,6 +68,8 @@ def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
     if explicit_v11_warmstart or explicit_v12_warmstart:return
     if a and (old.get('final_speed',0)!=new.get('final_speed',0) or old.get('terminal_velocity_tolerance',.25)!=new.get('terminal_velocity_tolerance',.25)):
         raise ValueError('Checkpoint terminal velocity task differs')
+    if a and (old.get('success_tracks_reference',True)!=new.get('success_tracks_reference',True) or old.get('success_max_horizontal_speed',1.)!=new.get('success_max_horizontal_speed',1.)):
+        raise ValueError('Checkpoint landing success contract differs')
     if a and float(old['duration'])!=float(new['duration']):
         raise ValueError('Checkpoint braking-reference duration differs')
     old_slip = old.get('slip', {}) if old.get('slip', {}).get('weight', 0) else {}
