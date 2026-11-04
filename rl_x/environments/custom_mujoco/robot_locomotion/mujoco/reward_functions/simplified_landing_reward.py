@@ -993,6 +993,10 @@ class SimplifiedLandingReward:
         braking_enabled = braking is not None and braking.enabled
         braking_reward = braking.step() if braking_enabled else 0.0
         braking_ready = not braking_enabled or braking.ready()
+        if braking_enabled and braking.final_speed > 0:
+            error_xy = float(np.linalg.norm(state['data'].qvel[:2] - braking.reference_world()))
+            blockers['linear_velocity'] = error_xy > braking.terminal_tolerance or abs(float(state['data'].qvel[2])) > .3
+            state['info']['metrics/terminal_velocity_error'] = error_xy
         stable = has_touched and not any(blockers.values()) and braking_ready
         if has_touched:
             active_blockers = [name for name, blocked in blockers.items() if blocked]

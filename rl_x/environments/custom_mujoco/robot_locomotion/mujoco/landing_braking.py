@@ -9,6 +9,8 @@ class LandingBraking:
     def __init__(self,env):
         self.env=env;cfg=env.env_config.get('landing_braking',{})
         self.enabled=bool(cfg.get('enabled',False));self.duration=float(cfg.get('duration',2.5));self.weight=float(cfg.get('tracking_weight',5.));self.sigma=float(cfg.get('tracking_sigma',.5))
+        self.final_speed=float(cfg.get('final_speed',0.));self.terminal_tolerance=float(cfg.get('terminal_velocity_tolerance',.25))
+        if not np.isfinite(self.final_speed) or self.final_speed<0 or self.terminal_tolerance<=0:raise ValueError('Invalid terminal velocity settings')
         from .landing_slip import LandingSlip
         self.slip = LandingSlip(env, cfg['slip']) if cfg.get('slip', {}).get('weight', 0) > 0 else None
         if self.enabled:
@@ -23,7 +25,12 @@ class LandingBraking:
     def reference_world(self):
         s=self.state()
         if s['initial_world'] is None:return np.array(s['last_precontact_world'])
-        u=np.clip(self.elapsed()/self.duration,0.,1.);return np.array(s['initial_world'])*(1-3*u*u+2*u*u*u)
+        u=np.clip(self.elapsed()/self.duration,0.,1.)
+        initial=np.array(s['initial_world']);speed=float(np.linalg.norm(initial))
+        if self.final_speed==0:return initial*(1-3*u*u+2*u*u*u)
+        direction=initial/speed if speed>=.2 else np.array([1.,0.])
+        magnitude=self.final_speed+(max(speed,self.final_speed)-self.final_speed)*(1-3*u*u+2*u*u*u)
+        return direction*magnitude
     def goal(self):
         e=self.env;s=self.state()
         if s['initial_world'] is None:
@@ -55,7 +62,12 @@ def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
         and float(old.get('duration', 0)) == 2.5
         and float(old.get('tracking_weight', 0)) == 5.
         and not old.get('slip', {}).get('weight', 0))
-    if explicit_v11_warmstart:return
+    explicit_v12_warmstart=(allow_legacy_parent and a and b and new.get('warm_start_from_v12',False)
+        and float(old.get('duration',0))==2. and float(old.get('tracking_weight',0))==6.
+        and float(old.get('final_speed',0))==0 and old.get('slip',{}).get('weight')==5.)
+    if explicit_v11_warmstart or explicit_v12_warmstart:return
+    if a and (old.get('final_speed',0)!=new.get('final_speed',0) or old.get('terminal_velocity_tolerance',.25)!=new.get('terminal_velocity_tolerance',.25)):
+        raise ValueError('Checkpoint terminal velocity task differs')
     if a and float(old['duration'])!=float(new['duration']):
         raise ValueError('Checkpoint braking-reference duration differs')
     old_slip = old.get('slip', {}) if old.get('slip', {}).get('weight', 0) else {}

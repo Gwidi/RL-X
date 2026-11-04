@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_braking_slip_v12
-#SBATCH --output=out_and_err_landing_braking_slip_v12_%j.txt
-#SBATCH --error=out_and_err_landing_braking_slip_v12_%j.txt
+#SBATCH --job-name=landing_braking_moving_v13
+#SBATCH --output=out_and_err_landing_braking_moving_v13_%j.txt
+#SBATCH --error=out_and_err_landing_braking_moving_v13_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,8 +22,11 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_braking_v12.py}"
-# V12 uses completed v11, not the old v9 parent.
+export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_braking_v13.py}"
+# V13 continues the downloaded V12 checkpoint.
+if [[ -n "${LANDING_V13_CHECKPOINT+x}" ]]; then
+    export LANDING_V13_CHECKPOINT
+fi
 if [[ -n "${LANDING_V12_CHECKPOINT+x}" ]]; then
     export LANDING_V12_CHECKPOINT
 fi
