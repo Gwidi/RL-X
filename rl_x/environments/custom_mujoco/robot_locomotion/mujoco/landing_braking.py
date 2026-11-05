@@ -74,5 +74,9 @@ def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
         raise ValueError('Checkpoint braking-reference duration differs')
     old_slip = old.get('slip', {}) if old.get('slip', {}).get('weight', 0) else {}
     new_slip = new.get('slip', {}) if new.get('slip', {}).get('weight', 0) else {}
+    # Runner uses ConfigDict, native replay uses dict. Compare values rather
+    # than treating these equivalent representations as different tasks.
+    old_slip = old_slip.to_dict() if hasattr(old_slip, 'to_dict') else old_slip
+    new_slip = new_slip.to_dict() if hasattr(new_slip, 'to_dict') else new_slip
     if a and old_slip != new_slip:
         raise ValueError('Checkpoint loaded-slip task differs')
