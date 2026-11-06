@@ -52,6 +52,8 @@ class LandingBraking:
         return float(reward)
 
 def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
+    from .landing_frontflip import check_frontflip_contract
+    check_frontflip_contract(saved_env, current_env)
     old=saved_env.get('landing_braking',{});new=current_env.get('landing_braking',{})
     a=bool(old.get('enabled',False));b=bool(new.get('enabled',False))
     if a!=b:

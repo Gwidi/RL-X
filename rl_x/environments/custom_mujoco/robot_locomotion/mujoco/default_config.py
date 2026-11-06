@@ -2,6 +2,7 @@ from ml_collections import config_dict
 
 
 def get_config(environment_name):
+    from .landing_frontflip import DEFAULTS as FRONTFLIP_DEFAULTS
     config = {
         "name": environment_name,
         "nr_envs": 1,
@@ -35,6 +36,7 @@ def get_config(environment_name):
             "final_speed": 0.0, "terminal_velocity_tolerance": 0.25,
             "slip": {"weight": 0.0, "force_filter_s": 0.04, "load_threshold_n": 10.0,
                      "full_load_n": 50.0, "impact_grace_s": 0.1, "ramp_s": 0.2}},
+        "landing_frontflip": dict(FRONTFLIP_DEFAULTS),
         "control_type": "pd",
         "async_skip_percentage": 0.0,
         "landing_evaluation": {

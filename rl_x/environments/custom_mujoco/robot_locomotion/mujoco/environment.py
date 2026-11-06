@@ -44,6 +44,8 @@ class LocomotionEnv(gym.Env):
         self.policy_velocity_observation = PolicyVelocityObservation(env_config.get("policy_velocity", {}))
         from .landing_braking import LandingBraking
         self.landing_braking = LandingBraking(self)
+        from .landing_frontflip import LandingFrontflip
+        self.landing_frontflip = LandingFrontflip(self)
         self.np_rng = np.random.default_rng(seed)
 
         xml_path = (self.robot_config["directory_path"] / "data" / "plane.xml").as_posix()
@@ -415,6 +417,8 @@ class LocomotionEnv(gym.Env):
         self.policy_velocity_observation.reset(self)
         self.internal_state.pop("landing_braking", None)
         self.internal_state.pop("landing_slip", None)
+        if self.landing_frontflip.enabled:
+            self.landing_frontflip.reset()
 
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
@@ -454,6 +458,8 @@ class LocomotionEnv(gym.Env):
                 safety = self.internal_state.get("landing_safety")
                 if safety is not None:
                     safety.update(model, data)
+                if self.landing_frontflip.enabled:
+                    self.landing_frontflip.physics_step()
                 loads = getattr(self, "_landing_evaluation_loads", None)
                 if loads is not None:
                     loads.update(model, data)
@@ -489,7 +495,7 @@ class LocomotionEnv(gym.Env):
 
         reward = self.reward_function.reward_and_info(chosen_action)
 
-        should_sample_commands = False if self.landing_braking.enabled else self.command_sampling_function.step()
+        should_sample_commands = False if (self.landing_braking.enabled or self.landing_frontflip.enabled) else self.command_sampling_function.step()
         if should_sample_commands:
             self.command_function.get_next_command()
         
@@ -529,7 +535,9 @@ class LocomotionEnv(gym.Env):
 
 
     def get_observation(self, action):
-        if self.landing_braking.enabled:
+        if self.landing_frontflip.enabled:
+            self.internal_state["goal_velocities"] = self.landing_frontflip.goal()
+        elif self.landing_braking.enabled:
             self.internal_state["goal_velocities"] = self.landing_braking.goal()
         observation = np.concatenate([
             self.internal_state["data"].qpos[self.actuator_joint_mask_qpos],

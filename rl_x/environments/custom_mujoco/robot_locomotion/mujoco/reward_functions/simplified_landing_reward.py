@@ -1003,6 +1003,13 @@ class SimplifiedLandingReward:
                     or abs(float(state['data'].qvel[2])) > .3)
             state['info']['metrics/terminal_velocity_error'] = error_xy
         stable = has_touched and not any(blockers.values()) and braking_ready
+        frontflip = getattr(self.env, "landing_frontflip", None)
+        frontflip_enabled = frontflip is not None and frontflip.enabled
+        frontflip_reward = frontflip.step() if frontflip_enabled else 0.0
+        if frontflip_enabled:
+            blockers['linear_velocity'] = (float(np.linalg.norm(state['data'].qvel[:2])) > 1.
+                or abs(float(state['data'].qvel[2])) > .3)
+            stable = has_touched and not any(blockers.values()) and frontflip.ready()
         if has_touched:
             active_blockers = [name for name, blocked in blockers.items() if blocked]
             if active_blockers:
@@ -1258,6 +1265,7 @@ class SimplifiedLandingReward:
             alive_reward
             + base_vel_reward
             + braking_reward
+            + frontflip_reward
             + angular_position_reward
             + base_height_reward
             + joint_pos_reward

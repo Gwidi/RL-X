@@ -204,7 +204,10 @@ def _episode(final_info):
     for name in ("safety_peak_body_acceleration", "safety_disallowed_contact", "safety_min_base_height"):
         result[name] = float(final_info.get(f"metrics/{name}", 0.0))
     for name in ("braking_tracking_mse", "braking_postcontact_path", "braking_elapsed",
-                 "loaded_slip_integral", "loaded_slip_speed2"):
+                 "loaded_slip_integral", "loaded_slip_speed2", "frontflip_angle",
+                 "frontflip_positive_work_j", "frontflip_ready", "frontflip_invalid",
+                 "frontflip_energy_j", "frontflip_energy_scale_j", "frontflip_takeoff",
+                 "frontflip_half", "frontflip_landed"):
         if f"metrics/{name}" in final_info:result[name]=float(final_info[f"metrics/{name}"])
     return result
 
