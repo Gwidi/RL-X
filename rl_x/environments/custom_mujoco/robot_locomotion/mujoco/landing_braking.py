@@ -10,12 +10,19 @@ class LandingBraking:
         self.env=env;cfg=env.env_config.get('landing_braking',{})
         self.enabled=bool(cfg.get('enabled',False));self.duration=float(cfg.get('duration',2.5));self.weight=float(cfg.get('tracking_weight',5.));self.sigma=float(cfg.get('tracking_sigma',.5))
         self.final_speed=float(cfg.get('final_speed',0.));self.terminal_tolerance=float(cfg.get('terminal_velocity_tolerance',.25))
+        inertial=bool(env.env_config.get('policy_inertial',{}).get('enabled',False))
+        self.reference_source=cfg.get('reference_source','privileged_truth' if inertial else 'measured_velocity')
+        self.goal_observation=cfg.get('goal_observation','masked' if inertial else 'velocity')
+        if self.reference_source not in ('measured_velocity','privileged_truth') or self.goal_observation not in ('velocity','masked'):
+            raise ValueError('Invalid braking reference source or goal observation')
+        if self.reference_source=='privileged_truth' and self.goal_observation!='masked':
+            raise ValueError('Privileged braking reference must be masked from the actor')
         if not np.isfinite(self.final_speed) or self.final_speed<0 or self.terminal_tolerance<=0:raise ValueError('Invalid terminal velocity settings')
         from .landing_slip import LandingSlip
         self.slip = LandingSlip(env, cfg['slip']) if cfg.get('slip', {}).get('weight', 0) > 0 else None
         if self.enabled:
             if not all(np.isfinite(v) and v>0 for v in [self.duration,self.weight,self.sigma]):raise ValueError('Braking parameters must be finite and positive')
-            if env.env_config.get('policy_velocity',{}).get('mode')!='heading_xy':raise ValueError('Braking requires heading_xy measured velocity')
+            if self.reference_source=='measured_velocity' and env.env_config.get('policy_velocity',{}).get('mode')!='heading_xy':raise ValueError('Braking requires heading_xy measured velocity')
             if env.env_config['reward'].get('base_vel_coeff',0)!=0:raise ValueError('Braking tracking and absolute body-speed cost are mutually exclusive')
             if self.duration+env.env_config['reward'].get('success_stability_time',.5)>=env.env_config['episode_length_in_seconds']:raise ValueError('Braking and final stability do not fit the episode')
     def state(self):
@@ -34,8 +41,12 @@ class LandingBraking:
     def goal(self):
         e=self.env;s=self.state()
         if s['initial_world'] is None:
-            e.policy_velocity_observation.observe(e)
-            s['last_precontact_world']=np.array(e.internal_state['policy_velocity_sensor']['history'][0][:2]).copy()
+            if self.reference_source=='privileged_truth':
+                s['last_precontact_world']=np.array(e.internal_state['data'].qvel[:2]).copy()
+            else:
+                e.policy_velocity_observation.observe(e)
+                s['last_precontact_world']=np.array(e.internal_state['policy_velocity_sensor']['history'][0][:2]).copy()
+        if self.goal_observation=='masked':return np.zeros(3)
         world=np.r_[self.reference_world(),0.];rotation=Rotation.from_quat(e.internal_state['data'].qpos[3:7],scalar_first=True).as_matrix()
         return np.r_[heading_velocity_xy(world,rotation),0.] # Existing goal channels are raw m/s, not /4.
     def ready(self):return self.state()['initial_world'] is not None and self.elapsed()+1e-9>=self.duration
@@ -52,10 +63,15 @@ class LandingBraking:
         return float(reward)
 
 def check_braking_contract(saved_env,current_env,allow_legacy_parent=False):
+    from .policy_inertial import check_inertial_contract
+    check_inertial_contract(saved_env,current_env)
     from .landing_frontflip import check_frontflip_contract
     check_frontflip_contract(saved_env, current_env)
     old=saved_env.get('landing_braking',{});new=current_env.get('landing_braking',{})
     a=bool(old.get('enabled',False));b=bool(new.get('enabled',False))
+    if a and b and any(old.get(k,v)!=new.get(k,v) for k,v in
+                      (('reference_source','measured_velocity'),('goal_observation','velocity'))):
+        raise ValueError('Checkpoint braking reference/actor goal contract differs')
     if a!=b:
         if allow_legacy_parent and not a and b:return
         raise ValueError('Checkpoint braking task differs: use its native goal-reference environment')

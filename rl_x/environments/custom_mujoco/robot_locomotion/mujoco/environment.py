@@ -42,6 +42,8 @@ class LocomotionEnv(gym.Env):
 
         from .policy_velocity import PolicyVelocityObservation
         self.policy_velocity_observation = PolicyVelocityObservation(env_config.get("policy_velocity", {}))
+        from .policy_inertial import PolicyInertialObservation
+        self.policy_inertial_observation = PolicyInertialObservation(self)
         from .landing_braking import LandingBraking
         self.landing_braking = LandingBraking(self)
         from .landing_frontflip import LandingFrontflip
@@ -417,6 +419,12 @@ class LocomotionEnv(gym.Env):
         self.policy_velocity_observation.reset(self)
         self.internal_state.pop("landing_braking", None)
         self.internal_state.pop("landing_slip", None)
+        if self.policy_inertial_observation.enabled:
+            self.policy_inertial_observation.prepare_release(self.internal_state["data"].qvel.copy())
+            self.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(
+                self.internal_state["data"].site_xmat[self.imu_site_id].reshape(3, 3))
+            self.internal_state["imu_orientation_rotation_inverse"] = self.internal_state["imu_orientation_rotation"].inv()
+            self.internal_state["imu_orientation_euler"] = self.internal_state["imu_orientation_rotation"].as_euler("xyz")
         if self.landing_frontflip.enabled:
             self.landing_frontflip.reset()
 
@@ -447,7 +455,8 @@ class LocomotionEnv(gym.Env):
         self.internal_state["actuator_forcerange_used"] = (
             self.internal_state["mj_model"].actuator_forcerange.copy()
         )
-        if getattr(self.reward_function, "needs_physics_step_acceleration", False):
+        if (getattr(self.reward_function, "needs_physics_step_acceleration", False)
+                or self.policy_inertial_observation.enabled):
             # Record every physics step: an impact can disappear before the
             # last substep of a policy action. Capture it before randomization
             # can change the model or overwrite the dynamics buffers.
@@ -455,6 +464,8 @@ class LocomotionEnv(gym.Env):
             data = self.internal_state["data"]
             for substep in range(self.nr_substeps):
                 mujoco.mj_step(model, data)
+                if self.policy_inertial_observation.enabled:
+                    self.policy_inertial_observation.physics_step()
                 safety = self.internal_state.get("landing_safety")
                 if safety is not None:
                     safety.update(model, data)
@@ -484,6 +495,9 @@ class LocomotionEnv(gym.Env):
         max_qvel = 100 * np.ones(self.initial_mj_model.nv)
         max_qvel[self.actuator_joint_mask_qvel] = self.internal_state["actuator_joint_max_velocities"]
         self.internal_state["data"].qvel = np.clip(self.internal_state["data"].qvel, -max_qvel, max_qvel)
+        if self.policy_inertial_observation.enabled:
+            self.policy_inertial_observation.publish()
+            self.internal_state["info"].update(self.policy_inertial_observation.diagnostics())
 
         self.internal_state["imu_orientation_rotation"] = Rotation.from_matrix(self.internal_state["data"].site_xmat[self.imu_site_id].reshape(3, 3))
         self.internal_state["imu_orientation_rotation_inverse"] = self.internal_state["imu_orientation_rotation"].inv()
@@ -557,14 +571,21 @@ class LocomotionEnv(gym.Env):
             ],
             self.internal_state["imu_history"].reshape(-1),
             self.policy_velocity_observation.observe(self),
+            self.policy_inertial_observation.observe(),
         ])
 
         # Add noise
         self.observation_noise_function.modify_observation(observation)
 
+        if self.policy_inertial_observation.enabled:
+            sample = self.policy_inertial_observation.snapshot()
+            observation[self.imu_linear_acceleration_obs_idx] = sample["acceleration"]
+            observation[self.imu_angular_vel_obs_idx] = sample["gyro"]
+            observation[self.imu_history_obs_idx] = sample["history"].reshape(-1)
+
         # Store noisy samples once, so old IMU readings retain their original
         # noise rather than being re-randomized on every policy step.
-        if self.imu_history_length:
+        if self.imu_history_length and not self.policy_inertial_observation.enabled:
             history = self.internal_state["imu_history"]
             history[:-1] = history[1:]
             history[-1] = np.concatenate([
@@ -647,6 +668,8 @@ class LocomotionEnv(gym.Env):
         current_observation_idx += 6 * self.imu_history_length
         self.policy_velocity_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_velocity_observation.dimension)
         current_observation_idx += self.policy_velocity_observation.dimension
+        self.policy_inertial_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_inertial_observation.dimension)
+        current_observation_idx += self.policy_inertial_observation.dimension
 
         self.policy_observation_indices = np.concatenate([
             self.joint_positions_obs_idx,
@@ -658,6 +681,7 @@ class LocomotionEnv(gym.Env):
             self.policy_exteroception_obs_idx,
             self.imu_history_obs_idx,
             self.policy_velocity_obs_idx,
+            self.policy_inertial_obs_idx,
         ], dtype=int)
 
         self.critic_observation_indices = np.concatenate([

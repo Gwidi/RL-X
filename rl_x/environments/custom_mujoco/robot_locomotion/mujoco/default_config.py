@@ -3,6 +3,7 @@ from ml_collections import config_dict
 
 def get_config(environment_name):
     from .landing_frontflip import DEFAULTS as FRONTFLIP_DEFAULTS
+    from .policy_inertial import DEFAULTS as INERTIAL_DEFAULTS
     config = {
         "name": environment_name,
         "nr_envs": 1,
@@ -23,6 +24,7 @@ def get_config(environment_name):
             "bias_std_mps": 0.0,
             "delay_steps": 0,
         },
+        "policy_inertial": dict(INERTIAL_DEFAULTS),
         # Optional provenance of the fixed controller used by an experiment.
         "landing_controller_id": "",
         "landing_controller_sha256": "",

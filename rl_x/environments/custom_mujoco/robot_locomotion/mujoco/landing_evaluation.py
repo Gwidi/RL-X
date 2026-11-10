@@ -170,6 +170,18 @@ class LandingEvaluationWrapper(gym.Wrapper):
                               base_z=float(data.qpos[2]),
                               height_reference=initial.height_reference,
                               initial_qpos=data.qpos.tolist(), initial_qvel=data.qvel.tolist())
+        if env.policy_inertial_observation.enabled:
+            sensor = env.policy_inertial_observation
+            self.case_info.update(
+                policy_inertial_contract=json.dumps(sensor.contract, sort_keys=True),
+                inertial_history_hash=hashlib.sha256(sensor.snapshot()['history'].tobytes()).hexdigest(),
+                launch_duration_s=info['inertial/launch_duration_s'],
+                requested_speed_xy=info['inertial/requested_speed_xy'],
+                release_speed_xy=info['inertial/release_speed_xy'],
+                release_roll_deg=info['inertial/release_roll_deg'],
+                release_pitch_deg=info['inertial/release_pitch_deg'],
+                release_yaw_deg=info['inertial/release_yaw_deg'],
+                release_angular_speed=info['inertial/release_angular_speed'])
         env._landing_evaluation_loads = LandingLoads(model, env.foot_geom_indices)
         return observation, info
 
@@ -193,6 +205,13 @@ def _episode(final_info):
               "episode_length": float(final_info["episode_length"]),
               "success_rate": float(final_info.get("curriculum/landing_success", 0.0)),
               **final_info["landing_evaluation_loads"]}
+    for name in ('inertial_velocity_error', 'inertial_estimated_speed', 'inertial_clipped_fraction'):
+        if 'metrics/' + name in final_info:
+            result[name] = float(final_info['metrics/' + name])
+    for name in ('launch_duration_s', 'requested_speed_xy', 'release_speed_xy',
+                 'release_roll_deg', 'release_pitch_deg', 'release_yaw_deg', 'release_angular_speed'):
+        if 'inertial/' + name in final_info:
+            result['inertial_' + name] = float(final_info['inertial/' + name])
     for reason in ("base_crash", "motor_hard_limit", "thermal_limit",
                    "disallowed_contact", "calf_force", "foot_force", "body_acceleration", "base_height"):
         result[f"failure_{reason}_rate"] = float(final_info.get(f"outcome/failure_{reason}", 0.0))
