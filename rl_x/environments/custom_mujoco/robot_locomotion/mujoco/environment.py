@@ -44,6 +44,8 @@ class LocomotionEnv(gym.Env):
         self.policy_velocity_observation = PolicyVelocityObservation(env_config.get("policy_velocity", {}))
         from .policy_inertial import PolicyInertialObservation
         self.policy_inertial_observation = PolicyInertialObservation(self)
+        from .policy_height import PolicyHeight
+        self.policy_height = PolicyHeight(self)
         from .landing_braking import LandingBraking
         self.landing_braking = LandingBraking(self)
         from .landing_frontflip import LandingFrontflip
@@ -428,6 +430,7 @@ class LocomotionEnv(gym.Env):
         if self.landing_frontflip.enabled:
             self.landing_frontflip.reset()
 
+        self.policy_height.reset()
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
             "episode_return": 0.0,
@@ -505,6 +508,8 @@ class LocomotionEnv(gym.Env):
 
         self.handle_domain_randomization(is_episode_start=False)
 
+        self.policy_height.publish()
+
         self.terrain_function.pre_step()
 
         reward = self.reward_function.reward_and_info(chosen_action)
@@ -572,6 +577,7 @@ class LocomotionEnv(gym.Env):
             self.internal_state["imu_history"].reshape(-1),
             self.policy_velocity_observation.observe(self),
             self.policy_inertial_observation.observe(),
+            self.policy_height.observe(),
         ])
 
         # Add noise
@@ -670,6 +676,8 @@ class LocomotionEnv(gym.Env):
         current_observation_idx += self.policy_velocity_observation.dimension
         self.policy_inertial_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_inertial_observation.dimension)
         current_observation_idx += self.policy_inertial_observation.dimension
+        self.policy_height_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_height.dimension)
+        current_observation_idx += self.policy_height.dimension
 
         self.policy_observation_indices = np.concatenate([
             self.joint_positions_obs_idx,
@@ -682,6 +690,7 @@ class LocomotionEnv(gym.Env):
             self.imu_history_obs_idx,
             self.policy_velocity_obs_idx,
             self.policy_inertial_obs_idx,
+            self.policy_height_obs_idx,
         ], dtype=int)
 
         self.critic_observation_indices = np.concatenate([

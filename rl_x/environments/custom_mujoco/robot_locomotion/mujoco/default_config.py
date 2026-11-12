@@ -228,6 +228,8 @@ def get_config(environment_name):
             },
         },
         "landing_balanced_replay": False,
+        "policy_height": {"enabled": False, "noise_std_m": 0.005,
+                          "bias_std_m": 0.005, "delay_steps": 1, "plane_z_m": 0.0},
         "policy_exteroceptive_observation_type": "none",
         "critic_exteroceptive_observation_type": "height_over_ground",
         "reward": {

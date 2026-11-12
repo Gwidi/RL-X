@@ -576,6 +576,10 @@ class PPO:
                 )
             if saved_env.get("landing_physics_sha256", "") != config.environment.get("landing_physics_sha256", ""):
                 raise ValueError("Checkpoint uses a different landing physics profile; start fresh or restore its original profile")
+            saved_height = saved_env.get('policy_height', {})
+            current_height = config.environment.get('policy_height', {})
+            if saved_height.get('enabled', False) and dict(saved_height) != dict(current_height):
+                raise ValueError('Checkpoint height sensor contract differs; restore the saved settings')
             from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.policy_velocity import velocity_observation_contract
             if velocity_observation_contract(saved_env.get("policy_velocity", {})) != velocity_observation_contract(config.environment.get("policy_velocity", {})):
                 raise ValueError("Checkpoint has a different policy velocity observation contract; use matching mode/scale/sensor settings or train fresh")
@@ -605,9 +609,27 @@ class PPO:
             "policy": model.policy_state,
             "critic": model.critic_state
         }
+        # V18 adds one final actor feature. Restore the old TrainState shape,
+        # then append zero weights and zero Adam moments for that feature.
+        add_height = (config.environment.get('policy_height', {}).get('enabled', False)
+                      and not saved_env.get('policy_height', {}).get('enabled', False))
+        if add_height:
+            kernels = [x for x in jax.tree_util.tree_leaves(model.policy_state.params)
+                       if getattr(x, 'shape', None) == (351, 512)]
+            if len(kernels) != 1:
+                raise ValueError('Height migration requires the V16/V17 actor layout')
+            target['policy'] = jax.tree_util.tree_map(
+                lambda x: x[:-1] if getattr(x, 'shape', None) == (351, 512) else x,
+                model.policy_state)
         restore_args = orbax_utils.restore_args_from_target(target)
         checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
+
+        if add_height:
+            checkpoint['policy'] = jax.tree_util.tree_map(
+                lambda x: jnp.pad(x, ((0, 1), (0, 0)))
+                if getattr(x, 'shape', None) == (350, 512) else x,
+                checkpoint['policy'])
 
         model.policy_state = checkpoint["policy"]
         model.critic_state = checkpoint["critic"]
