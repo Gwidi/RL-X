@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=landing_inertial_v16
-#SBATCH --output=out_and_err_landing_inertial_v16_%j.txt
-#SBATCH --error=out_and_err_landing_inertial_v16_%j.txt
+#SBATCH --job-name=landing_inertial_v17
+#SBATCH --output=out_and_err_landing_inertial_v17_%j.txt
+#SBATCH --error=out_and_err_landing_inertial_v17_%j.txt
 #SBATCH --partition=proxima
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -22,7 +22,7 @@ elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/train_landing_seed60
 else
     SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_inertial_v16.py}"
+export LANDING_TRAIN_ENTRY="${LANDING_TRAIN_ENTRY:-train_landing_inertial_v17.py}"
 if [[ -n "${LANDING_V15_CHECKPOINT+x}" ]]; then
     export LANDING_V15_CHECKPOINT
 fi

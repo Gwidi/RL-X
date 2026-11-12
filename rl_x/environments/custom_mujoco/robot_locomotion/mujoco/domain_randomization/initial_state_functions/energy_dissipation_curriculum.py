@@ -72,7 +72,13 @@ class EnergyDissipationCurriculumInitialState:
             if not np.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError("Nominal replay probabilities must be between 0 and 1")
         self.factorized = None
-        if curriculum_config.get("focused_velocity_enabled", False):
+        if env.env_config.get("landing_balanced_replay", False):
+            if any(curriculum_config.get(k, False) for k in (
+                "focused_velocity_enabled", "height_then_velocity_enabled", "factorized_enabled")):
+                raise ValueError("Balanced replay requires other curricula disabled")
+            from .balanced_replay import BalancedReplay
+            self.factorized = BalancedReplay(self)
+        elif curriculum_config.get("focused_velocity_enabled", False):
             if curriculum_config.get("factorized_enabled", False) or curriculum_config.get("height_then_velocity_enabled", False):
                 raise ValueError("Focused velocity cannot be combined with another curriculum")
             from .focused_velocity import FocusedVelocity

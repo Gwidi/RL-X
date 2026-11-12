@@ -227,6 +227,7 @@ def get_config(environment_name):
                 "position_offset": 0.03,
             },
         },
+        "landing_balanced_replay": False,
         "policy_exteroceptive_observation_type": "none",
         "critic_exteroceptive_observation_type": "height_over_ground",
         "reward": {
