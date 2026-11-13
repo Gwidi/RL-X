@@ -55,6 +55,7 @@ def evaluate_velocity_grid(env, action, config, episodes, output_dir, global_ste
     selection=[c for c in velocity if c['speed']>=config.get('selection_speed_min',0.) and (config.get('selection_speed_max',-1.)<0 or c['speed']<=config['selection_speed_max'])]
     if not selection:raise ValueError('Empty checkpoint selection speed range')
     nominal_threshold=float(config['nominal_success_threshold'])
+    metrics['eval/worst_cell_success_rate'] = min(c['success_rate'] for c in selection)
     if not 0<=nominal_threshold<=1:raise ValueError('Invalid nominal eligibility threshold')
     metrics.update({'eval/landing_success_rate':float(np.mean([c['success_rate'] for c in velocity])),
         'eval/episode_return':float(np.mean([float(r['episode_return']) for r in rows if r['controller']=='policy' and float(r['speed'])>0])),

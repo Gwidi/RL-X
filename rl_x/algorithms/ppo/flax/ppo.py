@@ -448,7 +448,10 @@ class PPO:
                     selection_metric = "eval/landing_success_rate" if self.paired_landing_evaluation else "eval/episode_return"
                     mean_return = evaluation_metrics.get(selection_metric)
                     if self.paired_landing_evaluation and self.landing_evaluation_config.get("require_nominal_for_best", False):
-                        mean_return = (evaluation_metrics["eval/worst_height_success_rate"] +
+                        robustness_key = ('eval/worst_cell_success_rate'
+                            if self.landing_evaluation_config.get('best_by_worst_cell', False)
+                            else 'eval/worst_height_success_rate')
+                        mean_return = (evaluation_metrics[robustness_key] +
                                        .001 * evaluation_metrics["eval/landing_success_rate"]
                                        if evaluation_metrics.get("eval/nominal_eligible") == 1. else None)
                 else:
