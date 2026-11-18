@@ -4,6 +4,7 @@ import json
 import zipfile
 import logging
 import time
+import tempfile
 from collections import deque
 import tree
 import numpy as np
@@ -66,6 +67,7 @@ class PPO:
         self.evaluation_episodes = config.algorithm.evaluation_episodes
         self.landing_evaluation_config = config.environment.get("landing_evaluation", {})
         self.paired_landing_evaluation = self.landing_evaluation_config.get("enabled", False)
+        self.learned_handoff = config.environment.get('landing_handoff', {}).get('enabled', False)
         self.last_evaluation_metrics = {}
         if self.paired_landing_evaluation and self.evaluation_frequency > 0:
             self.evaluation_frequency *= self.landing_evaluation_config["frequency_multiplier"]
@@ -124,17 +126,53 @@ class PPO:
             self.best_model_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
     
+    def action_statistics(self, output, state, action):
+        mean, logstd = output[:2]
+        motor = action[..., :-1] if self.learned_handoff else action
+        log_prob = (-.5 * ((motor - mean) / jnp.exp(logstd)) ** 2
+                    - .5 * jnp.log(2. * jnp.pi) - logstd).sum(-1)
+        entropy = (logstd + .5 * jnp.log(2. * jnp.pi * jnp.e)).sum(-1)
+        if self.learned_handoff:
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_handoff import FEATURE_COUNT
+            ready = state[..., -FEATURE_COUNT]
+            motor_active = state[..., -FEATURE_COUNT+1] < 1.
+            logit = output[2][..., 0]
+            bit = action[..., -1]
+            bit_log_prob = bit * jax.nn.log_sigmoid(logit) + (1. - bit) * jax.nn.log_sigmoid(-logit)
+            p = jax.nn.sigmoid(logit)
+            bit_entropy = -p * jax.nn.log_sigmoid(logit) - (1. - p) * jax.nn.log_sigmoid(-logit)
+            log_prob = jnp.where(motor_active, log_prob, 0.) + ready * bit_log_prob
+            entropy = jnp.where(motor_active, entropy, 0.) + ready * bit_entropy
+        return log_prob, entropy
+
+    def deterministic_action(self, params, state):
+        output = self.policy.apply(params, state)
+        action = self.get_processed_action(output[0])
+        if self.learned_handoff:
+            from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_handoff import FEATURE_COUNT
+            switch = (output[2] >= 0.) & (state[..., -FEATURE_COUNT, None] > .5)
+            action = jnp.concatenate([action, switch.astype(action.dtype)], axis=-1)
+        return action
+
     def train(self):
         @jax.jit
         def get_action_and_value(policy_state: TrainState, critic_state: TrainState, state: np.ndarray, key: jax.random.PRNGKey):
-            action_mean, action_logstd = self.policy.apply(policy_state.params, state)
+            output = self.policy.apply(policy_state.params, state)
+            action_mean, action_logstd = output[:2]
             action_std = jnp.exp(action_logstd)
             key, subkey = jax.random.split(key)
             action = action_mean + action_std * jax.random.normal(subkey, shape=action_mean.shape)
-            log_prob = -0.5 * ((action - action_mean) / action_std) ** 2 - 0.5 * jnp.log(2.0 * jnp.pi) - action_logstd
             value = self.critic.apply(critic_state.params, state)
             processed_action = self.get_processed_action(action)
-            return processed_action, action, value.reshape(-1), log_prob.sum(1), key
+            if self.learned_handoff:
+                from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_handoff import FEATURE_COUNT
+                key, switch_key = jax.random.split(key)
+                bit = jax.random.bernoulli(switch_key, jax.nn.sigmoid(output[2]))
+                bit = (bit & (state[..., -FEATURE_COUNT, None] > .5)).astype(action.dtype)
+                processed_action = jnp.concatenate([processed_action, bit], axis=-1)
+                action = jnp.concatenate([action, bit], axis=-1)
+            log_prob, _ = self.action_statistics(output, state, action)
+            return processed_action, action, value.reshape(-1), log_prob, key
         
 
         @jax.jit
@@ -159,11 +197,8 @@ class PPO:
                    key: jax.random.PRNGKey):
             def loss_fn(policy_params, critic_params, state_b, action_b, log_prob_b, return_b, advantage_b):
                 # Policy loss
-                action_mean, action_logstd = self.policy.apply(policy_params, state_b)
-                action_std = jnp.exp(action_logstd)
-                new_log_prob = -0.5 * ((action_b - action_mean) / action_std) ** 2 - 0.5 * jnp.log(2.0 * jnp.pi) - action_logstd
-                new_log_prob = new_log_prob.sum(1)
-                entropy = action_logstd + 0.5 * jnp.log(2.0 * jnp.pi * jnp.e)
+                output = self.policy.apply(policy_params, state_b)
+                new_log_prob, entropy_loss = self.action_statistics(output, state_b, action_b)
                 
                 logratio = new_log_prob - log_prob_b
                 ratio = jnp.exp(logratio)
@@ -174,7 +209,6 @@ class PPO:
                 pg_loss2 = -advantage_b * jnp.clip(ratio, 1 - self.clip_range, 1 + self.clip_range)
                 pg_loss = jnp.maximum(pg_loss1, pg_loss2)
                 
-                entropy_loss = entropy.sum(1)
                 
                 # Critic loss
                 new_value = self.critic.apply(critic_params, state_b)
@@ -252,8 +286,7 @@ class PPO:
 
         @jax.jit
         def get_deterministic_action(policy_state: TrainState, state: np.ndarray):
-            action_mean, action_logstd = self.policy.apply(policy_state.params, state)
-            return self.get_processed_action(action_mean)
+            return self.deterministic_action(policy_state.params, state)
         
 
         self.set_train_mode()
@@ -571,6 +604,7 @@ class PPO:
     def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
         # New IMU inputs change both network input dimensions. Reject a
         # mismatched checkpoint before extraction with an actionable message.
+        saved_env = {}
         if "imu_history_length" in config.environment:
             with zipfile.ZipFile(config.runner.load_model) as archive:
                 saved_env = (
@@ -583,6 +617,12 @@ class PPO:
             current_height = config.environment.get('policy_height', {})
             if saved_height.get('enabled', False) and dict(saved_height) != dict(current_height):
                 raise ValueError('Checkpoint height sensor contract differs; restore the saved settings')
+            saved_handoff = saved_env.get('landing_handoff', {})
+            current_handoff = config.environment.get('landing_handoff', {})
+            if saved_handoff.get('enabled', False) and any(
+                saved_handoff.get(key) != current_handoff.get(key)
+                for key in ('enabled', 'walk_sha256', 'walk_speed_limit')):
+                raise ValueError('Checkpoint handoff contract differs; restore the saved settings')
             from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.policy_velocity import velocity_observation_contract
             if velocity_observation_contract(saved_env.get("policy_velocity", {})) != velocity_observation_contract(config.environment.get("policy_velocity", {})):
                 raise ValueError("Checkpoint has a different policy velocity observation contract; use matching mode/scale/sensor settings or train fresh")
@@ -596,6 +636,20 @@ class PPO:
                     "observations, or set --environment.imu_history_length to the saved value "
                     "(IMU_HISTORY_LENGTH=0 for legacy models in experiments/test.sh)."
                 )
+        if (config.environment.get('landing_handoff', {}).get('enabled', False)
+                and not saved_env.get('landing_handoff', {}).get('enabled', False)):
+            with tempfile.TemporaryDirectory(prefix='landing_handoff_parent_') as checkpoint_dir:
+                with zipfile.ZipFile(config.runner.load_model) as archive:
+                    loaded = json.loads(archive.read('config_algorithm.json'))
+                    if loaded.get('name') != 'ppo.flax':
+                        raise ValueError('Handoff warm start requires a PPO Flax landing checkpoint')
+                    for key, value in loaded.items():
+                        if f'algorithm.{key}' not in explicitly_set_algorithm_params and key in config.algorithm:
+                            config.algorithm[key] = value
+                    archive.extractall(checkpoint_dir)
+                model = PPO(config, train_env, eval_env, run_path, writer)
+                restore_handoff_parent(model, checkpoint_dir)
+            return model
         splitted_path = config.runner.load_model.split("/")
         checkpoint_dir = os.path.abspath("/".join(splitted_path[:-1]))
         checkpoint_file_name = splitted_path[-1]
@@ -645,8 +699,7 @@ class PPO:
     def test(self, episodes):
         @jax.jit
         def get_action(policy_state: TrainState, state: np.ndarray):
-            action_mean, action_logstd = self.policy.apply(policy_state.params, state)
-            return self.get_processed_action(action_mean)
+            return self.deterministic_action(policy_state.params, state)
         
         self.set_eval_mode()
         for i in range(episodes):
@@ -694,3 +747,32 @@ class PPO:
 
     def general_properties():
         return GeneralProperties
+
+
+def restore_handoff_parent(model, checkpoint_dir):
+    """Preserve parent inference on the old inputs, with fresh Adam state."""
+    from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_handoff import FEATURE_COUNT
+
+    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    metadata = checkpointer.metadata(checkpoint_dir)
+    tree = getattr(metadata, 'item_metadata', metadata)
+    tree = getattr(tree, 'tree', tree)
+    args = jax.tree_util.tree_map(
+        lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), tree)
+    parent = checkpointer.restore(checkpoint_dir, restore_args=args)
+    for role in ('policy', 'critic'):
+        state = getattr(model, f'{role}_state')
+        old = parent[role]['params']['params']
+        new = dict(state.params['params'])
+        expected = set(new) - ({'handoff_head'} if role == 'policy' else set())
+        if set(old) != expected:
+            raise ValueError(f'Incompatible parent {role} layers')
+        for name, layer in old.items():
+            if name == 'Dense_0':
+                layer = dict(layer)
+                layer['kernel'] = np.pad(layer['kernel'], ((0, FEATURE_COUNT), (0, 0)))
+            if [x.shape for x in jax.tree_util.tree_leaves(layer)] != [
+                    x.shape for x in jax.tree_util.tree_leaves(new[name])]:
+                raise ValueError(f'Incompatible parent {role} layer {name}')
+            new[name] = jax.tree_util.tree_map(jnp.asarray, layer)
+        setattr(model, f'{role}_state', state.replace(params={'params': new}))

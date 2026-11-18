@@ -208,6 +208,9 @@ def _episode(final_info):
     for name in ('inertial_velocity_error', 'inertial_estimated_speed', 'inertial_clipped_fraction'):
         if 'metrics/' + name in final_info:
             result[name] = float(final_info['metrics/' + name])
+    for name in ('accepted', 'delay_after_touch_s', 'speed_at_switch_mps', 'feet_stepped'):
+        if 'handoff/' + name in final_info:
+            result['handoff_' + name] = float(final_info['handoff/' + name])
     for name in ('launch_duration_s', 'requested_speed_xy', 'release_speed_xy',
                  'release_roll_deg', 'release_pitch_deg', 'release_yaw_deg', 'release_angular_speed'):
         if 'inertial/' + name in final_info:

@@ -230,6 +230,8 @@ def get_config(environment_name):
         },
         "landing_balanced_replay": False,
         "landing_uniform_speed10": False,
+        "landing_handoff": {"enabled": False, "walk_weights": "", "walk_sha256": "",
+                            "walk_speed_limit": 0.6},
         "policy_height": {"enabled": False, "noise_std_m": 0.005,
                           "bias_std_m": 0.005, "delay_steps": 1, "plane_z_m": 0.0},
         "policy_exteroceptive_observation_type": "none",

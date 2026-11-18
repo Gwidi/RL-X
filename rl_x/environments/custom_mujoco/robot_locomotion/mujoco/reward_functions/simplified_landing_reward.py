@@ -992,6 +992,11 @@ class SimplifiedLandingReward:
         braking = getattr(self.env, "landing_braking", None)
         braking_enabled = braking is not None and braking.enabled
         braking_reward = braking.step() if braking_enabled else 0.0
+        handoff = getattr(self.env, 'landing_handoff', None)
+        handoff_enabled = handoff is not None and handoff.enabled
+        handoff_success = False
+        if handoff_enabled:
+            braking_reward, handoff_success = handoff.reward_and_success(braking_reward)
         braking_ready = not braking_enabled or braking.ready()
         if braking_enabled and braking.final_speed > 0:
             error_xy = float(np.linalg.norm(state['data'].qvel[:2] - braking.reference_world()))
@@ -1192,7 +1197,7 @@ class SimplifiedLandingReward:
                 landing_event_reward = self._finalize_landing(False, failure_reason=reason)
 
             # Success dopiero po przeżyciu całego safety window.
-            elif (
+            elif handoff_success or (not handoff_enabled and (
                 has_touched
                 and
                 time_since_touch
@@ -1200,7 +1205,7 @@ class SimplifiedLandingReward:
                 and (not braking_enabled or braking.elapsed() + 1e-9 >= braking.duration + self.success_stability_time)
                 and safety.foot_contact
                 and state["landing_stable_time"] >= self.success_stability_time
-            ):
+            )):
                 landing_event_reward = (
                     self._finalize_landing(
                         success=True,

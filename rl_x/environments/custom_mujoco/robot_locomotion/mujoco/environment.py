@@ -48,6 +48,8 @@ class LocomotionEnv(gym.Env):
         self.policy_height = PolicyHeight(self)
         from .landing_braking import LandingBraking
         self.landing_braking = LandingBraking(self)
+        from .landing_handoff import LandingHandoff
+        self.landing_handoff = LandingHandoff(self)
         from .landing_frontflip import LandingFrontflip
         self.landing_frontflip = LandingFrontflip(self)
         self.np_rng = np.random.default_rng(seed)
@@ -253,11 +255,14 @@ class LocomotionEnv(gym.Env):
         self.observation_noise_function = get_observation_noise_function(env_config["domain_randomization"]["observation_noise"]["type"], self)
         self.joint_dropout_function = get_joint_dropout_function(env_config["domain_randomization"]["joint_dropout"]["type"], self)
         
-        action_space_size = self.nr_actuator_joints
+        action_space_size = self.nr_actuator_joints + int(self.landing_handoff.enabled)
         nominal_joint_positions = self.initial_qpos[self.actuator_joint_mask_qpos]
         action_scale_factor = robot_config["scaling_factor"]
         if self.spine_locked and isinstance(action_scale_factor, (list, np.ndarray)):
             action_scale_factor = action_scale_factor[1:]
+        if self.landing_handoff.enabled:
+            nominal_joint_positions = np.r_[nominal_joint_positions, 0.]
+            action_scale_factor = np.r_[np.broadcast_to(action_scale_factor, self.nr_actuator_joints), 1.]
         # Actions are normalized residuals, not absolute joint angles. PD
         # applies the (possibly randomized) scale and nominal pose once.
         self.action_space = BoxSpace(low=-1.0, high=1.0, shape=(action_space_size,), dtype=np.float32, center=nominal_joint_positions, scale=action_scale_factor)
@@ -313,6 +318,7 @@ class LocomotionEnv(gym.Env):
         self.domain_randomization_action_delay_function.init()
         self.domain_randomization_seen_robot_function.init()
         self.domain_randomization_unseen_robot_function.init()
+        self.landing_handoff.reset()
         self.reward_function.reward_and_info(np.zeros(self.nr_actuator_joints))
         if getattr(self.terrain_function, "uses_unbounded_curriculum", False):
             self.terrain_function.add_curriculum_info()
@@ -431,6 +437,7 @@ class LocomotionEnv(gym.Env):
             self.landing_frontflip.reset()
 
         self.policy_height.reset()
+        self.landing_handoff.reset()
         next_observation = self.get_observation(np.zeros(self.nr_actuator_joints))
         self.internal_state["info_episode_store"] = {
             "episode_return": 0.0,
@@ -447,6 +454,8 @@ class LocomotionEnv(gym.Env):
 
     def step(self, action):
         chosen_action = action[:self.nr_actuator_joints]
+        if self.landing_handoff.enabled:
+            chosen_action = self.landing_handoff.blend(chosen_action, bool(action[-1] > .5))
         delayed_action = self.domain_randomization_action_delay_function.delay_action(chosen_action)
 
         target_joint_positions = self.control_function.process_action(delayed_action)
@@ -578,6 +587,7 @@ class LocomotionEnv(gym.Env):
             self.policy_velocity_observation.observe(self),
             self.policy_inertial_observation.observe(),
             self.policy_height.observe(),
+            self.landing_handoff.observation(),
         ])
 
         # Add noise
@@ -678,6 +688,10 @@ class LocomotionEnv(gym.Env):
         current_observation_idx += self.policy_inertial_observation.dimension
         self.policy_height_obs_idx = np.arange(current_observation_idx, current_observation_idx + self.policy_height.dimension)
         current_observation_idx += self.policy_height.dimension
+        from .landing_handoff import FEATURE_COUNT
+        handoff_count = FEATURE_COUNT if self.landing_handoff.enabled else 0
+        handoff_indices = np.arange(current_observation_idx, current_observation_idx + handoff_count)
+        current_observation_idx += handoff_count
 
         self.policy_observation_indices = np.concatenate([
             self.joint_positions_obs_idx,
@@ -691,6 +705,7 @@ class LocomotionEnv(gym.Env):
             self.policy_velocity_obs_idx,
             self.policy_inertial_obs_idx,
             self.policy_height_obs_idx,
+            handoff_indices,
         ], dtype=int)
 
         self.critic_observation_indices = np.concatenate([
@@ -706,6 +721,7 @@ class LocomotionEnv(gym.Env):
             self.gravity_vector_obs_idx,
             self.critic_exteroception_obs_idx,
             self.imu_history_obs_idx,
+            handoff_indices,
         ], dtype=int)
 
         observation_space_low = -np.ones(current_observation_idx) * np.inf
