@@ -56,6 +56,10 @@ class LocomotionEnv(gym.Env):
 
         xml_path = (self.robot_config["directory_path"] / "data" / "plane.xml").as_posix()
         xml_handle = mjcf.from_path(xml_path)
+        mat = env_config.get("landing_mat", {})
+        if mat.get("profile"):
+            from .landing_mat import apply_landing_mat
+            apply_landing_mat(xml_handle, env_config["terrain"]["type"], mat)
 
         # Set the MuJoCo solver iterations, the XML uses very low values by default for MJX
         xml_handle.option.iterations = 100

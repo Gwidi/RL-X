@@ -31,6 +31,7 @@ def get_config(environment_name):
         "landing_model_sha256": "",
         "landing_physics_profile": "",
         "landing_physics_sha256": "",
+        "landing_mat": {"profile": "", "sha256": "", "calf_contact": True},
         "landing_motor_diagnostics": False,
         "landing_braking": {"enabled": False, "duration": 2.5, "tracking_weight": 5.0, "tracking_sigma": 0.5,
             "warm_start_from_v11": False, "warm_start_from_v12": False,

@@ -613,6 +613,11 @@ class PPO:
                 )
             if saved_env.get("landing_physics_sha256", "") != config.environment.get("landing_physics_sha256", ""):
                 raise ValueError("Checkpoint uses a different landing physics profile; start fresh or restore its original profile")
+            saved_mat = saved_env.get("landing_mat", {})
+            current_mat = config.environment.get("landing_mat", {})
+            if saved_mat.get("profile") and (not current_mat.get("profile") or any(
+                    saved_mat[key] != current_mat.get(key) for key in ("sha256", "calf_contact"))):
+                raise ValueError("Checkpoint uses a different landing mat; restore its saved contact profile")
             saved_height = saved_env.get('policy_height', {})
             current_height = config.environment.get('policy_height', {})
             if saved_height.get('enabled', False) and dict(saved_height) != dict(current_height):
@@ -650,37 +655,31 @@ class PPO:
                 model = PPO(config, train_env, eval_env, run_path, writer)
                 restore_handoff_parent(model, checkpoint_dir)
             return model
-        splitted_path = config.runner.load_model.split("/")
-        checkpoint_dir = os.path.abspath("/".join(splitted_path[:-1]))
-        checkpoint_file_name = splitted_path[-1]
-        shutil.unpack_archive(f"{checkpoint_dir}/{checkpoint_file_name}", f"{checkpoint_dir}/tmp", "zip")
-        checkpoint_dir = f"{checkpoint_dir}/tmp"
+        # Multiple runs can warm-start from the same archive on shared storage.
+        with tempfile.TemporaryDirectory(prefix="ppo_checkpoint_") as checkpoint_dir:
+            shutil.unpack_archive(config.runner.load_model, checkpoint_dir, "zip")
+            with open(f"{checkpoint_dir}/config_algorithm.json", "r") as file:
+                loaded_algorithm_config = json.load(file)
+            for key, value in loaded_algorithm_config.items():
+                if f"algorithm.{key}" not in explicitly_set_algorithm_params and key in config.algorithm:
+                    config.algorithm[key] = value
+            model = PPO(config, train_env, eval_env, run_path, writer)
 
-        loaded_algorithm_config = json.load(open(f"{checkpoint_dir}/config_algorithm.json", "r"))
-        for key, value in loaded_algorithm_config.items():
-            if f"algorithm.{key}" not in explicitly_set_algorithm_params and key in config.algorithm:
-                config.algorithm[key] = value
-        model = PPO(config, train_env, eval_env, run_path, writer)
-
-        target = {
-            "policy": model.policy_state,
-            "critic": model.critic_state
-        }
-        # V18 adds one final actor feature. Restore the old TrainState shape,
-        # then append zero weights and zero Adam moments for that feature.
-        add_height = (config.environment.get('policy_height', {}).get('enabled', False)
-                      and not saved_env.get('policy_height', {}).get('enabled', False))
-        if add_height:
-            kernels = [x for x in jax.tree_util.tree_leaves(model.policy_state.params)
-                       if getattr(x, 'shape', None) == (351, 512)]
-            if len(kernels) != 1:
-                raise ValueError('Height migration requires the V16/V17 actor layout')
-            target['policy'] = jax.tree_util.tree_map(
-                lambda x: x[:-1] if getattr(x, 'shape', None) == (351, 512) else x,
-                model.policy_state)
-        restore_args = orbax_utils.restore_args_from_target(target)
-        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-        checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
+            target = {"policy": model.policy_state, "critic": model.critic_state}
+            # Restore the old shape before appending V18's height feature.
+            add_height = (config.environment.get('policy_height', {}).get('enabled', False)
+                          and not saved_env.get('policy_height', {}).get('enabled', False))
+            if add_height:
+                kernels = [x for x in jax.tree_util.tree_leaves(model.policy_state.params)
+                           if getattr(x, 'shape', None) == (351, 512)]
+                if len(kernels) != 1:
+                    raise ValueError('Height migration requires the V16/V17 actor layout')
+                target['policy'] = jax.tree_util.tree_map(
+                    lambda x: x[:-1] if getattr(x, 'shape', None) == (351, 512) else x,
+                    model.policy_state)
+            restore_args = orbax_utils.restore_args_from_target(target)
+            with orbax.checkpoint.PyTreeCheckpointer() as checkpointer:
+                checkpoint = checkpointer.restore(checkpoint_dir, item=target, restore_args=restore_args)
 
         if add_height:
             checkpoint['policy'] = jax.tree_util.tree_map(
@@ -690,8 +689,6 @@ class PPO:
 
         model.policy_state = checkpoint["policy"]
         model.critic_state = checkpoint["critic"]
-
-        shutil.rmtree(checkpoint_dir)
 
         return model
     
