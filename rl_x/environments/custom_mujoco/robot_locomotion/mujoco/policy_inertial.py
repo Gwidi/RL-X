@@ -53,6 +53,17 @@ def check_inertial_contract(saved, current):
         raise ValueError("Checkpoint inertial observation/launch contract differs; use its native profile or train fresh")
 
 
+def cross3(a, b):
+    """np.cross for two 3-vectors without its axis handling overhead.
+
+    Uses the same products and subtractions in the same order as np.cross,
+    so results are bit-identical.
+    """
+    a0, a1, a2 = a.tolist()
+    b0, b1, b2 = b.tolist()
+    return np.array([a1*b2 - a2*b1, a2*b0 - a0*b2, a0*b1 - a1*b0])
+
+
 def rotation_increment(rotvec):
     """Rodrigues formula without a scipy object per high-rate IMU sample."""
     x, y, z = rotvec
@@ -184,7 +195,7 @@ class PolicyInertialObservation:
         # IMU is offset from the base origin. Remove rigid-body rotational
         # acceleration using gyro differences, not simulator qacc/angular state.
         r = state["offset_site"]
-        base_specific_force = acc - np.cross(alpha, r) - np.cross(gyro, np.cross(gyro, r))
+        base_specific_force = acc - cross3(alpha, r) - cross3(gyro, cross3(gyro, r))
         state["delta_v_world"] += (state["rotation"] @ base_specific_force + env.internal_state["mj_model"].opt.gravity) * dt
         state["rotation"] = state["rotation"] @ rotation_increment(gyro*dt)
         state.update(previous_gyro=gyro, acceleration=acc, gyro=gyro, samples=state["samples"]+1)

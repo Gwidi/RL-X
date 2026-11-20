@@ -31,6 +31,31 @@ class AsyncVectorEnvWithSkipping(gym.vector.AsyncVectorEnv):
         self.skip_threshold = int(self.nr_envs * async_skip_percentage)
 
 
+    def _merge_infos(self, received):
+        """Same result as calling gymnasium's _add_info per env in index order.
+
+        Groups values per key first, so each key's arrays are created and
+        stored once instead of once per env. Values are assigned one by one,
+        keeping _add_info's dtype choice (type of the first value) and casting.
+        """
+        grouped = {}
+        for i, info in received:
+            for key, value in info.items():
+                entry = grouped.get(key)
+                if entry is None:
+                    grouped[key] = entry = (type(value), [], [])
+                entry[1].append(i)
+                entry[2].append(value)
+        infos = {}
+        for key, (dtype, indices, values) in grouped.items():
+            array, mask = self._init_info_arrays(dtype)
+            for i, value in zip(indices, values):
+                array[i] = value
+            mask[indices] = True
+            infos[key], infos[f"_{key}"] = array, mask
+        return infos
+
+
     def step_async(self, actions):
         self._assert_is_running()
         if self._state != AsyncState.DEFAULT:
@@ -57,6 +82,28 @@ class AsyncVectorEnvWithSkipping(gym.vector.AsyncVectorEnv):
         truncateds = np.zeros(self.nr_envs, dtype=np.bool_)
         infos = {}
         successes = []
+
+        if self.skip_threshold == 0:
+            # Every worker must answer. Block on each pipe in index order
+            # instead of busy-polling, which kept one core spinning and
+            # competing with the workers.
+            received = []
+            for i, pipe in enumerate(self.parent_pipes):
+                result, success = pipe.recv()
+                successes.append(success)
+                if success:
+                    obs, rew, terminated, truncated, info = result
+                    rewards[i] = rew
+                    terminateds[i] = terminated
+                    truncateds[i] = truncated
+                    received.append((i, info))
+            self.skipped_envs = [False] * self.nr_envs
+            self._raise_if_errors(successes)
+            self._state = AsyncState.DEFAULT
+            return (
+                deepcopy(self.observations) if self.copy else self.observations,
+                rewards, terminateds, truncateds, self._merge_infos(received),
+            )
 
         self.skipped_envs = [True] * self.nr_envs
         while True:

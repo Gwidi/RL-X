@@ -247,13 +247,48 @@ def main():
         from experiments.reporting.progress_grace_comparison_section import build as build_grace_comparison
         sections.append(build_grace_comparison(table))
 
-    if data.get("braking_prepared"):
+    if data.get("braking_completed"):
+        from experiments.reporting.progress_braking_completed import build as build_braking_completed
+        sections.append(build_braking_completed(table))
+    elif data.get("braking_prepared"):
         from experiments.reporting.progress_braking_branch import build as build_braking
         sections.append(build_braking(table))
+
+    if data.get("braking_v12_completed"):
+        from experiments.reporting.progress_braking_v12 import build as build_braking_v12
+        sections.append(build_braking_v12(table))
+
+    if data.get("v13_v14_partial"):
+        from experiments.reporting.progress_v13_v14_partial import build as build_moving_partial
+        sections.append(build_moving_partial(table))
+
+    if data.get("v13_completed"):
+        from experiments.reporting.progress_v13_completed import build as build_v13_completed
+        sections.append(build_v13_completed(table))
+
+    if data.get("v14_completed"):
+        from experiments.reporting.progress_v14_completed import build as build_v14_completed
+        sections.append(build_v14_completed(table))
+
+    if data.get("v14_continued_completed"):
+        from experiments.reporting.progress_v14_continued import build as build_v14_continued
+        sections.append(build_v14_continued(table))
+
+    if data.get("v15_completed"):
+        from experiments.reporting.progress_v15_completed import build as build_v15_completed
+        sections.append(build_v15_completed(table))
 
     if data.get("aerial_feasibility"):
         from experiments.reporting.progress_aerial_branch import build as build_aerial
         sections.append(build_aerial(table))
+
+    if data.get("frontflip_impulse"):
+        from experiments.reporting.progress_frontflip_impulse import build as build_frontflip
+        sections.append(build_frontflip(table))
+
+    if data.get("frontflip_partial"):
+        from experiments.reporting.progress_frontflip_partial import build as build_frontflip_partial
+        sections.append(build_frontflip_partial(table))
 
     css='''
 :root{color-scheme:dark;--bg:#11171e;--fg:#dce4ec;--muted:#a3b1bf;--line:#34404b;--accent:#84d4c0;--warm:#edbe85;--surface:#18212a}
@@ -350,9 +385,150 @@ def main():
         result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:grace_comparison_overview(),result,count=1,flags=re.S)
         result=result.replace('dane wszystkich dwudziestu jeden etapów','dane wszystkich dwudziestu dwóch etapów')
         result=result.replace('02.11.2026</div><h1>','03.11.2026</div><h1>').replace('Aktualizacja: 2 listopada 2026','Aktualizacja: 3 listopada 2026')
-    if data.get('braking_prepared'):
+    if data.get('braking_completed'):
+        from experiments.reporting.progress_braking_completed import overview as braking_completed_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:braking_completed_overview(),result,count=1,flags=re.S)
+    elif data.get('braking_prepared'):
         from experiments.reporting.progress_braking_branch import overview as braking_overview
         result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:braking_overview(),result,count=1,flags=re.S)
+    if data.get('braking_v12_completed'):
+        from experiments.reporting.progress_braking_v12 import overview as braking_v12_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:braking_v12_overview(),result,count=1,flags=re.S)
+        result=result.replace('03.11.2026</div><h1>','04.11.2026</div><h1>').replace('Aktualizacja: 3 listopada 2026','Aktualizacja: 4 listopada 2026')
+    if data.get('v13_v14_partial'):
+        from experiments.reporting.progress_v13_v14_partial import overview as partial_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:partial_overview(),result,count=1,flags=re.S)
+    if data.get('v13_completed'):
+        from experiments.reporting.progress_v13_completed import overview as v13_completed_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v13_completed_overview(),result,count=1,flags=re.S)
+        result=result.replace('snapshot 04.11.2026 · treningi trwają','historyczny snapshot 04.11.2026 · V14 nadal trwa')
+    if data.get('v14_completed'):
+        from experiments.reporting.progress_v14_completed import overview as v14_completed_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v14_completed_overview(),result,count=1,flags=re.S)
+        result=result.replace('historyczny snapshot 04.11.2026 · V14 nadal trwa','historyczne snapshoty 04.11.2026 · oba treningi zakończone')
+        result=result.replace('04.11.2026 · V14 nadal trwa','04.11.2026 · V14 zakończony w kolejnym etapie')
+    if data.get('v14_continued_completed'):
+        from experiments.reporting.progress_v14_continued import overview as continued_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:continued_overview(),result,count=1,flags=re.S)
+        result=result.replace('04.11.2026</div><h1>','06.11.2026</div><h1>').replace('Aktualizacja: 4 listopada 2026','Aktualizacja: 6 listopada 2026')
+    if data.get('frontflip_partial'):
+        from experiments.reporting.progress_frontflip_partial import overview as frontflip_partial_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:frontflip_partial_overview(),result,count=1,flags=re.S)
+    if data.get('v15_completed'):
+        from experiments.reporting.progress_v15_completed import overview as v15_completed_overview
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v15_completed_overview(),result,count=1,flags=re.S)
+        result=result.replace('06.11.2026</div><h1>','07.11.2026</div><h1>').replace('Aktualizacja: 6 listopada 2026','Aktualizacja: 7 listopada 2026')
+    if data.get('v16_completed'):
+        from experiments.reporting.progress_v16_completed import build as v16_section, overview as v16_overview
+        result=result.replace('<section id="dokumenty"',v16_section(data,metrics,videos)+'<section id="dokumenty"',1)
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _:v16_overview(),result,count=1,flags=re.S)
+        result=result.replace('07.11.2026</div><h1>','12.11.2026</div><h1>').replace('Aktualizacja: 7 listopada 2026','Aktualizacja: 12 listopada 2026')
+    if len(stages) >= 25 and stages[24]['title'] == 'V17: zrównoważone powtórki':
+        stage = stages[24]
+        section = ('<section id="e25" class="stage"><div class="stage-label">Etap 25 · V17 przygotowany</div>'
+            '<h2>Kontynuacja IMU: trudne niskie zrzuty</h2>'
+            '<p class="lead">Kontynuacja V16 best ma sprawdzić, czy większy udział niskich '
+            'zrzutów przy 5–8 m/s wyrówna skuteczność między wysokościami.</p>'
+            '<h3>Rodzic i budżet</h3><p>V16 best po 88 080 384 przejściach; '
+            'kolejne 30 015 488 daje 118 095 872 łącznej ekspozycji. Odtwarzane '
+            'są aktor, krytyk, Adam i wyuczone std. Epizody i liczniki przebiegu startują od nowa.</p>'
+            '<h3>Stały rozkład warunków</h3>' + table(['Udział', 'Wysokości', 'Moduł prędkości'], [
+                ['60%', '0,75 / 1 / 1,25 m, równomiernie', 'jednostajnie 5–8 m/s'],
+                ['30%', '0,75 / 1 / 1,25 / 1,5 m, równomiernie', 'jednostajnie 0–8 m/s'],
+                ['10%', '0,75 / 1 / 1,25 / 1,5 m, równomiernie', '0 m/s']]) +
+            '<p>Kierunek obejmuje cały okrąg. Każda niższa wysokość ma łącznie 30% epizodów, '
+            'a 1,5 m ma 10%. V16 już zawierał niskie wysokości z dużymi prędkościami '
+            'w powtórkach; V17 kontroluje i zwiększa ich udział.</p>'
+            '<h3>IMU i kryterium oceny</h3><p>Historia, całka, szum, opóźnienie, '
+            'fizyczne rozpędzanie, obserwacje, nagroda, PD i PPO pozostają zgodne z V16. '
+            'Aktor nadal nie otrzymuje wysokości. Best wybiera najgorsza średnia wysokości '
+            'z dodatkiem 0,001 średniej globalnej i warunkiem poprawnych prób nominalnych. '
+            'Pełna siatka ewaluacji pozostaje taka jak w V16.</p>'
+            '<p class="annotation">Eksperyment przygotowany, bez wyników pełnego treningu. '
+            'Hipoteza dotyczy rozkładu przykładów; nie ustalono jeszcze przyczyny słabszych niskich zrzutów.</p>'
+            '<h3>Uruchomienie</h3><p>Wyeksportować LANDING_V17_CHECKPOINT ze ścieżką do V16 best, '
+            'następnie uruchomić sbatch experiments/test2.sh lub sbatch experiments/inertial_v17.sh.</p>'
+            '<p><a href="../../experiments/landing_inertial_v17_README.md">Instrukcja V17 ↗</a></p></section>')
+        result = result.replace('<section id="dokumenty"', section + '<section id="dokumenty"', 1)
+    if len(stages) >= 26 and stages[25]['title'] == 'V18: wysokość dla aktora':
+        stage = stages[25]
+        section = ('<section id="e26" class="stage"><div class="stage-label">Etap 26 · V18 przygotowany</div>'
+            '<h2>IMU i wysokość z OptiTracka</h2><p class="lead">Osobny wariant kontynuacji '
+            'V16 best dodaje aktorowi wysokość korpusu. Rozkład trudnych niskich zrzutów '
+            'i budżet 30,02 mln przejść są takie jak w V17.</p>'
+            '<h3>Co mierzy nowy kanał</h3><p>Pozycja pionowa początku układu korpusu '
+            'względem stałej płaszczyzny lądowania, w metrach podzielonych przez 3. '
+            'Szum 5 mm, bias 5 mm na epizod i opóźnienie jednego kroku, czyli 20 ms, '
+            'są założeniami do kalibracji. Pomiar jest publikowany przy 50 Hz; '
+            'odczyt obserwacji nie losuje go ponownie.</p>'
+            '<p class="annotation">To model pomiaru, bez połączenia z NatNet. '
+            'Na robocie trzeba przeliczyć pozycję markerów na początek korpusu '
+            'i skalibrować płaszczyznę. Uginający się materac nie jest stałą powierzchnią.</p>'
+            '<h3>Migracja rodzica i porównanie z V17</h3><p>Aktor ma 351 wejść; krytyk '
+            'nadal 364. Nowy kanał jest dopisany na końcu aktora. Wagi i momenty Adam '
+            'dla niego startują od zera; pozostałe parametry i liczniki optymalizatora '
+            'są odtwarzane. Początkowe akcje pozostają zgodne z rodzicem. '
+            'V17 i V18 są dwiema kontynuacjami tego samego V16 best, '
+            'a nie kolejnymi etapami jednej linii uczenia.</p>'
+            '<h3>Weryfikacja i dalszy krok</h3>' + bullets(stage['done']) +
+            '<p>Uruchomienie: export LANDING_V18_CHECKPOINT ze ścieżką do V16 best, '
+            'potem sbatch experiments/test2.sh lub sbatch experiments/inertial_height_v18.sh. '
+            'V17 nadal można uruchomić dedykowanym skryptem inertial_v17.sh.</p>'
+            '<p><a href="../../experiments/landing_inertial_height_v18_README.md">Instrukcja V18 ↗</a></p></section>')
+        result = result.replace('<section id="dokumenty"', section + '<section id="dokumenty"', 1)
+    if data.get('v17_v18_completed'):
+        from experiments.reporting.progress_v17_v18_completed import build as completed_inertial
+        result=result.replace('<section id="dokumenty"',completed_inertial(table,videos)+'<section id="dokumenty"',1)
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _: '<section id="aktualnie" class="stage"><div class="stage-label">Aktualny stan · 13.11.2026</div><h2>V17 i V18: poprawa niskich zrzutów</h2><p class="lead">Obie kontynuacje zakończone. V17 best ma 96,09%, V18 best 95,85% średniej natywnej walidacji. Poprawa przy małych wysokościach wiąże się z utratą części skuteczności przy 1,5 m i 8 m/s. W tej parze treningów wysokość dla aktora nie daje wyraźnej przewagi.</p><p><a href="#e27">Wyniki, tabele, wykresy i filmy V17/V18 →</a></p></section>',result,count=1,flags=re.S)
+        result=result.replace('12.11.2026</div><h1>','13.11.2026</div><h1>').replace('Aktualizacja: 12 listopada 2026','Aktualizacja: 13 listopada 2026')
+    if data.get('v19_prepared'):
+        section = ('<section id="e28" class="stage"><div class="stage-label">Etap 28 · V19 przygotowany · 13.11.2026</div>'
+            '<h2>Do 10 m/s z równym udziałem wysokości</h2><p class="lead">Kontynuacja V17 best '
+            'ma odzyskać skuteczność przy 1,5 m i zbadać zakres 8–10 m/s bez zaniedbania '
+            'niskich zrzutów. Aktor nadal korzysta z historii i całki IMU, bez wysokości.</p>'
+            '<h3>Rodzic i ekspozycja</h3><p>Rodzic to V17 best po 20 971 520 krokach '
+            'kontynuacji i 109 051 904 łącznych przejściach. Kolejne 30 015 488 dają '
+            '139 067 392 łącznej ekspozycji. Odtwarzamy aktora, krytyka, Adam i std; '
+            'rozpoczynamy nowe epizody i liczniki przebiegu.</p><h3>Stała mieszanina prędkości</h3>'
+            + table(['Udział','Moduł prędkości'],[['40%','jednostajnie 5–8 m/s'],
+                ['20%','jednostajnie 8–10 m/s'],['10%','dokładnie 10 m/s'],
+                ['20%','jednostajnie 0–8 m/s'],['10%','zero']]) +
+            '<p>W każdej grupie niezależny, równomierny wybór wysokości 0,75 / 1 / 1,25 / 1,5 m. '
+            'Każda wysokość otrzymuje 25% epizodów; wszystkie kierunki poziome. '
+            'Nagroda, fizyka, PD, PPO, start od spoczynku i IMU pozostają zgodne z rodzicem.</p>'
+            '<h3>Ewaluacja chroniąca trudne przypadki</h3><p>Siatka obejmuje 16 prędkości '
+            'od 0 do 10 m/s, cztery wysokości i 64 próby na komórkę. Best wybiera '
+            'najgorsza komórka 6–10 m/s, z dodatkiem 0,001 średniej globalnej '
+            'i warunkiem nominalnym. Minimum jest szumne; wynik należy później '
+            'zweryfikować nowymi scenariuszami. Średnia na rozszerzonej siatce nie '
+            'jest bezpośrednio porównywalna ze średnią V17.</p>'
+            '<h3>Weryfikacja przygotowania</h3><p>100 tys. losowań potwierdziło proporcje '
+            'grup i wysokości. Przeszedł krótki test wznowienia PPO ze stanem '
+            'optymalizatora i 5 testów IMU. Pełny trening nie został lokalnie uruchomiony.</p>'
+            '<p><a href="../../experiments/landing_inertial_speed10_v19_README.md">Instrukcja uruchomienia V19 ↗</a></p></section>')
+        result=result.replace('<section id="dokumenty"',section+'<section id="dokumenty"',1)
+    if data.get('v19_completed'):
+        from experiments.reporting.progress_v19_completed import build as build_v19
+        result=result.replace('<section id="dokumenty"',build_v19(table,videos)+'<section id="dokumenty"',1)
+        result=re.sub(r'<section id="aktualnie".*?</section>',lambda _: '<section id="aktualnie" class="stage"><div class="stage-label">Aktualny stan · 14.11.2026</div><h2>V19 zakończony: odporność do 8 m/s odzyskana</h2><p class="lead">Latest ma 97,44% na wspólnej siatce do 8 m/s i przekracza punktowo 80% na każdej wysokości do tej prędkości. Zakres do 10 m/s nadal wymaga poprawy.</p><p><a href="#e29">V19: tabele, wykresy, filmy i wnioski →</a></p></section>',result,count=1,flags=re.S)
+        result=result.replace('13.11.2026</div><h1>','14.11.2026</div><h1>').replace('Aktualizacja: 13 listopada 2026','Aktualizacja: 14 listopada 2026')
+    if data.get('landing_walk_completed'):
+        from experiments.reporting.progress_landing_walk import build as build_walk, overview as walk_overview
+        walk_stage = stages[data['landing_walk_completed'] - 1]
+        result = result.replace('<section id="dokumenty"', build_walk(table, videos, walk_stage) + '<section id="dokumenty"', 1)
+        result = re.sub(r'<section id="aktualnie".*?</section>', lambda _: walk_overview(), result, count=1, flags=re.S)
+        result = result.replace('14.11.2026</div><h1>', '18.11.2026</div><h1>').replace('Aktualizacja: 14 listopada 2026', 'Aktualizacja: 18 listopada 2026')
+    if data.get('early_walk_completed'):
+        from experiments.reporting.progress_early_walk import build as build_early_walk, overview as early_walk_overview
+        early_walk_stage = stages[data['early_walk_completed'] - 1]
+        result = result.replace('<section id="dokumenty"', build_early_walk(table, videos, early_walk_stage) + '<section id="dokumenty"', 1)
+        result = re.sub(r'<section id="aktualnie".*?</section>', lambda _: early_walk_overview(), result, count=1, flags=re.S)
+    if data.get('v20_completed'):
+        from experiments.reporting.progress_v20_completed import build as build_v20, overview as v20_overview
+        v20_stage = stages[data['v20_completed'] - 1]
+        result = result.replace('<section id="dokumenty"', build_v20(table, videos, v20_stage) + '<section id="dokumenty"', 1)
+        result = re.sub(r'<section id="aktualnie".*?</section>', lambda _: v20_overview(), result, count=1, flags=re.S)
+        result = result.replace('18.11.2026</div><h1>', '19.11.2026</div><h1>').replace('Aktualizacja: 18 listopada 2026', 'Aktualizacja: 19 listopada 2026')
     result=result.replace('</style>','figure.chart{margin:28px 0}figure.chart img{display:block;width:100%;height:auto}figure.chart figcaption{color:var(--muted)}</style>',1)
     from experiments.reporting.report_side_tabs import apply_side_tabs
     result=apply_side_tabs(result,data)

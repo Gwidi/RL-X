@@ -59,30 +59,59 @@ class LandingContactMap:
                                    for i, leg in enumerate(CALF_LEGS)}
         self.foot_geom_to_leg = {model.geom(f"{leg}_foot").id: leg for leg in CALF_LEGS}
         self.foot_legs = sorted(CALF_LEGS)
+        # Per-geom lookup tables: classify all contacts with array indexing
+        # instead of building Python sets for every contact at every substep.
+        # geom_bodyid is structural, so randomized model copies share it.
+        ngeom = model.ngeom
+        def mask(ids):
+            result = np.zeros(ngeom, dtype=bool)
+            result[list(ids)] = True
+            return result
+        self.is_support_geom = mask(self.support_geom_ids)
+        self.is_robot_geom = np.asarray(model.geom_bodyid) != 0
+        self.is_allowed_geom = mask(self.allowed_support_geom_ids)
+        self.is_shin_geom = mask(self.shin_geom_ids)
+        self.foot_slot = np.full(ngeom, -1, dtype=int)
+        for g, leg in self.foot_geom_to_leg.items():
+            self.foot_slot[g] = self.foot_legs.index(leg)
+        self.calf_slot = np.full(ngeom, -1, dtype=int)
+        for g, i in self.calf_geom_to_index.items():
+            self.calf_slot[g] = i
+
+    def support_contact_mask(self, data):
+        """Boolean per contact: at least one geom is a support surface."""
+        return self.is_support_geom[data.contact.geom].any(axis=1)
 
     def support_contact_forces(self, model, data, include_calf_forces=False):
-        feet = dict.fromkeys(self.foot_legs, 0.0)
+        # Same contacts, same mj_contactForce calls and the same accumulation
+        # order as the original per-contact set logic; only classification is
+        # vectorized, so the returned values are bit-identical.
+        feet = [0.0] * len(self.foot_legs)
         calves = np.zeros(len(CALF_LEGS))
         shin = 0.0
-        forbidden = False
+        geoms = data.contact.geom
+        support = self.is_support_geom[geoms]
+        robot = self.is_robot_geom[geoms]
+        has_support = support.any(axis=1)
+        robot_allowed = (~robot | self.is_allowed_geom[geoms]).all(axis=1)
+        forbidden = bool(np.any(robot.any(axis=1) & ~(has_support & robot_allowed)))
         force = np.zeros(6)
-        allowed = self.allowed_support_geom_ids
-        for i, contact in enumerate(data.contact):
-            pair = {int(contact.geom1), int(contact.geom2)}
-            robot = {g for g in pair if model.geom_bodyid[g] != 0}
-            if robot and not (pair & self.support_geom_ids and robot <= allowed):
-                forbidden = True
-            if not pair & self.support_geom_ids:
-                continue
+        foot_slot, calf_slot, is_shin = self.foot_slot, self.calf_slot, self.is_shin_geom
+        for i in np.flatnonzero(has_support).tolist():
             mujoco.mj_contactForce(model, data, i, force)
             normal = abs(float(force[0]))
-            for g in pair & self.foot_geom_ids:
-                feet[self.foot_geom_to_leg[g]] += normal
-            if pair & self.shin_geom_ids:
+            g1, g2 = geoms[i].tolist()
+            for g in (g1, g2):
+                slot = foot_slot[g]
+                if slot >= 0:
+                    feet[slot] += normal
+            if is_shin[g1] or is_shin[g2]:
                 shin += normal
-            for g in pair & self.calf_geom_ids:
-                calves[self.calf_geom_to_index[g]] += normal
-        by_foot = np.array([feet[leg] for leg in self.foot_legs])
+            for g in (g1, g2):
+                slot = calf_slot[g]
+                if slot >= 0:
+                    calves[slot] += normal
+        by_foot = np.array(feet)
         result = (float(by_foot.sum()), float(by_foot.max()), by_foot, shin, forbidden)
         return result + (calves,) if include_calf_forces else result
 
@@ -131,8 +160,7 @@ class LandingSafetyMonitor:
         self.peak_calf = np.maximum(self.peak_calf, average[1])
         self.peak_foot_raw = np.maximum(self.peak_foot_raw, feet)
         self.peak_calf_raw = np.maximum(self.peak_calf_raw, calves)
-        contact_now = any(bool({int(c.geom1), int(c.geom2)} & self.contacts.support_geom_ids)
-                          for c in data.contact)
+        contact_now = bool(np.any(self.contacts.support_contact_mask(data)))
         if self.motor_diagnostics and not self.touched and not contact_now:
             torque = np.asarray(data.actuator_force)
             self.motor_flight_samples += 1

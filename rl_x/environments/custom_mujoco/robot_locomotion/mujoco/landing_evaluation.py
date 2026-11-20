@@ -62,11 +62,11 @@ class LandingLoads:
     def update(self, model, data):
         forces = {group: np.zeros(len(ids)) for group, ids in self.groups.items()}
         force = np.zeros(6)
-        for index, contact in enumerate(data.contact):
-            pair = {int(contact.geom1), int(contact.geom2)}
-            if self.floor not in pair:
-                continue
-            geom = next((g for g in pair if g != self.floor), -1)
+        # Only floor contacts, in contact order, as in the per-contact loop.
+        geoms = data.contact.geom
+        for index in np.flatnonzero(np.any(geoms == self.floor, axis=1)).tolist():
+            g1, g2 = geoms[index].tolist()
+            geom = g2 if g1 == self.floor else g1
             mujoco.mj_contactForce(model, data, index, force)
             for group, ids in self.groups.items():
                 if geom in ids:
