@@ -55,7 +55,9 @@ def export_walker(checkpoint, output):
 def handoff_profile(parent, weights):
     profile = speed10_profile()
     profile['environment']['landing_handoff'] = dict(
-        enabled=True, walk_weights=str(weights), walk_sha256=WALKER_SHA, walk_speed_limit=.6)
+        enabled=True, walk_weights=str(weights), walk_sha256=WALKER_SHA, walk_speed_limit=.6,
+        gate_min_foot_force_n=0., gate_min_base_height_m=.20,
+        gate_max_horizontal_speed_mps=3., gate_horizontal_speed_inclusive=False)
     # An explicit timeout failure is recorded by the landing task at five seconds.
     profile['algorithm'].update(total_timesteps=30_015_488, learning_rate=1e-5, entropy_coef=.002)
     profile['runner'].update(load_model=str(parent), exp_name='landing_walk_handoff_v20',

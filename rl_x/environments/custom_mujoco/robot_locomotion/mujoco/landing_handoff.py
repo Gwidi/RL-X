@@ -44,6 +44,14 @@ class LandingHandoff:
         self.enabled = bool(cfg.get('enabled', False))
         if self.enabled:
             self.speed_limit = float(cfg['walk_speed_limit'])
+            self.min_foot_force = float(cfg.get('gate_min_foot_force_n', 10.))
+            self.min_base_height = float(cfg.get('gate_min_base_height_m', .16))
+            self.max_horizontal_speed = float(cfg.get('gate_max_horizontal_speed_mps', 2.5))
+            self.horizontal_speed_inclusive = cfg.get('gate_horizontal_speed_inclusive', True)
+            if (not np.all(np.isfinite([self.min_foot_force, self.min_base_height, self.max_horizontal_speed]))
+                    or self.min_foot_force < 0. or self.min_base_height < 0.
+                    or self.max_horizontal_speed <= 0.):
+                raise ValueError('Invalid handoff gate thresholds')
             if not env.landing_braking.enabled or self.speed_limit < env.landing_braking.final_speed:
                 raise ValueError('Handoff requires active braking and a cap >= final speed')
             self.weights = walking_weights(cfg['walk_weights'], cfg['walk_sha256'])
@@ -69,11 +77,17 @@ class LandingHandoff:
                 or env.landing_braking.elapsed() + 1e-8 < .08):
             return False
         model, data = state['mj_model'], state['data']
-        foot_force, *_ = state['landing_safety'].contacts.support_contact_forces(model, data)
-        return bool(foot_force > 10. and data.qpos[2] > .16
-                    and data.site_xmat[env.imu_site_id, 8] > np.cos(np.deg2rad(40.))
-                    and abs(data.qvel[2]) < .85 and np.linalg.norm(data.qvel[3:6]) < 4.5
-                    and np.linalg.norm(data.qvel[:2]) <= 2.5)
+        speed = np.linalg.norm(data.qvel[:2])
+        within_speed = (speed <= self.max_horizontal_speed if self.horizontal_speed_inclusive
+                        else speed < self.max_horizontal_speed)
+        if not (data.qpos[2] > self.min_base_height and within_speed
+                and data.site_xmat[env.imu_site_id, 8] > np.cos(np.deg2rad(40.))
+                and abs(data.qvel[2]) < .85 and np.linalg.norm(data.qvel[3:6]) < 4.5):
+            return False
+        if self.min_foot_force > 0.:
+            foot_force, *_ = state['landing_safety'].contacts.support_contact_forces(model, data)
+            return bool(foot_force > self.min_foot_force)
+        return True
 
     def world_command(self):
         env = self.env
