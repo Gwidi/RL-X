@@ -19,11 +19,11 @@ PARENT_SHA = '5cdf9b332e4a0b68a1f452d73a7810437f847de51e73fcc170e96a2adfd1ecf3'
 WALKER_SHA = '1006f7ce5955cb84d56f302aa5175ec69b1b013372736da4ce01dbbae29d063d'
 
 
-def input_path(variable, default, digest):
+def input_path(variable, default, digest, *other_digests):
     path = Path(os.environ.get(variable, str(ROOT / default))).expanduser().resolve()
     if not path.is_file():
         raise FileNotFoundError(f'Set {variable} to the checkpoint file. Missing: {path}')
-    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+    if hashlib.sha256(path.read_bytes()).hexdigest() not in (digest, *other_digests):
         raise ValueError(f'{variable}: unexpected checkpoint SHA256: {path}')
     return path
 
