@@ -601,7 +601,8 @@ class PPO:
             wandb.save(f"{self.save_path}/{file_name}", base_path=self.save_path)
 
 
-    def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
+    def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params, model_class=None):
+        model_class = model_class or PPO
         # New IMU inputs change both network input dimensions. Reject a
         # mismatched checkpoint before extraction with an actionable message.
         saved_env = {}
@@ -656,7 +657,7 @@ class PPO:
                         if f'algorithm.{key}' not in explicitly_set_algorithm_params and key in config.algorithm:
                             config.algorithm[key] = value
                     archive.extractall(checkpoint_dir)
-                model = PPO(config, train_env, eval_env, run_path, writer)
+                model = model_class(config, train_env, eval_env, run_path, writer)
                 restore_handoff_parent(model, checkpoint_dir)
             return model
         # Multiple runs can warm-start from the same archive on shared storage.
@@ -667,7 +668,7 @@ class PPO:
             for key, value in loaded_algorithm_config.items():
                 if f"algorithm.{key}" not in explicitly_set_algorithm_params and key in config.algorithm:
                     config.algorithm[key] = value
-            model = PPO(config, train_env, eval_env, run_path, writer)
+            model = model_class(config, train_env, eval_env, run_path, writer)
 
             target = {"policy": model.policy_state, "critic": model.critic_state}
             # Restore the old shape before appending V18's height feature.
