@@ -72,7 +72,14 @@ class EnergyDissipationCurriculumInitialState:
             if not np.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError("Nominal replay probabilities must be between 0 and 1")
         self.factorized = None
-        if env.env_config.get("landing_uniform_speed10", False):
+        if env.env_config.get("landing_real_drive_mix", False):
+            if any(env.env_config.get(k, False) for k in ("landing_uniform_speed10", "landing_balanced_replay")) or any(
+                curriculum_config.get(k, False) for k in (
+                    "focused_velocity_enabled", "height_then_velocity_enabled", "factorized_enabled")):
+                raise ValueError("V22 mixture requires other curricula disabled")
+            from .real_drive_mix import RealDriveMix
+            self.factorized = RealDriveMix(self)
+        elif env.env_config.get("landing_uniform_speed10", False):
             if env.env_config.get('landing_balanced_replay', False) or any(
                 curriculum_config.get(k, False) for k in (
                     'focused_velocity_enabled', 'height_then_velocity_enabled', 'factorized_enabled')):

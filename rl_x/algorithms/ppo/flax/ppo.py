@@ -618,6 +618,10 @@ class PPO:
             if saved_mat.get("profile") and (not current_mat.get("profile") or any(
                     saved_mat[key] != current_mat.get(key) for key in ("sha256", "calf_contact"))):
                 raise ValueError("Checkpoint uses a different landing mat; restore its saved contact profile")
+            saved_actuators = saved_env.get("landing_actuators", {})
+            if saved_actuators.get("profile") and (
+                    saved_actuators["sha256"] != config.environment.get("landing_actuators", {}).get("sha256")):
+                raise ValueError("Checkpoint uses different landing drive limits; restore its saved actuator profile")
             saved_height = saved_env.get('policy_height', {})
             current_height = config.environment.get('policy_height', {})
             if saved_height.get('enabled', False) and dict(saved_height) != dict(current_height):

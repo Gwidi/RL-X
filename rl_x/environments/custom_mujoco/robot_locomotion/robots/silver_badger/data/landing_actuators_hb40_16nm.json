@@ -1,0 +1,11 @@
+{
+  "id": "hb40_drive_16nm_v1",
+  "leg_joint_torque_nm": 16.0,
+  "spine_joint_torque_nm": 16.0,
+  "spine_range_rad": [-0.785, 0.785],
+  "sources": {
+    "leg_joint_torque_nm": "HB40 bridge source enables every drive at 24 A / 16 Nm; robot URDF effort 16; arXiv 2503.08375: 9 Nm nominal, 18 Nm peak",
+    "spine_joint_torque_nm": "Same 16 Nm drive setting; URDF says 48 and the old model 28.26, so 16 is the conservative choice until MAB confirms",
+    "spine_range_rad": "Robot URDF sp_j0 limit"
+  }
+}

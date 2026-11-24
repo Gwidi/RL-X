@@ -163,6 +163,10 @@ class LandingEvaluationWrapper(gym.Wrapper):
             fingerprint.update(mat["sha256"].encode())
             for value in (model.pair_geom1, model.pair_geom2, model.pair_solref, model.pair_solimp):
                 fingerprint.update(value.tobytes())
+        actuators = env.env_config.get("landing_actuators", {})
+        if actuators.get("profile"):
+            fingerprint.update(actuators["sha256"].encode())
+            fingerprint.update(model.actuator_forcerange.tobytes())
         from .policy_velocity import velocity_observation_contract
         velocity_contract = velocity_observation_contract(env.env_config.get("policy_velocity", {}))
         self.case_info = dict(worker=self.worker_index, episode=self.episode,
@@ -177,6 +181,8 @@ class LandingEvaluationWrapper(gym.Wrapper):
                               initial_qpos=data.qpos.tolist(), initial_qvel=data.qvel.tolist())
         if mat.get("profile"):
             self.case_info.update(landing_mat_sha256=mat["sha256"], landing_mat_calf_contact=mat["calf_contact"])
+        if actuators.get("profile"):
+            self.case_info.update(landing_actuators_sha256=actuators["sha256"])
         if env.policy_inertial_observation.enabled:
             sensor = env.policy_inertial_observation
             self.case_info.update(
