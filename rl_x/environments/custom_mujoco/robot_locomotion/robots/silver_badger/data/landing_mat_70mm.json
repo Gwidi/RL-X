@@ -1,0 +1,12 @@
+{
+  "solref": [-1419.119988049968, -36.59503555356089],
+  "solimp": [0.45, 0.92, 0.105, 0.5, 2.0],
+  "calibration": {
+    "impactor_mass_kg": 20.0,
+    "impactor_diameter_m": 0.10,
+    "drop_height_m": 0.80,
+    "deflection_m": 0.070,
+    "rebound_m": 0.030,
+    "peak_normal_force_n": 2766.164204
+  }
+}

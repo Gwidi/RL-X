@@ -1,4 +1,4 @@
-"""Continue V20 on a mat calibrated for 40 mm of impactor deflection."""
+"""Continue V20 on the calibrated landing mat."""
 
 import hashlib
 import json
@@ -19,19 +19,20 @@ PARENT_RUNS = {
     'b6cf8114cd1f50eaa8333745172d2e491f4576497b3901612e3cb2861733d60c': '9684297',
     '48c00d297d5d103f477b5e84258549e6ce8252412ba5f7b9ff201b184caee77c': '9697297',
 }
-MAT_PROFILE = 'rl_x/environments/custom_mujoco/robot_locomotion/robots/silver_badger/data/landing_mat_40mm.json'
+MAT_PROFILE = 'rl_x/environments/custom_mujoco/robot_locomotion/robots/silver_badger/data/landing_mat_70mm.json'
 PARENT_STEPS = 30_015_488
 
 
 def training_profile(parent, weights):
     mat, digest = read_landing_mat(MAT_PROFILE)
+    deflection_mm = 1000 * mat['calibration']['deflection_m']
     profile = v20.handoff_profile(parent, weights)
     profile['environment']['landing_mat'] = dict(profile=MAT_PROFILE, sha256=digest, calf_contact=False)
     profile['runner'].update(
         exp_name='landing_walk_mat40_v21',
         run_name=os.environ.get('RUN_NAME') or 'landing_walk_mat40_v21_' + os.environ.get('SLURM_JOB_ID', 'local'),
         notes=('V21 continues final V20: actor, critic, learned handoff and Adam. '
-               '40 mm impactor deflection with the same calibrated surface in training and evaluation. '
+               f'{deflection_mm:g} mm impactor deflection with the same calibrated surface in training and evaluation. '
                'Both calf-floor pairs per leg removed. Frozen E19 and the current V20 handoff gate. '
                '30,015,488 new transitions.'),
     )
