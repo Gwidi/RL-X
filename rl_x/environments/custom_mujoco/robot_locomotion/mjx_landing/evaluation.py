@@ -18,7 +18,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_velocity_gr
 
 
 MEASUREMENTS = {
-    'success_rate': 'curriculum/landing_success', 'episode_return': 'episode_return', 'episode_length': 'episode_length',
+    'success_rate': 'curriculum/landing_success', 'upright_success_rate': 'metrics/upright_success', 'episode_return': 'episode_return', 'episode_length': 'episode_length',
     'unresolved_rate': 'outcome/unresolved',
     **{f'failure_{name}_rate': f'outcome/failure_{name}' for name in FAILURES if name != 'unresolved'},
     **{name: f'metrics/{name}' for name in (
@@ -118,6 +118,7 @@ class LandingGrid:
         metrics.update({
             'eval/landing_success_rate': float(np.mean([c['success_rate'] for c in velocity])),
             'eval/episode_return': float(returns.mean()),
+            'eval/upright_success_rate': float(policy['upright_success_rate'][[v > 0 for _, v in self.cells]].mean()),
             'eval/landing_episode_count': self.episodes * len(velocity),
             'eval/worst_cell_success_rate': min(c['success_rate'] for c in selection),
             'eval/nominal_eligible': float(all(

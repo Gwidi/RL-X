@@ -6,6 +6,8 @@ LANDING_V22_ARM=warm continues V19 latest (LANDING_V22_CHECKPOINT); the default
 runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch.
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
+LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
+LANDING_V22_PARENT_STEPS rejects a parent with a different step count.
 """
 
 import json
@@ -52,7 +54,7 @@ def verify_continue_parent(path, steps=None):
     if algorithm['name'] != 'ppo.flax':
         raise ValueError(f"Parent was saved by {algorithm['name']}, expected ppo.flax")
     if steps is not None and metrics['nr_env_steps'] != steps:
-        raise ValueError(f"The continue arm needs V22 warm latest.model at {steps} steps, "
+        raise ValueError(f"The parent must be a checkpoint at {steps} steps, "
                          f"this checkpoint has {metrics['nr_env_steps']}")
     expected = real_drive_profile('')['environment']
     if environment.get('landing_actuators') != expected['landing_actuators']:
@@ -113,6 +115,15 @@ def mjx_profile(arm, parent=''):
              'learning rate 3e-5 decays linearly to 0')
     if ppo:
         origin += '; PPO ' + ', '.join(f'{k}={v:g}' for k, v in ppo.items())
+    max_speed = float(os.environ.get('LANDING_V22_MAX_SPEED') or 5.)
+    if max_speed != 5.:
+        profile['environment'].setdefault('mjx', {})['max_speed'] = max_speed
+        evaluation = profile['environment']['landing_evaluation']
+        grid = [float(v) for v in evaluation['velocity_grid'].split(',')]
+        grid += [float(v) for v in range(int(grid[-1]) + 1, int(max_speed) + 1)]
+        evaluation['velocity_grid'] = ','.join(f'{v:g}' for v in grid)
+        evaluation['selection_speed_max'] = 5.  # best is chosen on the old range plus 3-5 m/s; faster cells are reported only
+        origin += f'; release speed extended to {max_speed:g} m/s (20% of episodes in 5-{max_speed:g})'
     slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
     if slip_scale is not None:
         profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)
@@ -167,7 +178,9 @@ def main():
         if not parent.is_file():
             raise FileNotFoundError(f'Set LANDING_V22_CHECKPOINT to the parent latest.model. Missing: {parent}')
         from experiments.train_landing_real_drives_v22 import ADDITIONAL_STEPS
-        print('Parent:', parent, verify_continue_parent(parent, ADDITIONAL_STEPS if arm == 'continue' else None), flush=True)
+        required = os.environ.get('LANDING_V22_PARENT_STEPS')
+        required = int(required) if required else ADDITIONAL_STEPS if arm == 'continue' else None
+        print('Parent:', parent, verify_continue_parent(parent, required), flush=True)
     profile = mjx_profile(arm, parent)
     fingerprint = verify_controller()
     if '--check-only' in sys.argv:

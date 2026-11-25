@@ -33,6 +33,16 @@ GROUP_EDGES = (.1, .5, .8)
 GROUP_LOW, GROUP_HIGH = (0., 0., 2., 3.5), (0., 2., 3.5, 5.)
 
 
+def speed_mixture(max_speed):
+    """(edges, low, high) of the speed groups. 5 m/s is the V22 mixture: 10% vertical, 40/30/20% up to 5 m/s.
+    Above 5 m/s a fifth group takes 20% of the episodes: 10% vertical, 30/25/15/20%."""
+    if max_speed == 5.:
+        return GROUP_EDGES, GROUP_LOW, GROUP_HIGH
+    if max_speed < 5.:
+        raise ValueError('mjx.max_speed must be at least 5 m/s')
+    return (.1, .4, .65, .8), (0., 0., 2., 3.5, 5.), (0., 2., 3.5, 5., float(max_speed))
+
+
 @struct.dataclass
 class State:
     data: mjx.Data
@@ -86,6 +96,7 @@ class LandingMjxEnv:
         limb = env_config['mjx']['limb_contact']
         self.soft_limbs, self.limb_force_limit = bool(limb['soft']), float(limb['force_limit'])
         self.slip_penalty_scale = float(env_config['mjx']['slip_penalty_scale'])
+        self.speed_groups = speed_mixture(float(env_config['mjx']['max_speed']))
         self.braking_reference = env_config['mjx']['braking_reference']
         if self.braking_reference not in ('track', 'upper', 'off'):
             raise ValueError('mjx.braking_reference must be track, upper or off')
@@ -314,11 +325,12 @@ class LandingMjxEnv:
 
     @highest_precision
     def sample_pool(self, key, size, scale=1., pose_scale=1.):
-        """RealDriveMix conditions followed by the launch fixture."""
+        """RealDriveMix conditions (extended by mjx.max_speed) followed by the launch fixture."""
         keys = jax.random.split(key, 5)
         height = jnp.asarray(HEIGHTS)[jax.random.randint(keys[0], (size,), 0, len(HEIGHTS))]
-        group = jnp.searchsorted(jnp.asarray(GROUP_EDGES), jax.random.uniform(keys[1], (size,)), side='right')
-        low, high = jnp.asarray(GROUP_LOW)[group], jnp.asarray(GROUP_HIGH)[group]
+        edges, lows, highs = (jnp.asarray(x) for x in self.speed_groups)
+        group = jnp.searchsorted(edges, jax.random.uniform(keys[1], (size,)), side='right')
+        low, high = lows[group], highs[group]
         speed = low + (high - low) * jax.random.uniform(keys[2], (size,))
         azimuth = jax.random.uniform(keys[3], (size,), maxval=2 * jnp.pi)
         velocity = speed[:, None] * jnp.stack([jnp.cos(azimuth), jnp.sin(azimuth)], -1)
@@ -568,6 +580,9 @@ class LandingMjxEnv:
             'inertial/release_speed_xy': task['release_speed'],
             'metrics/inertial_velocity_error': jnp.linalg.norm(estimate - data.qvel[:, :2], axis=-1),
             'metrics/inertial_estimated_speed': jnp.linalg.norm(estimate, axis=-1),
+            # The landing success test ignores orientation: this also requires tilt < 45 deg and the base above 0.2 m.
+            'metrics/upright_success': (success & (1 - 2 * (data.qpos[:, 4] ** 2 + data.qpos[:, 5] ** 2) > np.cos(np.pi / 4))
+                                        & (data.qpos[:, 2] > .2)) * 1.,
             'metrics/inertial_clipped_fraction': imu['clipped'] / jnp.maximum(imu['samples'], 1),
             'metrics/peak_body_acceleration': task['peak_acceleration'],
             'metrics/peak_body_acceleration_raw': task['peak_acceleration_raw'],

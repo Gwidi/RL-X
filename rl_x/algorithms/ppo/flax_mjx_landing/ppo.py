@@ -22,7 +22,7 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.evaluation imp
 
 rlx_logger = logging.getLogger("rl_x")
 
-GROUPS = {"landing_nominal_replay": (0,), "landing_replay": (1,), "landing_current": (2, 3)}
+GROUPS = {"landing_nominal_replay": (0,), "landing_replay": (1,), "landing_current": (2, 3, 4)}
 
 
 def with_learning_rate(state, learning_rate):

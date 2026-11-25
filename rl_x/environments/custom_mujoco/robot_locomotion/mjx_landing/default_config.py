@@ -26,6 +26,8 @@ def get_config(environment_name):
         # Braking term of the reward: track = follow the decaying reference speed vector, upper = penalise only speeds above
         # the reference speed (braking faster is free, direction is free), off = no braking term.
         braking_reference='track',
+        # Highest release speed of the training mixture, m/s. 5 is the V22 mixture; above it a 5..max_speed group is added.
+        max_speed=5.,
         # Multiplier of the loaded-slip penalty (the CPU config keeps its weight, so checkpoints stay compatible).
         # 0 removes the penalty; loaded_slip_integral is still measured and logged.
         slip_penalty_scale=1.,
