@@ -35,6 +35,9 @@ class ContactTables:
         self.allowed = jnp.asarray(contact_map.is_allowed_geom)
         self.body = jnp.asarray(body_geom_mask)
         self.geom_body = jnp.asarray(model.geom_bodyid)
+        # Thigh and calf links (l1, l2). With soft limb contact their touches are limited by force, not forbidden.
+        names = [model.body(int(b)).name for b in model.geom_bodyid]
+        self.limb = jnp.asarray([n[:2] in ('rl', 'rr', 'fr', 'fl') and n[3:] in ('l1', 'l2') for n in names])
         self.nr_feet, self.nr_calves = len(foot_geom_ids), len(contact_map.calf_geom_ids)
         self.nr_supports = len(contact_map.allowed_support_geom_ids)
         self.nr_foot_geoms = len(contact_map.foot_geom_ids)
@@ -63,7 +66,8 @@ def active_contacts(data, tables):
     return active, world, geom, force
 
 
-def contact_metrics(data, tables, nr_worlds):
+def contact_metrics(data, tables, nr_worlds, soft_limbs=False):
+    """soft_limbs: thigh and calf touches leave `forbidden` alone and are reported as `limb_force` (N, summed per world)."""
     active, world, geom, force = active_contacts(data, tables)
 
     def per_slot(slots, size):
@@ -80,7 +84,9 @@ def contact_metrics(data, tables, nr_worlds):
     calves, _ = per_slot(tables.calf_slot, tables.nr_calves)
     return dict(feet_force=feet, calf_force=calves, feet_contact=feet_contact,
                 floor=any_contact(jnp.ones_like(active)), body=any_contact(tables.body[geom]),
-                forbidden=any_contact(~tables.allowed[geom]))
+                forbidden=any_contact(~tables.allowed[geom] & ~(tables.limb[geom] & soft_limbs)),
+                limb_force=jax.ops.segment_sum(jnp.where(active & ~tables.allowed[geom] & tables.limb[geom], force, 0.),
+                                               world, nr_worlds))
 
 
 # MJX-Warp OverflowType bits that mean "iteration limit reached", not "buffer too

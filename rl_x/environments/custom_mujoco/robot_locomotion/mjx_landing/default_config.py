@@ -20,5 +20,11 @@ def get_config(environment_name):
         # Release pose: home + f * (standing - home). f = scale for a share 1 - home_probability of the episodes and 0 for the
         # rest. stand_fraction 0 disables it. scale ramps from 0 to stand_fraction over ramp_steps training steps.
         release_pose=dict(stand_fraction=0., home_probability=.2, ramp_steps=0),
+        # soft: thigh and calf touches are allowed while their normal force, averaged over 10 ms, stays below force_limit [N];
+        # above it the episode ends like any forbidden contact. Hip links, trunk and rear body stay forbidden.
+        limb_contact=dict(soft=False, force_limit=200.),
+        # Braking term of the reward: track = follow the decaying reference speed vector, upper = penalise only speeds above
+        # the reference speed (braking faster is free, direction is free), off = no braking term.
+        braking_reference='track',
     )
     return config

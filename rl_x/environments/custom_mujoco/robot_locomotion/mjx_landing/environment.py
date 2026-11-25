@@ -83,6 +83,11 @@ class LandingMjxEnv:
         self.max_tilt, self.max_rate = np.deg2rad(disturbance['max_tilt_deg']), np.deg2rad(disturbance['max_rate_dps'])
         self.disturbed = bool(self.max_tilt or self.max_rate)
         pose = env_config['mjx']['release_pose']
+        limb = env_config['mjx']['limb_contact']
+        self.soft_limbs, self.limb_force_limit = bool(limb['soft']), float(limb['force_limit'])
+        self.braking_reference = env_config['mjx']['braking_reference']
+        if self.braking_reference not in ('track', 'upper', 'off'):
+            raise ValueError('mjx.braking_reference must be track, upper or off')
         self.stand_fraction, self.home_probability = float(pose['stand_fraction']), float(pose['home_probability'])
         self.warp_model = mjx.put_model(self.model, impl='warp')
         self._data_templates = {}
@@ -338,6 +343,7 @@ class LandingMjxEnv:
             contact_started=false, foot_contact=false, forbidden=false, min_height=data.qpos[:, 2],
             foot_history=jnp.zeros((n, self.force_window, self.tables.nr_feet)),
             calf_history=jnp.zeros((n, self.force_window, self.tables.nr_calves)),
+            limb_history=jnp.zeros((n, self.force_window)), peak_limb=zeros,
             peak_foot=zeros, peak_calf=zeros,
             acceleration_history=jnp.zeros((n, self.acceleration_window)),
             peak_acceleration=zeros, peak_acceleration_raw=zeros, peak_impact=zeros,
@@ -373,6 +379,8 @@ class LandingMjxEnv:
         push = lambda history, value: jnp.concatenate([history[:, 1:], value[:, None]], 1)
         foot_history = push(task['foot_history'], contacts['feet_force'])
         calf_history = push(task['calf_history'], contacts['calf_force'])
+        limb_history = push(task['limb_history'], contacts['limb_force'])
+        limb_exceeded = (limb_history.mean(1) > self.limb_force_limit) if self.soft_limbs else jnp.zeros_like(started)
         history = jnp.where(started[:, None], push(task['acceleration_history'], acceleration), task['acceleration_history'])
         average = jnp.where(started, history.mean(-1), 0.)
         window = jnp.where(started & contacts['body'], self.acceleration_window, task['impact_window'])
@@ -383,7 +391,8 @@ class LandingMjxEnv:
             floor=totals['floor'] | contacts['floor'], body=totals['body'] + contacts['body'])
         task = {**task, 'contact_started': started,
                 'foot_contact': task['foot_contact'] | (contacts['feet_force'].sum(-1) > 0),
-                'forbidden': task['forbidden'] | contacts['forbidden'],
+                'forbidden': task['forbidden'] | contacts['forbidden'] | limb_exceeded,
+                'limb_history': limb_history, 'peak_limb': jnp.maximum(task['peak_limb'], limb_history.mean(1)),
                 'min_height': jnp.minimum(task['min_height'], data.qpos[:, 2]),
                 'foot_history': foot_history, 'calf_history': calf_history,
                 'peak_foot': jnp.maximum(task['peak_foot'], foot_history.mean(1).max(-1)),
@@ -465,8 +474,13 @@ class LandingMjxEnv:
         # Braking
         velocity = data.qvel[:, :2]
         reference = self._reference(task, elapsed_steps)
-        error = ((velocity - reference) ** 2).sum(-1)
+        if self.braking_reference == 'upper':  # only being faster than the reference costs
+            error = jnp.maximum(jnp.linalg.norm(velocity, axis=-1) - jnp.linalg.norm(reference, axis=-1), 0.) ** 2
+        else:
+            error = ((velocity - reference) ** 2).sum(-1)
         tracking = jnp.where(touched, b.weight * self.dt * jnp.exp(-error / b.sigma ** 2), 0.)
+        if self.braking_reference == 'off':
+            tracking = jnp.zeros_like(tracking)
         filtered, slip_value, slip_cost = self._loaded_slip(task, data, elapsed_steps)
         slip_cost = jnp.where(touched, slip_cost, 0.)
         slip_value = jnp.where(touched, slip_value, 0.)
@@ -560,7 +574,7 @@ class LandingMjxEnv:
             'metrics/peak_leg_motor_torque': task['peak_leg'], 'metrics/peak_spine_motor_torque': task['peak_spine'],
             'metrics/leg_tau_squared_integral': task['leg_tau_squared'],
             'metrics/spine_tau_squared_integral': task['spine_tau_squared'],
-            'metrics/peak_foot_force_10ms': task['peak_foot'], 'metrics/peak_calf_force_10ms': task['peak_calf'],
+            'metrics/peak_limb_force_10ms': task['peak_limb'], 'metrics/peak_foot_force_10ms': task['peak_foot'], 'metrics/peak_calf_force_10ms': task['peak_calf'],
             'metrics/safety_min_base_height': task['min_height'],
             'metrics/landing_stable_time': task['stable'] * self.dt,
             'metrics/braking_tracking_mse': task['tracking_error'] / jnp.maximum(task['tracked_time'], self.dt),
@@ -584,7 +598,7 @@ class LandingMjxEnv:
             data, imu, task, totals, overflow, _ = carry
             data = self._physics(data)
             imu = self.sensor.physics_step(imu, data.sensordata)
-            contacts = contact_metrics(data, self.tables, n)
+            contacts = contact_metrics(data, self.tables, n, self.soft_limbs)
             task, totals = self._substep_task(task, data, contacts, totals)
             return (data, imu, task, totals, overflow | contact_overflow(data), contacts['feet_contact']), None
 

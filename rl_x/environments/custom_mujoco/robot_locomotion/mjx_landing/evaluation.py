@@ -22,7 +22,7 @@ MEASUREMENTS = {
     'unresolved_rate': 'outcome/unresolved',
     **{f'failure_{name}_rate': f'outcome/failure_{name}' for name in FAILURES if name != 'unresolved'},
     **{name: f'metrics/{name}' for name in (
-        'peak_foot_force_10ms', 'peak_calf_force_10ms', 'peak_body_acceleration', 'peak_body_acceleration_raw',
+        'peak_foot_force_10ms', 'peak_calf_force_10ms', 'peak_limb_force_10ms', 'peak_body_acceleration', 'peak_body_acceleration_raw',
         'peak_base_impact_acceleration', 'peak_leg_motor_torque', 'peak_spine_motor_torque', 'leg_tau_squared_integral',
         'spine_tau_squared_integral', 'safety_min_base_height', 'braking_tracking_mse', 'loaded_slip_integral',
         'inertial_velocity_error', 'inertial_estimated_speed', 'inertial_clipped_fraction')},

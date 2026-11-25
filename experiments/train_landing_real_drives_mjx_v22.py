@@ -18,6 +18,8 @@ CONTINUE_STEPS = 39_976_960  # 305 updates
 # Imperfect release: roll/pitch up to 30 deg, body angular rate up to 15 deg/s, ramped in over 153 updates.
 # Release from the standing pose: moved in from the landing pose over 229 updates, 20% of the episodes stay at home.
 STANDING_STEPS, STAND_RELEASE = 90_046_464, dict(stand_fraction=1., home_probability=.2, ramp_steps=30_015_488)
+# Soft thigh/calf contact: allowed up to 200 N (10 ms mean); LANDING_V22_REFERENCE selects the braking term (track, upper, off).
+SOFT_STEPS = 60_030_976
 DISTURBED_STEPS, DISTURBANCE = 60_030_976, dict(max_tilt_deg=30., max_rate_dps=15., ramp_steps=20_054_016)
 
 
@@ -68,22 +70,29 @@ def mjx_profile(arm, parent=''):
     from experiments.train_landing_real_drives_fresh_v22 import TOTAL_STEPS
     from experiments.train_landing_real_drives_v22 import ADDITIONAL_STEPS, real_drive_profile
     steps = dict(warm=ADDITIONAL_STEPS, fresh=TOTAL_STEPS)
-    steps.update({'continue': CONTINUE_STEPS, 'disturbed': DISTURBED_STEPS, 'standing': STANDING_STEPS})
+    steps.update({'continue': CONTINUE_STEPS, 'disturbed': DISTURBED_STEPS, 'standing': STANDING_STEPS, 'soft': SOFT_STEPS})
     if arm not in steps:
-        raise ValueError('LANDING_V22_ARM must be warm, fresh, continue, disturbed or standing')
+        raise ValueError('LANDING_V22_ARM must be warm, fresh, continue, disturbed, standing or soft')
     profile = real_drive_profile(parent)
     name = dict(warm='landing_real_drives_mjx_v22', fresh='landing_real_drives_mjx_fresh_v22',
-                disturbed='landing_real_drives_mjx_disturbed_v22', standing='landing_real_drives_mjx_standing_v22').get(
+                disturbed='landing_real_drives_mjx_disturbed_v22', standing='landing_real_drives_mjx_standing_v22',
+                soft='landing_real_drives_mjx_soft_v22').get(
         arm, 'landing_real_drives_mjx_continue_v22')
     profile['algorithm'].update(name='ppo.flax_mjx_landing', nr_steps=NR_STEPS, total_timesteps=steps[arm],
-                                final_learning_rate={'continue': 0., 'disturbed': 1e-5, 'standing': 1e-5}.get(arm, -1.))
+                                final_learning_rate={'continue': 0., 'disturbed': 1e-5, 'standing': 1e-5, 'soft': 1e-5}.get(arm, -1.))
     profile['environment'].update(name='custom_mujoco.robot_locomotion.mjx_landing', nr_envs=NR_ENVS)
     if arm == 'disturbed':
         profile['environment']['mjx'] = dict(release_disturbance=dict(DISTURBANCE))
     if arm == 'standing':
         profile['environment']['mjx'] = dict(release_pose=dict(STAND_RELEASE))
+    if arm == 'soft':
+        reference = os.environ.get('LANDING_V22_REFERENCE', 'track')
+        profile['environment']['mjx'] = dict(limb_contact=dict(soft=True, force_limit=200.), braking_reference=reference)
     origin = dict(warm='continues V19 latest (job 9591668): actor, critic, Adam, learned std',
                   fresh='from scratch: new actor, critic, Adam and std 0.15',
+                  soft='continues a V22 checkpoint where thigh and calf touches are allowed up to 200 N (10 ms mean) and end the '
+                       f"episode above it; braking term: {os.environ.get('LANDING_V22_REFERENCE', 'track')}; learning rate 3e-5 decays "
+                       'linearly to 1e-5',
                   standing='continues a V22 checkpoint released from the symmetric standing pose (moved in from the landing '
                            'pose over 30M steps, 20% of the episodes stay at the landing pose, evaluation always from standing); '
                            'learning rate 3e-5 decays linearly to 1e-5',
@@ -136,7 +145,7 @@ def main():
         from experiments.train_landing_real_drives_v22 import verify_parent
         parent = input_path('LANDING_V22_CHECKPOINT', 'modelsv19/latest.model', PARENT_SHA)
         verify_parent(parent)
-    elif arm in ('continue', 'disturbed', 'standing'):
+    elif arm in ('continue', 'disturbed', 'standing', 'soft'):
         parent = Path(os.environ.get('LANDING_V22_CHECKPOINT', '')).expanduser().resolve()
         if not parent.is_file():
             raise FileNotFoundError(f'Set LANDING_V22_CHECKPOINT to the parent latest.model. Missing: {parent}')

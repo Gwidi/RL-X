@@ -66,6 +66,21 @@ LANDING_V22_ARM=standing LANDING_V22_CHECKPOINT=/pelna/sciezka/latest.model \
   sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
 ```
 
+**Miękki kontakt uda i łydki** (`LANDING_V22_ARM=soft`): dotyk uda i łydki (ogniwa l1, l2) jest dozwolony, dopóki suma siły normalnej
+tych kontaktów uśredniona po 10 ms nie przekroczy 200 N (`mjx.limb_contact.force_limit`, ok. 1,5 × ciężar robota). Powyżej próba kończy się
+jak przy każdym niedozwolonym kontakcie (w logach jako `disallowed_contact`). Biodro, tułów i tylny korpus nadal kończą próbę.
+`env_info/metrics/peak_limb_force_10ms` i `eval/grid/.../peak_limb_force_10ms` pokazują siłę. Pomiar, z którego wzięto próg, jest w
+`docs/artifacts/v22_contact_diagnostic_2026-11-25`: przy 100–200 N odzyskuje się ok. 90% prób, powyżej 400 N prawie żadna.
+`LANDING_V22_REFERENCE` wybiera człon hamowania w nagrodzie: `track` (domyślnie, jak dotąd), `upper` (kara tylko za prędkość powyżej referencji,
+hamować szybciej wolno) albo `off` (brak członu). 60 030 976 kroków, LR 3e-5 maleje do 1e-5, rodzic: dowolny `latest.model` V22.
+Niewytrenowany rodzic nie zyskuje na tej regule (przy 5 m/s 39,5%, tyle samo co ze ścisłą), bo nie uczył się lekkich dotyków; zysk ma dać dopiero trening.
+Bez walidacji na CPU: środowisko CPU nie ma tej reguły.
+
+```bash
+LANDING_V22_ARM=soft LANDING_V22_REFERENCE=track LANDING_V22_CHECKPOINT=/pelna/sciezka/latest.model \
+  sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
+```
+
 Bez `--runner.track_wandb=False` potrzebny jest `WANDB_API_KEY` w terminalu, z którego idzie `sbatch`.
 
 ## Co jest takie samo

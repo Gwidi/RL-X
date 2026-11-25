@@ -59,11 +59,13 @@ class Diagnostic:
                          (model.body(i).name for i in range(model.nbody))])
         self.limb, self.relaxed = jnp.asarray(limb), False
 
-        def contact_metrics(data, tables, n):
-            result = original['contact_metrics'](data, tables, n)
-            active, world, geom, _ = active_contacts(data, tables)
+        def contact_metrics(data, tables, n, soft_limbs=False):
+            result = original["contact_metrics"](data, tables, n, soft_limbs)
+            active, world, geom, force = active_contacts(data, tables)
             bad = active & ~tables.allowed[geom]
             body = tables.geom_body[geom]
+            # Normal force of thigh and calf contacts, summed per world (no feet: those are allowed supports).
+            result['limb_force'] = jax.ops.segment_sum(jnp.where(bad & self.limb[body], force, 0.), world, n)
             index = world * model.nbody + body
             result['fbody'] = jax.ops.segment_max(bad.astype(jnp.int32), index, n * model.nbody).reshape(n, model.nbody) > 0
             if self.relaxed:  # only limb contacts are forgiven
@@ -78,7 +80,8 @@ class Diagnostic:
             task = original['initial_task'](data, height, velocity, duration)
             n = height.shape[0]
             task.update(fbody=jnp.zeros((n, model.nbody), bool), tforb=jnp.zeros(n, jnp.int32), vforb=jnp.zeros(n),
-                        limb=jnp.zeros(n, bool), tlimb=jnp.zeros(n, jnp.int32))
+                        limb=jnp.zeros(n, bool), tlimb=jnp.zeros(n, jnp.int32),
+                        lf_history=jnp.zeros((n, env.force_window)), lf_peak=jnp.zeros(n))
             return task
 
         def substep_task(task, data, contacts, totals):
@@ -88,12 +91,14 @@ class Diagnostic:
                         tforb=jnp.where(new, task['step'], task['tforb']),
                         vforb=jnp.where(new, jnp.linalg.norm(data.qvel[:, :2], axis=-1), task['vforb']),
                         limb=task['limb'] | contacts['limb_touch'])
+            history = jnp.concatenate([task['lf_history'][:, 1:], contacts['limb_force'][:, None]], 1)
+            task.update(lf_history=history, lf_peak=jnp.maximum(task['lf_peak'], history.mean(1)))  # 10 ms mean, like the foot force
             return task, totals
 
         def info(task, imu, data, *args):
             result = original['info'](task, imu, data, *args)
             result.update({'T/forbidden': task['limb'], 'T/fbody': task['fbody'], 'T/tforb': task['tforb'],
-                           'T/vforb': task['vforb'], 'T/qpos': data.qpos})
+                           'T/vforb': task['vforb'], 'T/qpos': data.qpos, 'T/lf_peak': task['lf_peak']})
             return result
 
         E.contact_metrics, env._initial_task, env._substep_task, env._info = contact_metrics, initial_task, substep_task, info
