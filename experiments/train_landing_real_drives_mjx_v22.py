@@ -100,6 +100,10 @@ def mjx_profile(arm, parent=''):
                             'to 15 deg/s, ramped over 20M steps); learning rate 3e-5 decays linearly to 1e-5').get(
         arm, 'continues V22 warm latest (job 9730655, 60,030,976 steps): actor, critic, Adam, learned std; '
              'learning rate 3e-5 decays linearly to 0')
+    slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
+    if slip_scale is not None:
+        profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)
+        origin += f'; loaded-slip penalty x{float(slip_scale):g}'
     profile['runner'].update(
         load_model=str(parent), exp_name=name, run_name=os.environ.get('RUN_NAME') or
         f"{name}_{os.environ.get('SLURM_JOB_ID', 'local')}",

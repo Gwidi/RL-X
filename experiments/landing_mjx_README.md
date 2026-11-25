@@ -81,6 +81,11 @@ LANDING_V22_ARM=soft LANDING_V22_REFERENCE=track LANDING_V22_CHECKPOINT=/pelna/s
   sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
 ```
 
+**Kara za poślizg** (`LANDING_V22_SLIP_SCALE`, dowolne ramię): mnożnik kary za poślizg stóp pod obciążeniem. `0` ją usuwa, `1` zostawia
+(domyślnie). Waga w konfiguracji CPU zostaje 5, więc checkpointy pozostają zgodne; mnożnik jest tylko w `mjx.slip_penalty_scale`.
+`loaded_slip_integral` jest nadal mierzony i logowany, więc widać, czy polityka nauczyła się ślizgać. Uwaga: tarcie w symulacji jest stałe i
+nie jest randomizowane, więc nauczone ślizganie może nie przenieść się na inną podłogę.
+
 Bez `--runner.track_wandb=False` potrzebny jest `WANDB_API_KEY` w terminalu, z którego idzie `sbatch`.
 
 ## Co jest takie samo

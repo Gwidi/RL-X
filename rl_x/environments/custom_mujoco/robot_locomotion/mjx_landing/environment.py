@@ -85,6 +85,7 @@ class LandingMjxEnv:
         pose = env_config['mjx']['release_pose']
         limb = env_config['mjx']['limb_contact']
         self.soft_limbs, self.limb_force_limit = bool(limb['soft']), float(limb['force_limit'])
+        self.slip_penalty_scale = float(env_config['mjx']['slip_penalty_scale'])
         self.braking_reference = env_config['mjx']['braking_reference']
         if self.braking_reference not in ('track', 'upper', 'off'):
             raise ValueError('mjx.braking_reference must be track, upper or off')
@@ -437,7 +438,7 @@ class LandingMjxEnv:
         value = (weights * speed2).sum(-1) / self.tables.nr_foot_geoms
         elapsed = elapsed_steps * self.dt
         ramp = (elapsed >= slip.delay) * 1. if slip.ramp == 0 else jnp.clip((elapsed - slip.delay) / slip.ramp, 0, 1)
-        return filtered, value, slip.weight * self.dt * ramp * value
+        return filtered, value, self.slip_penalty_scale * slip.weight * self.dt * ramp * value
 
     def _point_velocity(self, data, world, body, position):
         """mj_jac(point) @ qvel with the kinematics of the last forward pass.
