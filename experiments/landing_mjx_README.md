@@ -54,6 +54,18 @@ LANDING_V22_ARM=disturbed LANDING_V22_CHECKPOINT=/pelna/sciezka/latest.model \
 
 Walidacja na CPU z tym samym zaburzeniem: `compare_mjx_cpu_grid.py --model ... --tilt 30 --rate 15`.
 
+**Start z pozy stania** (`LANDING_V22_ARM=standing`): wypuszczenie z symetrycznej pozy stania (kręgosłup 0, hipy ∓0,1, uda ±0,8,
+łydki ±1,5; `STAND_POSE` w `environment.py`) zamiast z pozy lądowania. Poza wchodzi stopniowo: interpolacja od pozy lądowania do stania
+przez pierwsze 30 015 488 kroków (`rollout/pose_scale`), 20% epizodów zostaje na pozie lądowania. Ewaluacja zawsze ze stania we wszystkich
+komórkach. 90 046 464 kroków, LR 3e-5 maleje do 1e-5. Rodzic: dowolny `latest.model` V22; sensownie ostatni z kontynuacji V19.
+Reguły sukcesu i kontaktu bez zmian. Nie ma jeszcze walidacji na CPU dla tego ramienia: środowisko CPU nie startuje ze stania.
+Niewytrenowany rodzic ma ze stania ok. 0–6% sukcesu (`docs/artifacts/v22_contact_diagnostic_2026-11-25`).
+
+```bash
+LANDING_V22_ARM=standing LANDING_V22_CHECKPOINT=/pelna/sciezka/latest.model \
+  sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
+```
+
 Bez `--runner.track_wandb=False` potrzebny jest `WANDB_API_KEY` w terminalu, z którego idzie `sbatch`.
 
 ## Co jest takie samo

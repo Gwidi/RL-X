@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.environment import FAILURES
+from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.environment import FAILURES, STAND_POSE
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_evaluation import evaluation_heights
 from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_velocity_grid import boundary_summary, wilson
 
@@ -50,7 +50,10 @@ class LandingGrid:
         tilt = rate = None
         if env.disturbed:  # every cell, the zero-action baseline included, gets the same imperfect release
             tilt, rate = env.sample_disturbance(jax.random.fold_in(launch_key, 7), count)
-        self.pool = jax.jit(env.launch)(jax.random.split(launch_key, count), height, velocity, tilt=tilt, rate=rate)
+        pose = None
+        if env.stand_fraction:  # evaluation always releases from the full standing pose
+            pose = env.nominal + env.stand_fraction * (jnp.asarray(STAND_POSE, jnp.float32) - env.nominal)
+        self.pool = jax.jit(env.launch)(jax.random.split(launch_key, count), height, velocity, tilt=tilt, rate=rate, pose=pose)
         if bool(self.pool['invalid']):
             raise RuntimeError('Evaluation launch touched the terrain or overflowed a contact buffer')
         zeros = jnp.zeros((count,) + env.single_action_space.shape)

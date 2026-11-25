@@ -17,5 +17,8 @@ def get_config(environment_name):
         # direction and magnitude ~ U(0, rate). Zero disables it. The magnitude ramps from 0 to
         # its maximum over ramp_steps training steps; evaluation always uses the maximum.
         release_disturbance=dict(max_tilt_deg=0., max_rate_dps=0., ramp_steps=0),
+        # Release pose: home + f * (standing - home). f = scale for a share 1 - home_probability of the episodes and 0 for the
+        # rest. stand_fraction 0 disables it. scale ramps from 0 to stand_fraction over ramp_steps training steps.
+        release_pose=dict(stand_fraction=0., home_probability=.2, ramp_steps=0),
     )
     return config

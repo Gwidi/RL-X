@@ -23,6 +23,8 @@ from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_safety impo
     BODY_ACCELERATION_WINDOW, CALF_FORCE_WINDOW, FOOT_FORCE_WINDOW, landing_violations)
 
 
+# Symmetric standing pose (plane.xml_backup): spine, then RL, RR, FR, FL hip/thigh/calf.
+STAND_POSE = (0., -.1, -.8, 1.5, .1, .8, -1.5, -.1, .8, -1.5, .1, -.8, 1.5)
 FAILURES = ('motor_hard_limit', 'base_crash', 'disallowed_contact', 'calf_force', 'foot_force',
             'body_acceleration', 'base_height', 'unresolved')
 # Categories of the V22 mixture: vertical, 0-2, 2-3.5, 3.5-5 m/s.
@@ -80,6 +82,8 @@ class LandingMjxEnv:
         disturbance = env_config['mjx']['release_disturbance']
         self.max_tilt, self.max_rate = np.deg2rad(disturbance['max_tilt_deg']), np.deg2rad(disturbance['max_rate_dps'])
         self.disturbed = bool(self.max_tilt or self.max_rate)
+        pose = env_config['mjx']['release_pose']
+        self.stand_fraction, self.home_probability = float(pose['stand_fraction']), float(pose['home_probability'])
         self.warp_model = mjx.put_model(self.model, impl='warp')
         self._data_templates = {}
         cpu.close()
@@ -135,6 +139,8 @@ class LandingMjxEnv:
         f32 = lambda x: jnp.asarray(x, jnp.float32)
         self.nominal = f32(state['actuator_joint_nominal_positions'])
         self.home_qpos = f32(cpu.initial_qpos)
+        # Joint pose at release. The policy still sees joints relative to the home pose.
+        self.release_pose = self.nominal  # (13,) default release pose; launch also takes one per world
         self.action_scale = float(np.asarray(state['scaling_factor']))
         if np.any(state['position_offsets']):
             raise ValueError('MJX landing expects zero actuator position offsets')
@@ -217,13 +223,14 @@ class LandingMjxEnv:
         return jax.vmap(lambda d: mjx.forward(self.warp_model, d))(data)
 
     @highest_precision
-    def launch(self, keys, height, velocity, controls=None, tilt=None, rate=None):
+    def launch(self, keys, height, velocity, controls=None, tilt=None, rate=None, pose=None):
         """Batched prepare_release: released (qpos, qvel, qacc_warmstart), IMU
         state, task state and first observation for given height and velocity.
 
         tilt (n, 2): roll and pitch in rad, applied like the CPU euler "xyz" start.
         rate (n, 3): body angular velocity in rad/s. The fixture applies no torque,
-        so the body keeps turning at that rate during the launch."""
+        so the body keeps turning at that rate during the launch.
+        pose (n, 13): joint pose at release, held by the PD during the launch (default: self.release_pose)."""
         n = keys.shape[0]
         split = jax.vmap(lambda k: jax.random.split(k, 2))(keys)
         if controls is None:
@@ -231,14 +238,15 @@ class LandingMjxEnv:
         duration, substeps = controls * self.dt, controls * self.nr_substeps
         template = self.data_template(n)
         qpos = jnp.tile(self.home_qpos, (n, 1)).at[:, 2].set(self.center_height + height)
-        qpos = qpos.at[:, self.qpos_index].set(self.nominal)
+        pose = jnp.broadcast_to(self.release_pose if pose is None else pose, (n,) + self.nominal.shape)
+        qpos = qpos.at[:, self.qpos_index].set(pose)
         qpos = qpos.at[:, :2].add(-velocity * duration[:, None] / 2)
         tilt = jnp.zeros((n, 2)) if tilt is None else tilt
         rate = jnp.zeros((n, 3)) if rate is None else rate
         qpos = qpos.at[:, 3:7].set(tilt_quaternion(tilt))
         qvel = jnp.zeros((n, self.model.nv)).at[:, 3:6].set(rate)
-        control = self.control(jnp.zeros(self.gear.shape))
-        data = jax.vmap(lambda q, v: template.replace(qpos=q, qvel=v, ctrl=control))(qpos, qvel)
+        control = self.control((pose - self.nominal) / self.action_scale)  # PD holds the release pose, (n, 13)
+        data = jax.vmap(lambda q, v, c: template.replace(qpos=q, qvel=v, ctrl=c))(qpos, qvel, control)
         data = self._forward(data)
         rotation = data.site_xmat[:, self.imu_site].reshape(n, 3, 3)
         imu = self.sensor.init(split[:, 1], rotation,
@@ -272,6 +280,8 @@ class LandingMjxEnv:
         task = self._initial_task(data, height, velocity, duration)
         task['roll_deg'], task['pitch_deg'] = jnp.rad2deg(tilt[:, 0]), jnp.rad2deg(tilt[:, 1])
         task['rate_dps'] = jnp.rad2deg(jnp.linalg.norm(rate, axis=-1))
+        span = jnp.asarray(STAND_POSE, jnp.float32) - self.nominal
+        task['pose_fraction'] = ((pose - self.nominal) * span).sum(-1) / (span ** 2).sum()
         release = dict(qpos=data.qpos, qvel=data.qvel, qacc_warmstart=data.qacc_warmstart)
         observation = self._observation(data, imu, task, jnp.zeros((n,) + self.gear.shape),
                                         jnp.zeros((n, self.tables.nr_feet), bool))
@@ -288,8 +298,16 @@ class LandingMjxEnv:
         magnitude = jax.random.uniform(magnitude_key, (size, 1)) * self.max_rate * scale
         return tilt, direction * magnitude
 
+    def sample_release_pose(self, key, size, scale=1.):
+        """(size, 13) release poses between home and the standing pose."""
+        if not self.stand_fraction:
+            return jnp.broadcast_to(self.nominal, (size,) + self.nominal.shape)
+        standing = jax.random.uniform(key, (size, 1)) >= self.home_probability
+        fraction = jnp.where(standing, self.stand_fraction * scale, 0.)
+        return self.nominal + fraction * (jnp.asarray(STAND_POSE, jnp.float32) - self.nominal)
+
     @highest_precision
-    def sample_pool(self, key, size, scale=1.):
+    def sample_pool(self, key, size, scale=1., pose_scale=1.):
         """RealDriveMix conditions followed by the launch fixture."""
         keys = jax.random.split(key, 5)
         height = jnp.asarray(HEIGHTS)[jax.random.randint(keys[0], (size,), 0, len(HEIGHTS))]
@@ -299,7 +317,8 @@ class LandingMjxEnv:
         azimuth = jax.random.uniform(keys[3], (size,), maxval=2 * jnp.pi)
         velocity = speed[:, None] * jnp.stack([jnp.cos(azimuth), jnp.sin(azimuth)], -1)
         tilt, rate = self.sample_disturbance(jax.random.fold_in(key, 7), size, scale)
-        pool = self.launch(jax.random.split(keys[4], size), height, velocity, tilt=tilt, rate=rate)
+        pose = self.sample_release_pose(jax.random.fold_in(key, 8), size, pose_scale)
+        pool = self.launch(jax.random.split(keys[4], size), height, velocity, tilt=tilt, rate=rate, pose=pose)
         pool['task']['group'] = group
         return pool
 
@@ -529,7 +548,7 @@ class LandingMjxEnv:
             'curriculum/v22_height': task['height'], 'curriculum/v22_speed': task['speed'],
             'curriculum/initial_height': task['height'], 'curriculum/initial_speed_xy': task['release_speed'],
             'curriculum/initial_roll_deg': task['roll_deg'], 'curriculum/initial_pitch_deg': task['pitch_deg'],
-            'curriculum/initial_rate_dps': task['rate_dps'],
+            'curriculum/initial_rate_dps': task['rate_dps'], 'curriculum/initial_pose_fraction': task['pose_fraction'],
             'inertial/launch_duration_s': task['launch_duration'], 'inertial/requested_speed_xy': task['speed'],
             'inertial/release_speed_xy': task['release_speed'],
             'metrics/inertial_velocity_error': jnp.linalg.norm(estimate - data.qvel[:, :2], axis=-1),

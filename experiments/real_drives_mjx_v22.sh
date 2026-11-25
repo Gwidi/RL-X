@@ -11,8 +11,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
 
-# LANDING_V22_ARM=fresh (default), warm, continue or disturbed; warm (V19 latest), continue
-# (V22 warm latest) and disturbed (any V22 latest) also need LANDING_V22_CHECKPOINT.
+# LANDING_V22_ARM=fresh (default), warm, continue, disturbed or standing; warm (V19 latest), continue
+# (V22 warm latest), disturbed and standing (any V22 latest) also need LANDING_V22_CHECKPOINT.
 set -euo pipefail
 if [[ -n "${RLX_PROJECT_ROOT:-}" ]]; then
     SCRIPT_DIR="$RLX_PROJECT_ROOT/experiments"
