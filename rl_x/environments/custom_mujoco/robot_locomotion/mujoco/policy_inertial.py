@@ -112,8 +112,9 @@ class PolicyInertialObservation:
         env = self.env
         model, data = env.internal_state["mj_model"], env.internal_state["data"]
         target = np.asarray(requested_velocity, dtype=float)
-        if target.shape != (model.nv,) or not np.all(np.isfinite(target)) or np.any(np.abs(target[2:]) > 1e-10):
-            raise ValueError("Observed inertial launch supports horizontal velocity only, with zero initial spin/joint velocity")
+        if (target.shape != (model.nv,) or not np.all(np.isfinite(target)) or abs(target[2]) > 1e-10
+                or np.any(np.abs(target[6:]) > 1e-10)):
+            raise ValueError("Observed inertial launch supports horizontal velocity and body spin only, with zero joint velocity")
         rng = self._seeded_rng()
         low = int(round(self.contract["launch_min_s"] / env.dt))
         high = int(round(self.contract["launch_max_s"] / env.dt))
@@ -123,6 +124,7 @@ class PolicyInertialObservation:
         controls = int(rng.integers(low, high+1))
         duration = controls * env.dt
         data.qvel[:] = 0.  # Known rest, never jump from rest directly to target velocity.
+        data.qvel[3:6] = target[3:6]  # Release spin: the fixture applies no torque, so it persists.
         data.qpos[:2] -= target[:2] * duration / 2
         data.ctrl[:] = env.control_function.process_action(np.zeros(env.nr_actuator_joints))
         mujoco.mj_forward(model, data)

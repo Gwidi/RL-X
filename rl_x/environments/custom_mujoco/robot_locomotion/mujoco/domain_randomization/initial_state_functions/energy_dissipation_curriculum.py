@@ -25,6 +25,8 @@ class EnergyDissipationCurriculumInitialState:
 
         self.min_angle_deg = curriculum_config.get("min_angle_deg", 5.0)
         self.max_angle_deg = curriculum_config.get("max_angle_deg", 25.0)
+        # Imperfect release: body angular rate with a random direction and magnitude U(0, max). Zero keeps no spin.
+        self.max_angular_velocity_dps = curriculum_config.get("max_angular_velocity_dps", 0.0)
 
         self.min_lateral_velocity = curriculum_config.get(
             "min_lateral_velocity", 0.2
@@ -327,8 +329,12 @@ class EnergyDissipationCurriculumInitialState:
         # Swobodny spadek -> początkowe v_z = 0.
         linear_vel_z = 0.0
 
-        # Brak początkowego spinu.
+        # Brak początkowego spinu, chyba że wypuszczenie jest zaburzone (max_angular_velocity_dps).
         angular_velocities = np.zeros(3)
+        if self.max_angular_velocity_dps > 0.0 and not curriculum["replay_nominal"]:
+            direction = self.env.np_rng.normal(size=3)
+            angular_velocities = direction / max(np.linalg.norm(direction), 1e-9) * np.deg2rad(
+                self.max_angular_velocity_dps) * self.env.np_rng.uniform()
 
         # --------------------------------------------------------------
         # POSITION

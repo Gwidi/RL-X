@@ -28,13 +28,15 @@ def cpu_cell(job):
     from experiments.analysis.check_mjx_parity import actor, v22_config
     from experiments.train_landing_inertial_v16 import make_inertial_env
     from rl_x.environments.custom_mujoco.robot_locomotion.mujoco.landing_evaluation import LandingEvaluationWrapper
-    height, speed, seeds, params = job
+    height, speed, seeds, params, tilt, rate = job
     if _env is None:
         _env = LandingEvaluationWrapper(make_inertial_env('test', v22_config()), 0)
     base, results = _env.env, []
     for seed in seeds:
         _env.configure_landing_evaluation(dict(base.env_config['landing_evaluation'], height=height, perturbed=speed > 0,
-                                               max_lateral_velocity=speed, velocity_sampling='speed_ring', seed=seed))
+                                               max_lateral_velocity=speed, velocity_sampling='speed_ring', seed=seed,
+                                               release_disturbed=tilt > 0 or rate > 0, max_angle_deg=tilt,
+                                               max_angular_velocity_dps=rate))
         obs, info = _env.reset()
         done = False
         while not done:
@@ -56,6 +58,8 @@ def main():
     parser.add_argument('--heights', help='default: the V22 grid')
     parser.add_argument('--speeds', help='default: the V22 grid; must start at 0')
     parser.add_argument('--seed', type=int, default=0, help='nonzero selects independent scenarios on both backends')
+    parser.add_argument('--tilt', type=float, default=0., help='imperfect release: roll/pitch up to this many degrees')
+    parser.add_argument('--rate', type=float, default=0., help='imperfect release: body rate up to this many deg/s')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     from experiments.analysis.check_mjx_parity import actor, actor_params, make_mjx_env, v22_config
@@ -73,7 +77,7 @@ def main():
     if args.backend != 'mjx':
         chunk = 8
         first = 50_000 + 100_000 * args.seed
-        jobs = [(h, v, list(range(first + s, first + min(s + chunk, args.episodes))), params)
+        jobs = [(h, v, list(range(first + s, first + min(s + chunk, args.episodes))), params, args.tilt, args.rate)
                 for h in heights for v in speeds for s in range(0, args.episodes, chunk)]
         with ProcessPoolExecutor(args.workers, mp_context=multiprocessing.get_context('spawn')) as pool:
             for height, speed, part in pool.map(cpu_cell, jobs):
@@ -86,6 +90,7 @@ def main():
     if args.backend != 'cpu':
         import jax
         from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.evaluation import LandingGrid
+        config['mjx'] = dict(release_disturbance=dict(max_tilt_deg=args.tilt, max_rate_dps=args.rate, ramp_steps=0))
         env = make_mjx_env(config)
         device_params = jax.tree.map(jax.numpy.asarray, params)
         grid = LandingGrid(env, evaluation, args.episodes, lambda p, obs: actor(

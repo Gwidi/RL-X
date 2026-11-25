@@ -47,7 +47,10 @@ class LandingGrid:
         launch_key, azimuth_key = jax.random.split(jax.random.PRNGKey(config['seed']))
         azimuth = jax.random.uniform(azimuth_key, (count,), maxval=2 * jnp.pi)
         velocity = speed[:, None] * jnp.stack([jnp.cos(azimuth), jnp.sin(azimuth)], -1)
-        self.pool = jax.jit(env.launch)(jax.random.split(launch_key, count), height, velocity)
+        tilt = rate = None
+        if env.disturbed:  # every cell, the zero-action baseline included, gets the same imperfect release
+            tilt, rate = env.sample_disturbance(jax.random.fold_in(launch_key, 7), count)
+        self.pool = jax.jit(env.launch)(jax.random.split(launch_key, count), height, velocity, tilt=tilt, rate=rate)
         if bool(self.pool['invalid']):
             raise RuntimeError('Evaluation launch touched the terrain or overflowed a contact buffer')
         zeros = jnp.zeros((count,) + env.single_action_space.shape)

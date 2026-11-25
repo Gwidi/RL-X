@@ -44,6 +44,7 @@ class PPO(FlaxPPO):
         if self.anneal_learning_rate:
             raise ValueError("Use final_learning_rate: a schedule inside Adam changes the checkpoint layout")
         self.final_learning_rate = config.algorithm.final_learning_rate
+        self.disturbance_ramp_steps = config.environment.mjx.release_disturbance.ramp_steps
         self.pool_size = config.environment.mjx.reset_pool_size
         if self.pool_size < self.nr_envs:
             raise ValueError("mjx.reset_pool_size must be at least nr_envs")
@@ -54,12 +55,16 @@ class PPO(FlaxPPO):
         remaining = 1 - global_step / self.total_timesteps
         return self.final_learning_rate + (self.learning_rate - self.final_learning_rate) * remaining
 
+    def disturbance_scale(self, global_step):
+        """Release disturbance grows linearly from 0 to its maximum over ramp_steps."""
+        return min(1., global_step / self.disturbance_ramp_steps) if self.disturbance_ramp_steps else 1.
+
     def train(self):
         env = self.train_env
 
         @jax.jit
-        def sample_pool(key):
-            return env.sample_pool(key, self.pool_size)
+        def sample_pool(key, scale):
+            return env.sample_pool(key, self.pool_size, scale)
 
         @jax.jit
         def start(pool):
@@ -156,19 +161,20 @@ class PPO(FlaxPPO):
         grid = LandingGrid(self.eval_env, self.landing_evaluation_config.to_dict(), self.evaluation_episodes,
                            self.deterministic_action)
         self.key, pool_key = jax.random.split(self.key)
-        env_state = start(sample_pool(jax.random.fold_in(pool_key, 0)))
+        env_state = start(sample_pool(jax.random.fold_in(pool_key, 0), self.disturbance_scale(0)))
         # All worlds start at release. Without a burn-in the first rollouts contain
         # only early failures, because no landing can succeed within nr_steps.
         for i in range(-(-env.horizon // self.nr_steps)):
             self.key, burn_in_key = jax.random.split(self.key)
-            burn_in_pool = sample_pool(jax.random.fold_in(pool_key, 2 ** 30 + i))
+            burn_in_pool = sample_pool(jax.random.fold_in(pool_key, 2 ** 30 + i), self.disturbance_scale(0))
             env_state, *_ = rollout(self.policy_state, self.critic_state, env_state, burn_in_pool, 0, burn_in_key)
         global_step = nr_updates = nr_episodes = 0
         previous_end = logging_time = None
 
         while global_step < self.total_timesteps:
             start_time = time.time()
-            pool = sample_pool(jax.random.fold_in(pool_key, 1 + global_step // self.batch_size))
+            pool = sample_pool(jax.random.fold_in(pool_key, 1 + global_step // self.batch_size),
+                               self.disturbance_scale(global_step))
             env_state, batch, rollout_metrics, self.key = rollout(
                 self.policy_state, self.critic_state, env_state, pool, 0, self.key)
             rollout_metrics = jax.device_get(rollout_metrics)
@@ -206,6 +212,7 @@ class PPO(FlaxPPO):
                 self._save_best_and_latest(evaluation_metrics, global_step)
             saving_end = time.time()
 
+            self.logged_step = global_step - self.batch_size  # the scale used for this rollout's pool
             metrics = self._rollout_log(rollout_metrics)
             metrics.update(evaluation_metrics)
             metrics.update({"steps/nr_env_steps": global_step, "steps/nr_updates": nr_updates, "steps/nr_episodes": nr_episodes,
@@ -260,6 +267,7 @@ class PPO(FlaxPPO):
                     result[f"rollout/{name}_success_rate"], result[f"rollout/{name}_count"] = rate, int(size)
             for name in ("episode_return", "episode_length"):
                 result[f"rollout/{name}"] = m["episode"][name]
+        result["rollout/disturbance_scale"] = self.disturbance_scale(self.logged_step)
         result["rollout/solver_limit_worlds"] = float(m["solver_limit"])
         result["rollout/reset_pool_use"] = float(m["resets"]) / self.pool_size
         for name, value in m["step"].items():

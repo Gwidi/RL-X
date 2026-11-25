@@ -137,7 +137,9 @@ class LandingEvaluationWrapper(gym.Wrapper):
         initial.height_reference = self.case.get("height_reference", "clearance")
         initial.start_height = initial.target_height = self.case["height"]
         initial.velocity_sampling = self.case.get("velocity_sampling", "component_box")
-        initial.min_angle_deg = initial.max_angle_deg = self.case["max_angle_deg"] if perturbed else 0.0
+        disturbed = perturbed or self.case.get("release_disturbed", False)  # imperfect release, also at zero speed
+        initial.min_angle_deg = initial.max_angle_deg = self.case["max_angle_deg"] if disturbed else 0.0
+        initial.max_angular_velocity_dps = self.case.get("max_angular_velocity_dps", 0.0) if disturbed else 0.0
         initial.min_lateral_velocity = initial.max_lateral_velocity = self.case["max_lateral_velocity"] if perturbed else 0.0
         initial.replay_easy_probability = 0.0
         curriculum = initial._get_curriculum_state()

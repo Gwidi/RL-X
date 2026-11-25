@@ -49,6 +49,15 @@ def select(mask, new, old):
     return jax.tree.map(lambda a, b: jnp.where(mask.reshape(mask.shape + (1,) * (a.ndim - 1)), a, b), new, old)
 
 
+def tilt_quaternion(tilt):
+    """Quaternion (w, x, y, z) of scipy's extrinsic "xyz" rotation by roll, then pitch."""
+    half = tilt / 2
+    cos, sin = jnp.cos(half), jnp.sin(half)
+    roll_w, roll_x, pitch_w, pitch_y = cos[:, 0], sin[:, 0], cos[:, 1], sin[:, 1]
+    # q = q_pitch * q_roll
+    return jnp.stack([pitch_w * roll_w, pitch_w * roll_x, pitch_y * roll_w, -pitch_y * roll_x], -1)
+
+
 def highest_precision(function):
     """The runner sets a low default matmul precision for the networks. IMU
     integration would not survive TF32, so tasks are traced at full float32."""
@@ -68,6 +77,9 @@ class LandingMjxEnv:
         cpu.reset()
         self._read_cpu_environment(cpu)
         self.nr_envs = env_config['nr_envs']
+        disturbance = env_config['mjx']['release_disturbance']
+        self.max_tilt, self.max_rate = np.deg2rad(disturbance['max_tilt_deg']), np.deg2rad(disturbance['max_rate_dps'])
+        self.disturbed = bool(self.max_tilt or self.max_rate)
         self.warp_model = mjx.put_model(self.model, impl='warp')
         self._data_templates = {}
         cpu.close()
@@ -205,9 +217,13 @@ class LandingMjxEnv:
         return jax.vmap(lambda d: mjx.forward(self.warp_model, d))(data)
 
     @highest_precision
-    def launch(self, keys, height, velocity, controls=None):
+    def launch(self, keys, height, velocity, controls=None, tilt=None, rate=None):
         """Batched prepare_release: released (qpos, qvel, qacc_warmstart), IMU
-        state, task state and first observation for given height and velocity."""
+        state, task state and first observation for given height and velocity.
+
+        tilt (n, 2): roll and pitch in rad, applied like the CPU euler "xyz" start.
+        rate (n, 3): body angular velocity in rad/s. The fixture applies no torque,
+        so the body keeps turning at that rate during the launch."""
         n = keys.shape[0]
         split = jax.vmap(lambda k: jax.random.split(k, 2))(keys)
         if controls is None:
@@ -217,8 +233,12 @@ class LandingMjxEnv:
         qpos = jnp.tile(self.home_qpos, (n, 1)).at[:, 2].set(self.center_height + height)
         qpos = qpos.at[:, self.qpos_index].set(self.nominal)
         qpos = qpos.at[:, :2].add(-velocity * duration[:, None] / 2)
+        tilt = jnp.zeros((n, 2)) if tilt is None else tilt
+        rate = jnp.zeros((n, 3)) if rate is None else rate
+        qpos = qpos.at[:, 3:7].set(tilt_quaternion(tilt))
+        qvel = jnp.zeros((n, self.model.nv)).at[:, 3:6].set(rate)
         control = self.control(jnp.zeros(self.gear.shape))
-        data = jax.vmap(lambda q: template.replace(qpos=q, ctrl=control))(qpos)
+        data = jax.vmap(lambda q, v: template.replace(qpos=q, qvel=v, ctrl=control))(qpos, qvel)
         data = self._forward(data)
         rotation = data.site_xmat[:, self.imu_site].reshape(n, 3, 3)
         imu = self.sensor.init(split[:, 1], rotation,
@@ -250,6 +270,8 @@ class LandingMjxEnv:
             substep, (data, imu, touched, overflow), jnp.arange(self.launch_high * self.nr_substeps))
         data = self._forward(data.replace(xfrc_applied=jnp.zeros_like(data.xfrc_applied), time=jnp.zeros(n)))
         task = self._initial_task(data, height, velocity, duration)
+        task['roll_deg'], task['pitch_deg'] = jnp.rad2deg(tilt[:, 0]), jnp.rad2deg(tilt[:, 1])
+        task['rate_dps'] = jnp.rad2deg(jnp.linalg.norm(rate, axis=-1))
         release = dict(qpos=data.qpos, qvel=data.qvel, qacc_warmstart=data.qacc_warmstart)
         observation = self._observation(data, imu, task, jnp.zeros((n,) + self.gear.shape),
                                         jnp.zeros((n, self.tables.nr_feet), bool))
@@ -257,7 +279,17 @@ class LandingMjxEnv:
                     invalid=touched.any() | overflow)
 
     @highest_precision
-    def sample_pool(self, key, size):
+    def sample_disturbance(self, key, size, scale=1.):
+        """Roll/pitch (size, 2) and body angular rate (size, 3) of an imperfect release."""
+        tilt_key, direction_key, magnitude_key = jax.random.split(key, 3)
+        tilt = jax.random.uniform(tilt_key, (size, 2), minval=-1., maxval=1.) * self.max_tilt * scale
+        direction = jax.random.normal(direction_key, (size, 3))
+        direction = direction / jnp.maximum(jnp.linalg.norm(direction, axis=-1, keepdims=True), 1e-9)
+        magnitude = jax.random.uniform(magnitude_key, (size, 1)) * self.max_rate * scale
+        return tilt, direction * magnitude
+
+    @highest_precision
+    def sample_pool(self, key, size, scale=1.):
         """RealDriveMix conditions followed by the launch fixture."""
         keys = jax.random.split(key, 5)
         height = jnp.asarray(HEIGHTS)[jax.random.randint(keys[0], (size,), 0, len(HEIGHTS))]
@@ -266,7 +298,8 @@ class LandingMjxEnv:
         speed = low + (high - low) * jax.random.uniform(keys[2], (size,))
         azimuth = jax.random.uniform(keys[3], (size,), maxval=2 * jnp.pi)
         velocity = speed[:, None] * jnp.stack([jnp.cos(azimuth), jnp.sin(azimuth)], -1)
-        pool = self.launch(jax.random.split(keys[4], size), height, velocity)
+        tilt, rate = self.sample_disturbance(jax.random.fold_in(key, 7), size, scale)
+        pool = self.launch(jax.random.split(keys[4], size), height, velocity, tilt=tilt, rate=rate)
         pool['task']['group'] = group
         return pool
 
@@ -495,6 +528,8 @@ class LandingMjxEnv:
             'curriculum/landing_success': success * 1., 'curriculum/v22_group': task['group'] * 1.,
             'curriculum/v22_height': task['height'], 'curriculum/v22_speed': task['speed'],
             'curriculum/initial_height': task['height'], 'curriculum/initial_speed_xy': task['release_speed'],
+            'curriculum/initial_roll_deg': task['roll_deg'], 'curriculum/initial_pitch_deg': task['pitch_deg'],
+            'curriculum/initial_rate_dps': task['rate_dps'],
             'inertial/launch_duration_s': task['launch_duration'], 'inertial/requested_speed_xy': task['speed'],
             'inertial/release_speed_xy': task['release_speed'],
             'metrics/inertial_velocity_error': jnp.linalg.norm(estimate - data.qvel[:, :2], axis=-1),

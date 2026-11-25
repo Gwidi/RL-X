@@ -40,6 +40,20 @@ LANDING_V22_ARM=continue LANDING_V22_CHECKPOINT=/pelna/sciezka/v22_warm/latest.m
 LR jest częścią stanu Adama, więc MJX ustawia go przed każdą aktualizacją (`algorithm.final_learning_rate`; ujemne = stały).
 Checkpoint zawsze zapisuje bazowe 3e-5, więc kolejny trening nie ruszy z zerowym LR.
 
+**Niedoskonałe wypuszczenie** (`LANDING_V22_ARM=disturbed`): roll i pitch ~ U(−30°, 30°) niezależnie, prędkość kątowa ciała
+o losowym kierunku i module ~ U(0, 15°/s), do tego prędkość pozioma i wysokość jak w V22. Moduł zaburzeń rośnie liniowo od 0
+przez pierwsze 20 054 016 kroków (`rollout/disturbance_scale`), ewaluacja zawsze z pełnym zaburzeniem we wszystkich komórkach,
+także przy 0 m/s i dla zerowego sterownika. LR maleje z 3e-5 do 1e-5, 60 030 976 kroków. Rodzic: dowolny `latest.model` V22 (CPU lub MJX).
+Przechył osi z robota może sięgać ok. 42°, bo roll i pitch są losowane osobno. Nie ma randomizacji fizyki.
+Bramka `nominal_eligible` wymaga >80% przy 0 m/s, już z zaburzeniem; dopóki jej nie spełnia, `best.model` się nie zapisze (`latest` zapisuje się zawsze).
+
+```bash
+LANDING_V22_ARM=disturbed LANDING_V22_CHECKPOINT=/pelna/sciezka/latest.model \
+  sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
+```
+
+Walidacja na CPU z tym samym zaburzeniem: `compare_mjx_cpu_grid.py --model ... --tilt 30 --rate 15`.
+
 Bez `--runner.track_wandb=False` potrzebny jest `WANDB_API_KEY` w terminalu, z którego idzie `sbatch`.
 
 ## Co jest takie samo
