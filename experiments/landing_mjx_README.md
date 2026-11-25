@@ -29,6 +29,17 @@ LANDING_V22_ARM=warm LANDING_V22_CHECKPOINT=/pelna/sciezka/v19/latest.model \
   sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False   # z V19, 60 mln kroków
 ```
 
+**Kontynuacja V22 z V19** (`LANDING_V22_ARM=continue`): startuje z `latest.model` joba CPU 9730655 (60 030 976 kroków), dodaje
+39 976 960 kroków na MJX, LR maleje liniowo z 3e-5 do 0. Skrypt sprawdza liczbę kroków, profil 16 Nm i kontrakt obserwacji.
+
+```bash
+LANDING_V22_ARM=continue LANDING_V22_CHECKPOINT=/pelna/sciezka/v22_warm/latest.model \
+  sbatch experiments/real_drives_mjx_v22.sh --runner.track_wandb=False
+```
+
+LR jest częścią stanu Adama, więc MJX ustawia go przed każdą aktualizacją (`algorithm.final_learning_rate`; ujemne = stały).
+Checkpoint zawsze zapisuje bazowe 3e-5, więc kolejny trening nie ruszy z zerowym LR.
+
 Bez `--runner.track_wandb=False` potrzebny jest `WANDB_API_KEY` w terminalu, z którego idzie `sbatch`.
 
 ## Co jest takie samo
@@ -59,3 +70,8 @@ python experiments/analysis/compare_mjx_cpu_grid.py --model <checkpoint> --episo
 ```
 
 Drugi skrypt uruchom też na wytrenowanym modelu **przed wdrożeniem**: ewaluacja w treningu jest na tej samej fizyce co trening.
+
+## Limit iteracji solvera
+
+Flaga Warp `ITERATIONS`/`LS_ITERATIONS` oznacza, że solver nie zbiegł w limicie iteracji, a nie przepełnienie bufora.
+Nie przerywa treningu; `rollout/solver_limit_worlds` liczy takie światy (narastająco). Przepełnienie bufora nadal przerywa.

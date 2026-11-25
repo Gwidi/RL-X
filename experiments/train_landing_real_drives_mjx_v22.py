@@ -1,7 +1,8 @@
 """V22 on MJX-Warp: the same task, reward, limits and PPO, simulated on the GPU.
 
 LANDING_V22_ARM=warm continues V19 latest (LANDING_V22_CHECKPOINT); the default
-"fresh" arm starts from new weights. Only the rollout shape differs from the CPU
+"fresh" arm starts from new weights. "continue" extends the final V22 warm model
+(60,030,976 steps) with a learning rate that decays to zero. Only the rollout shape differs from the CPU
 runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch.
 """
 
@@ -13,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 NR_ENVS, NR_STEPS = 1024, 128
+CONTINUE_STEPS = 39_976_960  # 305 updates
 
 
 def versions():
@@ -31,18 +33,49 @@ def versions():
     return found
 
 
+def verify_continue_parent(path):
+    """The final V22 warm checkpoint: same task, reward and drive limits, 60,030,976 steps."""
+    import zipfile
+    from experiments.train_landing_real_drives_v22 import ADDITIONAL_STEPS, real_drive_profile
+    with zipfile.ZipFile(path) as archive:
+        algorithm, environment, metrics = (json.loads(archive.read(name)) for name in (
+            'config_algorithm.json', 'config_environment.json', 'checkpoint_metrics.json'))
+    if algorithm['name'] != 'ppo.flax':
+        raise ValueError(f"Parent was saved by {algorithm['name']}, expected ppo.flax")
+    if metrics['nr_env_steps'] != ADDITIONAL_STEPS:
+        raise ValueError(f"The continue arm needs V22 warm latest.model at {ADDITIONAL_STEPS} steps, "
+                         f"this checkpoint has {metrics['nr_env_steps']}")
+    expected = real_drive_profile('')['environment']
+    if environment.get('landing_actuators') != expected['landing_actuators']:
+        raise ValueError('Parent was not trained with the 16 Nm HB40 drive profile')
+    if not environment.get('landing_real_drive_mix'):
+        raise ValueError('Parent was not trained on the V22 speed mixture')
+    from experiments.analysis.check_mjx_parity import v22_config
+    for key in ('landing_braking', 'reward', 'policy_inertial', 'imu_history_length', 'timestep', 'control_type',
+                'spine_locked', 'landing_physics_sha256', 'landing_controller_sha256', 'landing_model_sha256'):
+        if environment.get(key) != v22_config().get(key):
+            raise ValueError(f'Parent contract mismatch: {key}')
+    return dict(steps=metrics['nr_env_steps'], evaluation=metrics.get('eval/landing_success_rate'),
+                worst_height=metrics.get('eval/worst_height_success_rate'))
+
+
 def mjx_profile(arm, parent=''):
     from experiments.train_landing_real_drives_fresh_v22 import TOTAL_STEPS
     from experiments.train_landing_real_drives_v22 import ADDITIONAL_STEPS, real_drive_profile
-    if arm not in ('warm', 'fresh'):
-        raise ValueError('LANDING_V22_ARM must be warm or fresh')
+    steps = dict(warm=ADDITIONAL_STEPS, fresh=TOTAL_STEPS)
+    steps['continue'] = CONTINUE_STEPS
+    if arm not in steps:
+        raise ValueError('LANDING_V22_ARM must be warm, fresh or continue')
     profile = real_drive_profile(parent)
-    name = 'landing_real_drives_mjx_v22' if arm == 'warm' else 'landing_real_drives_mjx_fresh_v22'
-    profile['algorithm'].update(name='ppo.flax_mjx_landing', nr_steps=NR_STEPS,
-                                total_timesteps=ADDITIONAL_STEPS if arm == 'warm' else TOTAL_STEPS)
+    name = dict(warm='landing_real_drives_mjx_v22', fresh='landing_real_drives_mjx_fresh_v22').get(
+        arm, 'landing_real_drives_mjx_continue_v22')
+    profile['algorithm'].update(name='ppo.flax_mjx_landing', nr_steps=NR_STEPS, total_timesteps=steps[arm],
+                                final_learning_rate=0. if arm == 'continue' else -1.)
     profile['environment'].update(name='custom_mujoco.robot_locomotion.mjx_landing', nr_envs=NR_ENVS)
-    origin = ('continues V19 latest (job 9591668): actor, critic, Adam, learned std' if arm == 'warm'
-              else 'from scratch: new actor, critic, Adam and std 0.15')
+    origin = dict(warm='continues V19 latest (job 9591668): actor, critic, Adam, learned std',
+                  fresh='from scratch: new actor, critic, Adam and std 0.15').get(
+        arm, 'continues V22 warm latest (job 9730655, 60,030,976 steps): actor, critic, Adam, learned std; '
+             'learning rate 3e-5 decays linearly to 0')
     profile['runner'].update(
         load_model=str(parent), exp_name=name, run_name=os.environ.get('RUN_NAME') or
         f"{name}_{os.environ.get('SLURM_JOB_ID', 'local')}",
@@ -88,6 +121,11 @@ def main():
         from experiments.train_landing_real_drives_v22 import verify_parent
         parent = input_path('LANDING_V22_CHECKPOINT', 'modelsv19/latest.model', PARENT_SHA)
         verify_parent(parent)
+    elif arm == 'continue':
+        parent = Path(os.environ.get('LANDING_V22_CHECKPOINT', '')).expanduser().resolve()
+        if not parent.is_file():
+            raise FileNotFoundError(f'Set LANDING_V22_CHECKPOINT to the V22 warm latest.model. Missing: {parent}')
+        print('Parent:', parent, verify_continue_parent(parent), flush=True)
     profile = mjx_profile(arm, parent)
     fingerprint = verify_controller()
     if '--check-only' in sys.argv:

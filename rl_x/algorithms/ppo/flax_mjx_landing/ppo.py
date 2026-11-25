@@ -15,6 +15,7 @@ import optax
 
 from rl_x.algorithms.ppo.flax.ppo import PPO as FlaxPPO
 from rl_x.algorithms.ppo.flax_mjx_landing.general_properties import GeneralProperties
+from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.contacts import solver_limit_worlds
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.default_config import CPU_ENVIRONMENT
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.environment import FAILURES
 from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.evaluation import LandingGrid
@@ -24,6 +25,15 @@ rlx_logger = logging.getLogger("rl_x")
 GROUPS = {"landing_nominal_replay": (0,), "landing_replay": (1,), "landing_current": (2, 3)}
 
 
+def with_learning_rate(state, learning_rate):
+    """The learning rate lives in the Adam state, so a checkpoint overrides the config."""
+    clip, inject = state.opt_state
+    current = inject.hyperparams["learning_rate"]
+    inject = inject._replace(hyperparams={**inject.hyperparams,
+                                          "learning_rate": jnp.asarray(learning_rate, jnp.asarray(current).dtype)})
+    return state.replace(opt_state=(clip, inject))
+
+
 class PPO(FlaxPPO):
     def __init__(self, config, train_env, eval_env, run_path, writer):
         super().__init__(config, train_env, eval_env, run_path, writer)
@@ -31,9 +41,18 @@ class PPO(FlaxPPO):
             raise ValueError("ppo.flax_mjx_landing requires the landing grid evaluation and no handoff")
         if self.batch_size % self.minibatch_size:
             raise ValueError("The minibatch size must divide nr_envs * nr_steps")
+        if self.anneal_learning_rate:
+            raise ValueError("Use final_learning_rate: a schedule inside Adam changes the checkpoint layout")
+        self.final_learning_rate = config.algorithm.final_learning_rate
         self.pool_size = config.environment.mjx.reset_pool_size
         if self.pool_size < self.nr_envs:
             raise ValueError("mjx.reset_pool_size must be at least nr_envs")
+
+    def scheduled_learning_rate(self, global_step):
+        if self.final_learning_rate < 0:
+            return self.learning_rate
+        remaining = 1 - global_step / self.total_timesteps
+        return self.final_learning_rate + (self.learning_rate - self.final_learning_rate) * remaining
 
     def train(self):
         env = self.train_env
@@ -74,7 +93,7 @@ class PPO(FlaxPPO):
             group_metrics = {name: (jnp.sum(success * w) / jnp.maximum(w.sum(), 1.), w.sum()) for name, w in groups.items()}
             metrics = dict(episodes=weight.sum(), episode=episode, groups=group_metrics,
                            step={k: v.mean() for k, v in info.items()}, resets=index - first_index,
-                           overflow=env_state.overflow)
+                           overflow=env_state.overflow, solver_limit=solver_limit_worlds(env_state.data))
             return env_state, batch, metrics, key
 
         @jax.jit
@@ -164,8 +183,13 @@ class PPO(FlaxPPO):
                 self.critic_state, next_states, rewards, terminations, values))
             advantage_end = time.time()
 
-            self.policy_state, self.critic_state, optimization_metrics, self.key = update(
-                self.policy_state, self.critic_state, states, actions, advantages, returns, values, log_probs, self.key)
+            learning_rate = self.scheduled_learning_rate(global_step - self.batch_size)
+            policy_state, critic_state, optimization_metrics, self.key = update(
+                with_learning_rate(self.policy_state, learning_rate), with_learning_rate(self.critic_state, learning_rate),
+                states, actions, advantages, returns, values, log_probs, self.key)
+            # Checkpoints keep the base rate; a decayed one would silently stop later training.
+            self.policy_state = with_learning_rate(policy_state, self.learning_rate)
+            self.critic_state = with_learning_rate(critic_state, self.learning_rate)
             optimization_metrics = {k: float(v) for k, v in optimization_metrics.items()}
             nr_updates += self.nr_epochs * self.nr_minibatches
             if not all(np.isfinite(v) for v in optimization_metrics.values()):
@@ -236,6 +260,7 @@ class PPO(FlaxPPO):
                     result[f"rollout/{name}_success_rate"], result[f"rollout/{name}_count"] = rate, int(size)
             for name in ("episode_return", "episode_length"):
                 result[f"rollout/{name}"] = m["episode"][name]
+        result["rollout/solver_limit_worlds"] = float(m["solver_limit"])
         result["rollout/reset_pool_use"] = float(m["resets"]) / self.pool_size
         for name, value in m["step"].items():
             if name not in ("episode_return", "episode_length"):
@@ -251,6 +276,7 @@ class PPO(FlaxPPO):
         with environment.unlocked(), algorithm.unlocked():
             environment.name, algorithm.name, environment.nr_envs = CPU_ENVIRONMENT, "ppo.flax", 64
             del environment.mjx
+            del algorithm.final_learning_rate
         try:
             self.checkpoint_metrics = {**self.checkpoint_metrics, "physics_backend": "mjx-warp",
                                        "mjx": mjx, "mjx_nr_envs": names[2]}
@@ -259,6 +285,7 @@ class PPO(FlaxPPO):
             with environment.unlocked(), algorithm.unlocked():
                 environment.name, algorithm.name, environment.nr_envs = names
                 environment.mjx = mjx
+                algorithm.final_learning_rate = self.final_learning_rate
 
     def load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params):
         return FlaxPPO.load(config, train_env, eval_env, run_path, writer, explicitly_set_algorithm_params, model_class=PPO)

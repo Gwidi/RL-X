@@ -83,7 +83,17 @@ def contact_metrics(data, tables, nr_worlds):
                 forbidden=any_contact(~tables.allowed[geom]))
 
 
+# MJX-Warp OverflowType bits that mean "iteration limit reached", not "buffer too
+# small". CPU MuJoCo also keeps the last iterate there, so they are not fatal.
+SOLVER_LIMIT_FLAGS = (1 << 9) | (1 << 10)  # ITERATIONS, LS_ITERATIONS
+
+
 def contact_overflow(data):
     """True when a fixed contact or constraint buffer was too small."""
     impl = data._impl
-    return jnp.any(impl.overflow != 0) | (impl.nacon[0] > impl.contact__worldid.shape[0])
+    return jnp.any((impl.overflow & ~SOLVER_LIMIT_FLAGS) != 0) | (impl.nacon[0] > impl.contact__worldid.shape[0])
+
+
+def solver_limit_worlds(data):
+    """Worlds whose solver reached an iteration limit since the start (the flag is sticky)."""
+    return ((data._impl.overflow & SOLVER_LIMIT_FLAGS) != 0).sum()

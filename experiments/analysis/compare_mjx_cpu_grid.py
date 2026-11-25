@@ -78,6 +78,11 @@ def main():
         with ProcessPoolExecutor(args.workers, mp_context=multiprocessing.get_context('spawn')) as pool:
             for height, speed, part in pool.map(cpu_cell, jobs):
                 cpu.setdefault((height, speed), []).extend(part)
+        if args.output:  # An MJX failure must not lose the slow CPU half.
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.with_suffix('.cpu.json').write_text(json.dumps(
+                [dict(height=h, speed=v, episodes=args.episodes, **{f'cpu_{n}': float(x) for n, x in zip(names, np.mean(r, axis=0))})
+                 for (h, v), r in cpu.items()], indent=1) + '\n')
     if args.backend != 'cpu':
         import jax
         from rl_x.environments.custom_mujoco.robot_locomotion.mjx_landing.evaluation import LandingGrid
