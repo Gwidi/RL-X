@@ -4,6 +4,8 @@ LANDING_V22_ARM=warm continues V19 latest (LANDING_V22_CHECKPOINT); the default
 "fresh" arm starts from new weights. "continue" extends the final V22 warm model
 (60,030,976 steps) with a learning rate that decays to zero. Only the rollout shape differs from the CPU
 runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch.
+Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
+batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
 """
 
 import json
@@ -13,7 +15,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-NR_ENVS, NR_STEPS = 1024, 128
+NR_ENVS, NR_STEPS = int(os.environ.get('LANDING_V22_NR_ENVS', 1024)), 128
 CONTINUE_STEPS = 39_976_960  # 305 updates
 # Imperfect release: roll/pitch up to 30 deg, body angular rate up to 15 deg/s, ramped in over 153 updates.
 # Release from the standing pose: moved in from the landing pose over 229 updates, 20% of the episodes stay at home.
@@ -80,6 +82,15 @@ def mjx_profile(arm, parent=''):
         arm, 'landing_real_drives_mjx_continue_v22')
     profile['algorithm'].update(name='ppo.flax_mjx_landing', nr_steps=NR_STEPS, total_timesteps=steps[arm],
                                 final_learning_rate={'continue': 0., 'disturbed': 1e-5, 'standing': 1e-5, 'soft': 1e-5}.get(arm, -1.))
+    ppo = {}
+    for variable, key, cast in (('MINIBATCH', 'minibatch_size', int), ('ENTROPY_COEF', 'entropy_coef', float),
+                                ('MIN_STD', 'min_std', float), ('LEARNING_RATE', 'learning_rate', float)):
+        value = os.environ.get(f'LANDING_V22_{variable}')
+        if value:
+            ppo[key] = cast(value)
+    if NR_ENVS * NR_STEPS % ppo.get('minibatch_size', 64):
+        raise ValueError(f'LANDING_V22_MINIBATCH must divide the batch {NR_ENVS * NR_STEPS}')
+    profile['algorithm'].update(ppo)
     profile['environment'].update(name='custom_mujoco.robot_locomotion.mjx_landing', nr_envs=NR_ENVS)
     if arm == 'disturbed':
         profile['environment']['mjx'] = dict(release_disturbance=dict(DISTURBANCE))
@@ -100,6 +111,8 @@ def mjx_profile(arm, parent=''):
                             'to 15 deg/s, ramped over 20M steps); learning rate 3e-5 decays linearly to 1e-5').get(
         arm, 'continues V22 warm latest (job 9730655, 60,030,976 steps): actor, critic, Adam, learned std; '
              'learning rate 3e-5 decays linearly to 0')
+    if ppo:
+        origin += '; PPO ' + ', '.join(f'{k}={v:g}' for k, v in ppo.items())
     slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
     if slip_scale is not None:
         profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)
@@ -108,7 +121,7 @@ def mjx_profile(arm, parent=''):
         load_model=str(parent), exp_name=name, run_name=os.environ.get('RUN_NAME') or
         f"{name}_{os.environ.get('SLURM_JOB_ID', 'local')}",
         notes=f'V22 on MJX-Warp (float32), {origin}. Same task, 16 Nm limits, reward, IMU contract, evaluation grid and PPO '
-              f'as CPU V22; rollouts {NR_ENVS}x{NR_STEPS} instead of 64x2048, batch 131,072.')
+              f'as CPU V22; rollouts {NR_ENVS}x{NR_STEPS} instead of 64x2048, batch {NR_ENVS * NR_STEPS:,}.')
     return profile
 
 

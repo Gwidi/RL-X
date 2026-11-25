@@ -44,6 +44,7 @@ class PPO(FlaxPPO):
         if self.anneal_learning_rate:
             raise ValueError("Use final_learning_rate: a schedule inside Adam changes the checkpoint layout")
         self.final_learning_rate = config.algorithm.final_learning_rate
+        self.min_log_std = float(np.log(config.algorithm.min_std)) if config.algorithm.min_std > 0 else None
         self.disturbance_ramp_steps = config.environment.mjx.release_disturbance.ramp_steps
         self.pose_ramp_steps = config.environment.mjx.release_pose.ramp_steps
         self.pool_size = config.environment.mjx.reset_pool_size
@@ -119,6 +120,14 @@ class PPO(FlaxPPO):
             _, advantages = jax.lax.scan(backward, jnp.zeros_like(delta[0]), (delta, terminations), reverse=True)
             return advantages, advantages + values
 
+        def floor_std(state):
+            """Projects the learned log std back to min_std; the checkpoint layout is unchanged."""
+            if self.min_log_std is None:
+                return state
+            inner = dict(state.params["params"])
+            inner["policy_logstd"] = jnp.maximum(inner["policy_logstd"], self.min_log_std)
+            return state.replace(params=type(state.params)({**state.params, "params": inner}))
+
         @jax.jit
         def update(policy_state, critic_state, states, actions, advantages, returns, values, log_probs, key):
             def loss_fn(policy_params, critic_params, state_b, action_b, log_prob_b, return_b, advantage_b):
@@ -153,7 +162,7 @@ class PPO(FlaxPPO):
                     policy_state.params, critic_state.params, state_b, action_b, log_prob_b, return_b, advantage_b)
                 metrics["gradients/policy_grad_norm"] = optax.global_norm(policy_grad)
                 metrics["gradients/critic_grad_norm"] = optax.global_norm(critic_grad)
-                return (policy_state.apply_gradients(grads=policy_grad),
+                return (floor_std(policy_state.apply_gradients(grads=policy_grad)),
                         critic_state.apply_gradients(grads=critic_grad)), metrics
 
             (policy_state, critic_state), metrics = jax.lax.scan(minibatch_update, (policy_state, critic_state), indices)
