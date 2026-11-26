@@ -33,6 +33,9 @@ GROUP_EDGES = (.1, .5, .8)
 GROUP_LOW, GROUP_HIGH = (0., 0., 2., 3.5), (0., 2., 3.5, 5.)
 
 
+HIP_ACTUATORS = (1, 4, 7, 10)  # RL, RR, FR, FL hip in the (spine, legs) actuator order
+
+
 def symmetric_pose(pose, front_hip=None):
     """(13,) joint pose (spine, RL, RR, FR, FL hip/thigh/calf) with the left legs mirrored from the right ones.
     front_hip replaces the right front hip angle before mirroring."""
@@ -106,6 +109,7 @@ class LandingMjxEnv:
         limb = env_config['mjx']['limb_contact']
         self.soft_limbs, self.limb_force_limit = bool(limb['soft']), float(limb['force_limit'])
         self.slip_penalty_scale = float(env_config['mjx']['slip_penalty_scale'])
+        self.flight_hip_rate_penalty = float(env_config['mjx']['flight_hip_rate_penalty'])
         self.speed_groups = speed_mixture(float(env_config['mjx']['max_speed']))
         self.braking_reference = env_config['mjx']['braking_reference']
         if self.braking_reference not in ('track', 'upper', 'off'):
@@ -478,7 +482,7 @@ class LandingMjxEnv:
         return twist[:, 3:] + jnp.cross(twist[:, :3], offset)
 
     REWARDS = ('alive', 'braking_tracking', 'loaded_slip', 'collision', 'body_acceleration', 'body_support',
-               'landing_event', 'total')
+               'landing_event', 'flight_hip_rate', 'total')
 
     def _reward(self, task, data, totals):
         r, b = self.reward, self.braking
@@ -634,6 +638,11 @@ class LandingMjxEnv:
         data = data.replace(qvel=jnp.clip(data.qvel, -self.max_qvel, self.max_qvel))
         imu = self.sensor.publish(imu)
         task, terms, success, evaluated, reason, slip_value = self._reward(task, data, totals)
+        # Hip jumps in flight. The previous action is the observed one: zero right after release.
+        previous = state.observation[:, self.index.joint_previous_actions_obs_idx] * 10.
+        change = ((action - previous)[:, jnp.asarray(HIP_ACTUATORS)] ** 2).sum(-1)
+        terms['flight_hip_rate'] = jnp.where(state.task['touched'], 0., -self.flight_hip_rate_penalty * jnp.nan_to_num(change))
+        terms['total'] = terms['total'] + terms['flight_hip_rate']
         # The braking goal follows the true velocity until the first contact.
         task['reference'] = jnp.where(task['touched'][:, None], task['reference'], data.qvel[:, :2])
         observation = self._observation(data, imu, task, action, feet_contact)

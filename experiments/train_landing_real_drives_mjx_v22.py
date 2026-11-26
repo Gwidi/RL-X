@@ -6,6 +6,7 @@ LANDING_V22_ARM=warm continues V19 latest (LANDING_V22_CHECKPOINT); the default
 runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch.
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
+LANDING_V22_FLIGHT_HIP_RATE (mjx.flight_hip_rate_penalty), LANDING_V22_RELEASE_RAMP_STEPS (disturbance ramp, default 20M).
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
 LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
 LANDING_V22_FRONT_HIP then sets the right front hip, rad (default 0.2687, the home value).
@@ -144,10 +145,15 @@ def mjx_profile(arm, parent=''):
     if tilt or rate:
         if arm != 'soft':
             raise ValueError('LANDING_V22_RELEASE_TILT_DEG/RATE_DPS extend the soft arm')
+        ramp = int(os.environ.get('LANDING_V22_RELEASE_RAMP_STEPS') or DISTURBANCE['ramp_steps'])  # 0: full from the start
         profile['environment'].setdefault('mjx', {})['release_disturbance'] = dict(
-            max_tilt_deg=tilt, max_rate_dps=rate, ramp_steps=DISTURBANCE['ramp_steps'])
+            max_tilt_deg=tilt, max_rate_dps=rate, ramp_steps=ramp)
         origin += (f'; imperfect release: roll and pitch each up to {tilt:g} deg, body rate up to {rate:g} deg/s, '
-                   f"ramped over {DISTURBANCE['ramp_steps']:,} steps")
+                   f'ramped over {ramp:,} steps')
+    hip_rate = float(os.environ.get('LANDING_V22_FLIGHT_HIP_RATE') or 0.)
+    if hip_rate:
+        profile['environment'].setdefault('mjx', {})['flight_hip_rate_penalty'] = hip_rate
+        origin += f'; penalty {hip_rate:g} x squared hip action change before touchdown'
     max_speed = float(os.environ.get('LANDING_V22_MAX_SPEED') or 5.)
     if max_speed != 5.:
         profile['environment'].setdefault('mjx', {})['max_speed'] = max_speed

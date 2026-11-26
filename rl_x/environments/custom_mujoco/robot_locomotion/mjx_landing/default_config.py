@@ -37,5 +37,8 @@ def get_config(environment_name):
         # Right front hip of the symmetric pose, rad (the left one is its mirror). 0.2687 is the home value; smaller
         # values move the front feet apart (0.009: +-14 cm instead of +-5 cm). Used only with symmetric_pose.
         symmetric_front_hip=0.2687,
+        # Penalty before the first touchdown: -coefficient * sum over the four hip actions of (a_t - a_{t-1})^2.
+        # Discourages a sudden hip movement when the actor takes over from the release pose. 0 disables it.
+        flight_hip_rate_penalty=0.,
     )
     return config
