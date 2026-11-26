@@ -13,6 +13,7 @@ import time
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--png', type=Path, help='write a comparison image instead of opening the viewer')
 parser.add_argument('--height', type=float, default=1.0, help='height of the trunk above the floor, m')
+parser.add_argument('--front-hip', type=float, help='right front hip of the new pose, rad (left mirrors it); 0.159 widens the front')
 args = parser.parse_args()
 if args.png:
     os.environ.setdefault('MUJOCO_GL', 'egl')
@@ -33,6 +34,9 @@ new = old.copy()
 for target, source in (('RL', 'RR'), ('FL', 'FR')):  # mirrored leg joints change sign
     t, s = 1 + 3 * LEGS.index(target), 1 + 3 * LEGS.index(source)
     new[t:t + 3] = -old[s:s + 3]
+
+if args.front_hip is not None:
+    new[1 + 3 * LEGS.index('FR')], new[1 + 3 * LEGS.index('FL')] = args.front_hip, -args.front_hip
 
 
 def show(pose):

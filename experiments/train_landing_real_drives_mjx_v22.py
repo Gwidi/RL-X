@@ -7,7 +7,8 @@ runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
-LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other).
+LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
+LANDING_V22_FRONT_HIP then sets the right front hip, rad (default 0.2687, the home value).
 LANDING_V22_RELEASE_TILT_DEG / _RELEASE_RATE_DPS: soft arm with an imperfect release, as in the disturbed arm.
 LANDING_V22_PARENT_STEPS rejects a parent with a different step count.
 """
@@ -72,6 +73,10 @@ def verify_continue_parent(path, steps=None):
                 worst_height=metrics.get('eval/worst_height_success_rate'))
 
 
+def front_hip():
+    return float(os.environ.get('LANDING_V22_FRONT_HIP') or .2687)
+
+
 def verify_parent_pose(path, symmetric):
     """The nominal pose is the action origin, so parent and run must agree (experiments/convert_parent_symmetric_pose.py)."""
     import zipfile
@@ -80,6 +85,9 @@ def verify_parent_pose(path, symmetric):
     if bool(mjx.get('symmetric_pose', False)) != symmetric:
         raise ValueError('LANDING_V22_SYMMETRIC_POSE=1 needs a parent converted with experiments/convert_parent_symmetric_pose.py'
                          if symmetric else 'The parent uses the symmetric pose: set LANDING_V22_SYMMETRIC_POSE=1')
+    if symmetric and abs(mjx.get('symmetric_front_hip', .2687) - front_hip()) > 1e-6:
+        raise ValueError(f"The parent was converted for front hip {mjx.get('symmetric_front_hip', .2687)}, "
+                         f'this run uses {front_hip()} (LANDING_V22_FRONT_HIP)')
 
 
 def mjx_profile(arm, parent=''):
@@ -128,7 +136,8 @@ def mjx_profile(arm, parent=''):
     if ppo:
         origin += '; PPO ' + ', '.join(f'{k}={v:g}' for k, v in ppo.items())
     if os.environ.get('LANDING_V22_SYMMETRIC_POSE') == '1':
-        profile['environment'].setdefault('mjx', {})['symmetric_pose'] = True
+        profile['environment'].setdefault('mjx', {}).update(symmetric_pose=True, symmetric_front_hip=front_hip())
+        origin += f'; right front hip {front_hip():g} rad, left mirrored'
         origin += '; symmetric nominal pose (left legs mirrored from the right ones: release, action origin, joint observations)'
     tilt = float(os.environ.get('LANDING_V22_RELEASE_TILT_DEG') or 0.)
     rate = float(os.environ.get('LANDING_V22_RELEASE_RATE_DPS') or 0.)

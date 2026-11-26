@@ -4,7 +4,7 @@ The nominal pose is the action origin (target = nominal + 0.6 * action) and the 
 is absorbed exactly by the biases of the first layer (actor, critic) and of the actor's output layer. What cannot be
 kept: actions are still clipped to +-1, now around the new origin. Optimizer state, std and step count are unchanged.
 
-    python experiments/convert_parent_symmetric_pose.py --input latest.model --output symmetric.model
+    python experiments/convert_parent_symmetric_pose.py --input latest.model --output symmetric.model [--front-hip 0.009]
 """
 import argparse
 import json
@@ -28,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--front-hip', type=float, default=.2687, help='right front hip of the symmetric pose, rad')
     args = parser.parse_args()
     with zipfile.ZipFile(args.input) as archive:
         texts = {name: archive.read(name).decode() for name in EXTRA}
@@ -37,7 +38,7 @@ def main():
     env = make_mjx_env(merge(v22_config(), {'mjx': {k: v for k, v in metrics['mjx'].items()
                                                     if k not in ('constraints_per_env', 'contacts_per_env')}}))
     old = np.asarray(env.nominal, np.float64)
-    new = symmetric_pose(old)
+    new = symmetric_pose(old, args.front_hip)
     size = env.single_observation_space.shape[0]
     # Old observation = new observation + shift.
     shift = np.zeros(size)
@@ -58,6 +59,7 @@ def main():
         output['bias'] = np.asarray(output['bias']) + ((old - new) / env.action_scale).astype(np.float32)
         checkpointer.save(f'{target}/tree', tree)
         metrics['mjx']['symmetric_pose'] = True
+        metrics['mjx']['symmetric_front_hip'] = args.front_hip
         metrics['converted_to_symmetric_pose_from'] = Path(args.input).name
         texts['checkpoint_metrics.json'] = json.dumps(metrics)
         for name, text in texts.items():

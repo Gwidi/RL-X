@@ -11,10 +11,11 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
 
-# Symmetric nominal pose and imperfect release (roll and pitch each up to 30 deg, 15 deg/s, ramped over 20M steps),
-# 60,030,976 more steps from job 9746307 with release speeds up to 7 m/s. Same budget and PPO as v22_speed_7ms_control.sh.
-# Parent: job 9746307 latest converted to the new nominal pose, so that it commands the same joint targets as before:
-#   python experiments/convert_parent_symmetric_pose.py --input modelsv22_upper/latest.model --output modelsv22_upper/symmetric.model
+# Symmetric nominal pose with a wider front (front feet +-14 cm) and imperfect release (roll and pitch each up to 30 deg,
+# 30 deg/s, ramped over 20M steps), 60,030,976 more steps with release speeds up to 7 m/s from job 9752750 (7 m/s control).
+# Parent: its latest.model converted to the new nominal pose, so that it commands the same joint targets as before:
+#   python experiments/convert_parent_symmetric_pose.py --input modelsv22_speed_7ms_control/latest.model \
+#       --output modelsv22_speed_7ms_control/symmetric_w14.model --front-hip 0.009
 # Copy that file to the cluster (a repeated conversion has another checksum), or set PARENT_SYM=<path to it>.
 # Submit from the repository root: sbatch experiments/v22_sym_tilt.sh --runner.track_wandb=False
 # Every LANDING_V22_* setting is fixed here; variables left in the submitting shell are dropped.
@@ -30,13 +31,14 @@ export LANDING_V22_SLIP_SCALE=0
 export LANDING_V22_REFERENCE=upper
 export LANDING_V22_MAX_SPEED=7
 export LANDING_V22_SYMMETRIC_POSE=1
+export LANDING_V22_FRONT_HIP=0.009
 export LANDING_V22_RELEASE_TILT_DEG=30
-export LANDING_V22_RELEASE_RATE_DPS=15
-export LANDING_V22_CHECKPOINT="${PARENT_SYM:-$ROOT/modelsv22_upper/symmetric.model}"
+export LANDING_V22_RELEASE_RATE_DPS=30
+export LANDING_V22_CHECKPOINT="${PARENT_SYM:-$ROOT/modelsv22_speed_7ms_control/symmetric_w14.model}"
 export LANDING_V22_PARENT_STEPS=60030976
-grep -q LANDING_V22_SYMMETRIC_POSE "$ROOT/experiments/train_landing_real_drives_mjx_v22.py" || {
-    echo "Old code: the train script does not know LANDING_V22_SYMMETRIC_POSE. Sync the repository first." >&2; exit 1; }
-echo "7f70903e83c9e704b098d64d4679d5997b6ee930ad5edac59256bae7ac2e3f84  $LANDING_V22_CHECKPOINT" | sha256sum --check --quiet
+grep -q LANDING_V22_FRONT_HIP "$ROOT/experiments/train_landing_real_drives_mjx_v22.py" || {
+    echo "Old code: the train script does not know LANDING_V22_FRONT_HIP. Sync the repository first." >&2; exit 1; }
+echo "10af71bf287eb9411389c70f400273313a6fb0400ed8c1b564d23503739d9b66  $LANDING_V22_CHECKPOINT" | sha256sum --check --quiet
 export RUN_NAME=v22_sym_tilt_${SLURM_JOB_ID:-local}
-echo "Parent: $LANDING_V22_CHECKPOINT  reference: $LANDING_V22_REFERENCE  max speed: ${LANDING_V22_MAX_SPEED:-5}  symmetric pose  tilt: 30 deg  rate: 15 deg/s"
+echo "Parent: $LANDING_V22_CHECKPOINT  reference: $LANDING_V22_REFERENCE  max speed: ${LANDING_V22_MAX_SPEED:-5}  symmetric pose, front hip 0.009  tilt: 30 deg  rate: 30 deg/s"
 exec bash "$ROOT/experiments/real_drives_mjx_v22.sh" "$@"

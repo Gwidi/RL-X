@@ -33,9 +33,12 @@ GROUP_EDGES = (.1, .5, .8)
 GROUP_LOW, GROUP_HIGH = (0., 0., 2., 3.5), (0., 2., 3.5, 5.)
 
 
-def symmetric_pose(pose):
-    """(13,) joint pose (spine, RL, RR, FR, FL hip/thigh/calf) with the left legs mirrored from the right ones."""
+def symmetric_pose(pose, front_hip=None):
+    """(13,) joint pose (spine, RL, RR, FR, FL hip/thigh/calf) with the left legs mirrored from the right ones.
+    front_hip replaces the right front hip angle before mirroring."""
     pose = np.array(pose, dtype=float)
+    if front_hip is not None:
+        pose[7] = front_hip
     pose[1:4], pose[10:13] = -pose[4:7], -pose[7:10]
     return pose
 
@@ -162,7 +165,7 @@ class LandingMjxEnv:
         self.timestep = float(model.opt.timestep)
         f32 = lambda x: jnp.asarray(x, jnp.float32)
         nominal = state['actuator_joint_nominal_positions']
-        self.nominal = f32(symmetric_pose(nominal) if self.config['mjx']['symmetric_pose'] else nominal)
+        self.nominal = f32(symmetric_pose(nominal, self.config['mjx']['symmetric_front_hip']) if self.config['mjx']['symmetric_pose'] else nominal)
         self.home_qpos = f32(cpu.initial_qpos)
         # Joint pose at release. The policy still sees joints relative to the home pose.
         self.release_pose = self.nominal  # (13,) default release pose; launch also takes one per world

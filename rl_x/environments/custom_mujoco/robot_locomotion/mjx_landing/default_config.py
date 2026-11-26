@@ -34,5 +34,8 @@ def get_config(environment_name):
         # Left legs mirror the right ones in the nominal pose: release pose, action origin and zero of the joint
         # observations. The CPU model and its home keyframe are unchanged.
         symmetric_pose=False,
+        # Right front hip of the symmetric pose, rad (the left one is its mirror). 0.2687 is the home value; smaller
+        # values move the front feet apart (0.009: +-14 cm instead of +-5 cm). Used only with symmetric_pose.
+        symmetric_front_hip=0.2687,
     )
     return config
