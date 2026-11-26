@@ -7,6 +7,8 @@ runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
+LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other).
+LANDING_V22_RELEASE_TILT_DEG / _RELEASE_RATE_DPS: soft arm with an imperfect release, as in the disturbed arm.
 LANDING_V22_PARENT_STEPS rejects a parent with a different step count.
 """
 
@@ -70,6 +72,16 @@ def verify_continue_parent(path, steps=None):
                 worst_height=metrics.get('eval/worst_height_success_rate'))
 
 
+def verify_parent_pose(path, symmetric):
+    """The nominal pose is the action origin, so parent and run must agree (experiments/convert_parent_symmetric_pose.py)."""
+    import zipfile
+    with zipfile.ZipFile(path) as archive:
+        mjx = json.loads(archive.read('checkpoint_metrics.json')).get('mjx', {})
+    if bool(mjx.get('symmetric_pose', False)) != symmetric:
+        raise ValueError('LANDING_V22_SYMMETRIC_POSE=1 needs a parent converted with experiments/convert_parent_symmetric_pose.py'
+                         if symmetric else 'The parent uses the symmetric pose: set LANDING_V22_SYMMETRIC_POSE=1')
+
+
 def mjx_profile(arm, parent=''):
     from experiments.train_landing_real_drives_fresh_v22 import TOTAL_STEPS
     from experiments.train_landing_real_drives_v22 import ADDITIONAL_STEPS, real_drive_profile
@@ -115,6 +127,18 @@ def mjx_profile(arm, parent=''):
              'learning rate 3e-5 decays linearly to 0')
     if ppo:
         origin += '; PPO ' + ', '.join(f'{k}={v:g}' for k, v in ppo.items())
+    if os.environ.get('LANDING_V22_SYMMETRIC_POSE') == '1':
+        profile['environment'].setdefault('mjx', {})['symmetric_pose'] = True
+        origin += '; symmetric nominal pose (left legs mirrored from the right ones: release, action origin, joint observations)'
+    tilt = float(os.environ.get('LANDING_V22_RELEASE_TILT_DEG') or 0.)
+    rate = float(os.environ.get('LANDING_V22_RELEASE_RATE_DPS') or 0.)
+    if tilt or rate:
+        if arm != 'soft':
+            raise ValueError('LANDING_V22_RELEASE_TILT_DEG/RATE_DPS extend the soft arm')
+        profile['environment'].setdefault('mjx', {})['release_disturbance'] = dict(
+            max_tilt_deg=tilt, max_rate_dps=rate, ramp_steps=DISTURBANCE['ramp_steps'])
+        origin += (f'; imperfect release: roll and pitch each up to {tilt:g} deg, body rate up to {rate:g} deg/s, '
+                   f"ramped over {DISTURBANCE['ramp_steps']:,} steps")
     max_speed = float(os.environ.get('LANDING_V22_MAX_SPEED') or 5.)
     if max_speed != 5.:
         profile['environment'].setdefault('mjx', {})['max_speed'] = max_speed
@@ -181,6 +205,7 @@ def main():
         required = os.environ.get('LANDING_V22_PARENT_STEPS')
         required = int(required) if required else ADDITIONAL_STEPS if arm == 'continue' else None
         print('Parent:', parent, verify_continue_parent(parent, required), flush=True)
+        verify_parent_pose(parent, os.environ.get('LANDING_V22_SYMMETRIC_POSE') == '1')
     profile = mjx_profile(arm, parent)
     fingerprint = verify_controller()
     if '--check-only' in sys.argv:

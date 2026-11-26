@@ -31,5 +31,8 @@ def get_config(environment_name):
         # Multiplier of the loaded-slip penalty (the CPU config keeps its weight, so checkpoints stay compatible).
         # 0 removes the penalty; loaded_slip_integral is still measured and logged.
         slip_penalty_scale=1.,
+        # Left legs mirror the right ones in the nominal pose: release pose, action origin and zero of the joint
+        # observations. The CPU model and its home keyframe are unchanged.
+        symmetric_pose=False,
     )
     return config

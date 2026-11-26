@@ -33,6 +33,13 @@ GROUP_EDGES = (.1, .5, .8)
 GROUP_LOW, GROUP_HIGH = (0., 0., 2., 3.5), (0., 2., 3.5, 5.)
 
 
+def symmetric_pose(pose):
+    """(13,) joint pose (spine, RL, RR, FR, FL hip/thigh/calf) with the left legs mirrored from the right ones."""
+    pose = np.array(pose, dtype=float)
+    pose[1:4], pose[10:13] = -pose[4:7], -pose[7:10]
+    return pose
+
+
 def speed_mixture(max_speed):
     """(edges, low, high) of the speed groups. 5 m/s is the V22 mixture: 10% vertical, 40/30/20% up to 5 m/s.
     Above 5 m/s a fifth group takes 20% of the episodes: 10% vertical, 30/25/15/20%."""
@@ -154,7 +161,8 @@ class LandingMjxEnv:
         self.dt, self.nr_substeps, self.horizon = cpu.dt, cpu.nr_substeps, cpu.horizon
         self.timestep = float(model.opt.timestep)
         f32 = lambda x: jnp.asarray(x, jnp.float32)
-        self.nominal = f32(state['actuator_joint_nominal_positions'])
+        nominal = state['actuator_joint_nominal_positions']
+        self.nominal = f32(symmetric_pose(nominal) if self.config['mjx']['symmetric_pose'] else nominal)
         self.home_qpos = f32(cpu.initial_qpos)
         # Joint pose at release. The policy still sees joints relative to the home pose.
         self.release_pose = self.nominal  # (13,) default release pose; launch also takes one per world
