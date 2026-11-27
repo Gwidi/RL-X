@@ -6,6 +6,7 @@ LANDING_V22_ARM=warm continues V19 latest (LANDING_V22_CHECKPOINT); the default
 runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch.
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
+LANDING_V22_FRESH=1 (soft arm from scratch), LANDING_V22_TOTAL_STEPS,
 LANDING_V22_FLIGHT_HIP_RATE (mjx.flight_hip_rate_penalty), LANDING_V22_RELEASE_RAMP_STEPS (disturbance ramp, default 20M).
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
 LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
@@ -134,6 +135,17 @@ def mjx_profile(arm, parent=''):
                             'to 15 deg/s, ramped over 20M steps); learning rate 3e-5 decays linearly to 1e-5').get(
         arm, 'continues V22 warm latest (job 9730655, 60,030,976 steps): actor, critic, Adam, learned std; '
              'learning rate 3e-5 decays linearly to 0')
+    if os.environ.get('LANDING_V22_FRESH') == '1':
+        if arm != 'soft' or parent:
+            raise ValueError('LANDING_V22_FRESH=1 is the soft arm without a parent')
+        origin = ('from scratch (new actor, critic, Adam, std 0.15) with soft thigh/calf contact up to 200 N; braking term: '
+                  f"{os.environ.get('LANDING_V22_REFERENCE', 'track')}; learning rate 3e-5 decays linearly to 1e-5")
+    total = int(os.environ.get('LANDING_V22_TOTAL_STEPS') or 0)
+    if total:
+        if total % (NR_ENVS * NR_STEPS):
+            raise ValueError(f'LANDING_V22_TOTAL_STEPS must be a multiple of the batch {NR_ENVS * NR_STEPS}')
+        profile['algorithm']['total_timesteps'] = total
+        origin += f'; {total:,} steps'
     if ppo:
         origin += '; PPO ' + ', '.join(f'{k}={v:g}' for k, v in ppo.items())
     if os.environ.get('LANDING_V22_SYMMETRIC_POSE') == '1':
@@ -212,6 +224,9 @@ def main():
         from experiments.train_landing_real_drives_v22 import verify_parent
         parent = input_path('LANDING_V22_CHECKPOINT', 'modelsv19/latest.model', PARENT_SHA)
         verify_parent(parent)
+    elif arm == 'soft' and os.environ.get('LANDING_V22_FRESH') == '1':
+        if os.environ.get('LANDING_V22_CHECKPOINT'):
+            raise ValueError('LANDING_V22_FRESH=1 trains from scratch: unset LANDING_V22_CHECKPOINT')
     elif arm in ('continue', 'disturbed', 'standing', 'soft'):
         parent = Path(os.environ.get('LANDING_V22_CHECKPOINT', '')).expanduser().resolve()
         if not parent.is_file():
