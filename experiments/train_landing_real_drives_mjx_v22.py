@@ -7,6 +7,7 @@ runs: 1024 environments x 128 steps instead of 64 x 2048, the same 131,072 batch
 Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LANDING_V22_MINIBATCH (must divide the
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
 LANDING_V22_FRESH=1 (soft arm from scratch), LANDING_V22_TOTAL_STEPS,
+LANDING_V22_CONSTRAINTS_PER_ENV, LANDING_V22_CONTACTS_PER_ENV (MJX buffers),
 LANDING_V22_FLIGHT_HIP_RATE (mjx.flight_hip_rate_penalty), LANDING_V22_RELEASE_RAMP_STEPS (disturbance ramp, default 20M).
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
 LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
@@ -175,6 +176,10 @@ def mjx_profile(arm, parent=''):
         evaluation['velocity_grid'] = ','.join(f'{v:g}' for v in grid)
         evaluation['selection_speed_max'] = 5.  # best is chosen on the old range plus 3-5 m/s; faster cells are reported only
         origin += f'; release speed extended to {max_speed:g} m/s (20% of episodes in 5-{max_speed:g})'
+    for variable, key in (('CONSTRAINTS_PER_ENV', 'constraints_per_env'), ('CONTACTS_PER_ENV', 'contacts_per_env')):
+        value = os.environ.get(f'LANDING_V22_{variable}')  # MJX buffer sizes; an overflow stops the run
+        if value:
+            profile['environment'].setdefault('mjx', {})[key] = int(value)
     slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
     if slip_scale is not None:
         profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)

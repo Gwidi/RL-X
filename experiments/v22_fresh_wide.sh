@@ -34,8 +34,11 @@ export LANDING_V22_FRONT_HIP=0.009
 export LANDING_V22_RELEASE_TILT_DEG=30
 export LANDING_V22_RELEASE_RATE_DPS=30
 export LANDING_V22_RELEASE_RAMP_STEPS=40000000
-grep -q LANDING_V22_FRESH "$ROOT/experiments/train_landing_real_drives_mjx_v22.py" || {
-    echo "Old code: the train script does not know LANDING_V22_FRESH. Sync the repository first." >&2; exit 1; }
+# An untrained policy thrashes and makes more contacts than a trained one: the default 160 overflowed (165 needed).
+export LANDING_V22_CONSTRAINTS_PER_ENV=320
+export LANDING_V22_CONTACTS_PER_ENV=32
+grep -q LANDING_V22_CONSTRAINTS_PER_ENV "$ROOT/experiments/train_landing_real_drives_mjx_v22.py" || {
+    echo "Old code: the train script does not know LANDING_V22_CONSTRAINTS_PER_ENV. Sync the repository first." >&2; exit 1; }
 export RUN_NAME=v22_fresh_wide_${SLURM_JOB_ID:-local}
 echo "From scratch  reference: $LANDING_V22_REFERENCE  max speed: $LANDING_V22_MAX_SPEED  symmetric pose, front hip 0.009  tilt: 30 deg  rate: 30 deg/s  no motion penalty"
 exec bash "$ROOT/experiments/real_drives_mjx_v22.sh" "$@"
