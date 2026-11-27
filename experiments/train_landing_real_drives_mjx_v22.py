@@ -8,6 +8,8 @@ Optional PPO overrides, any arm: LANDING_V22_NR_ENVS (batch = nr_envs x 128), LA
 batch), LANDING_V22_ENTROPY_COEF, LANDING_V22_MIN_STD (floor on the learned std), LANDING_V22_LEARNING_RATE.
 LANDING_V22_FRESH=1 (soft arm from scratch), LANDING_V22_TOTAL_STEPS,
 LANDING_V22_CONSTRAINTS_PER_ENV, LANDING_V22_CONTACTS_PER_ENV (MJX buffers),
+LANDING_V22_RANDOM_MASS_KG, RANDOM_COM_M, TORQUE_MIN_NM, TORQUE_MAX_NM, RANDOM_PD (mjx.randomization),
+LANDING_V22_POSTURE_REWARD (mjx.posture_reward),
 LANDING_V22_FLIGHT_HIP_RATE (mjx.flight_hip_rate_penalty), LANDING_V22_RELEASE_RAMP_STEPS (disturbance ramp, default 20M).
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
 LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
@@ -180,6 +182,19 @@ def mjx_profile(arm, parent=''):
         value = os.environ.get(f'LANDING_V22_{variable}')  # MJX buffer sizes; an overflow stops the run
         if value:
             profile['environment'].setdefault('mjx', {})[key] = int(value)
+    randomization = {}
+    for variable, key in (('RANDOM_MASS_KG', 'trunk_mass_kg'), ('RANDOM_COM_M', 'com_shift_m'),
+                          ('TORQUE_MIN_NM', 'torque_min_nm'), ('TORQUE_MAX_NM', 'torque_max_nm'), ('RANDOM_PD', 'pd_gain')):
+        value = os.environ.get(f'LANDING_V22_{variable}')
+        if value:
+            randomization[key] = float(value)
+    if randomization:
+        profile['environment'].setdefault('mjx', {})['randomization'] = randomization
+        origin += '; domain randomization per episode ' + ', '.join(f'{k}={v:g}' for k, v in randomization.items())
+    posture = float(os.environ.get('LANDING_V22_POSTURE_REWARD') or 0.)
+    if posture:
+        profile['environment'].setdefault('mjx', {})['posture_reward'] = posture
+        origin += f'; reward {posture:g} per step for a level, symmetric stance after touchdown'
     slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
     if slip_scale is not None:
         profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)

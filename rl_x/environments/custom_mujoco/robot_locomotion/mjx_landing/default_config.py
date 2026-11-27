@@ -40,5 +40,13 @@ def get_config(environment_name):
         # Penalty before the first touchdown: -coefficient * sum over the four hip actions of (a_t - a_{t-1})^2.
         # Discourages a sudden hip movement when the actor takes over from the release pose. 0 disables it.
         flight_hip_rate_penalty=0.,
+        # Domain randomization, drawn per episode (per released state) and kept until the next release. All zero/16 =
+        # the nominal model. trunk_mass_kg: uniform +-, added to the trunk (inertia scaled with it). com_shift_m: shift of
+        # the robot's total centre of mass, uniform +- in x and y (moved through the trunk). torque_*_nm: drive limit,
+        # uniform per joint. pd_gain: kp and kd each scaled uniformly in 1 +- pd_gain per joint.
+        randomization=dict(trunk_mass_kg=0., com_shift_m=0., torque_min_nm=16., torque_max_nm=16., pd_gain=0.),
+        # Reward per step from 0.3 s after the first touchdown: coefficient * mean of exp(-(tilt / 0.2 rad)^2) and
+        # exp(-(left-right joint asymmetry / 0.2 rad)^2). 0 disables it.
+        posture_reward=0.,
     )
     return config
