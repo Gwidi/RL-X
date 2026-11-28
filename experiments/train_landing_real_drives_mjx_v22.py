@@ -11,6 +11,7 @@ LANDING_V22_CONSTRAINTS_PER_ENV, LANDING_V22_CONTACTS_PER_ENV (MJX buffers),
 LANDING_V22_RANDOM_MASS_KG, RANDOM_COM_M, TORQUE_MIN_NM, TORQUE_MAX_NM, RANDOM_PD, FRICTION_MIN, FRICTION_MAX
 (mjx.randomization),
 LANDING_V22_POSTURE_REWARD (mjx.posture_reward),
+LANDING_V22_SUCCESS_AT_END=1, LANDING_V22_END_ROLL_DEG (mjx.success_at_end, mjx.end_roll_limit_deg), LANDING_V22_GAMMA,
 LANDING_V22_FLIGHT_HIP_RATE (mjx.flight_hip_rate_penalty), LANDING_V22_RELEASE_RAMP_STEPS (disturbance ramp, default 20M).
 LANDING_V22_MAX_SPEED above 5 extends the training mixture and the evaluation grid.
 LANDING_V22_SYMMETRIC_POSE=1 mirrors the right legs to the left in the nominal pose (soft arm or any other);
@@ -112,7 +113,7 @@ def mjx_profile(arm, parent=''):
                                 final_learning_rate={'continue': 0., 'disturbed': 1e-5, 'standing': 1e-5, 'soft': 1e-5}.get(arm, -1.))
     ppo = {}
     for variable, key, cast in (('MINIBATCH', 'minibatch_size', int), ('ENTROPY_COEF', 'entropy_coef', float),
-                                ('MIN_STD', 'min_std', float), ('LEARNING_RATE', 'learning_rate', float)):
+                                ('MIN_STD', 'min_std', float), ('LEARNING_RATE', 'learning_rate', float), ('GAMMA', 'gamma', float)):
         value = os.environ.get(f'LANDING_V22_{variable}')
         if value:
             ppo[key] = cast(value)
@@ -197,6 +198,11 @@ def mjx_profile(arm, parent=''):
     if posture:
         profile['environment'].setdefault('mjx', {})['posture_reward'] = posture
         origin += f'; reward {posture:g} per step for a level, symmetric stance after touchdown'
+    if os.environ.get('LANDING_V22_SUCCESS_AT_END') == '1':
+        roll = float(os.environ.get('LANDING_V22_END_ROLL_DEG') or 0.)
+        profile['environment'].setdefault('mjx', {}).update(success_at_end=True, end_roll_limit_deg=roll)
+        origin += '; success judged at the end of the episode only (no braking time requirements)'
+        origin += f', side roll at most {roll:g} deg' if roll else ''
     slip_scale = os.environ.get('LANDING_V22_SLIP_SCALE')  # 0 removes the loaded-slip penalty, any arm
     if slip_scale is not None:
         profile['environment'].setdefault('mjx', {})['slip_penalty_scale'] = float(slip_scale)

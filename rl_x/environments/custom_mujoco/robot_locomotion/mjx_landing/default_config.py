@@ -50,5 +50,11 @@ def get_config(environment_name):
         # Reward per step from 0.3 s after the first touchdown: coefficient * mean of exp(-(tilt / 0.5 rad)^2) and
         # exp(-(rms left-right joint mismatch / 0.4 rad)^2). 0 disables it.
         posture_reward=0.,
+        # Experiment: judge success only once, at the last step of the episode, with no braking time requirements: no
+        # violation, on its feet, below the success speeds for the last success_stability_time, tilt < 45 deg and base above
+        # 0.2 m. How and when the robot stops is its choice. Use with braking_reference='off'.
+        success_at_end=False,
+        # With success_at_end: also fail if the final side roll exceeds this, deg. 0 disables it (pitch is not limited).
+        end_roll_limit_deg=0.,
     )
     return config

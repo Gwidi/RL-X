@@ -119,6 +119,8 @@ class LandingMjxEnv:
                                or r['torque_min_nm'] != 16. or r['torque_max_nm'] != 16.
                                or r['friction_min'] != 1. or r['friction_max'] != 1.)
         self.posture_reward = float(env_config['mjx']['posture_reward'])
+        self.success_at_end = bool(env_config['mjx']['success_at_end'])
+        self.end_roll_limit = float(np.deg2rad(env_config['mjx']['end_roll_limit_deg']))
         self.speed_groups = speed_mixture(float(env_config['mjx']['max_speed']))
         self.braking_reference = env_config['mjx']['braking_reference']
         if self.braking_reference not in ('track', 'upper', 'off'):
@@ -588,7 +590,7 @@ class LandingMjxEnv:
         blocked = ((jnp.linalg.norm(velocity, axis=-1) > self.braking_config['success_max_horizontal_speed'])
                    | (jnp.abs(data.qvel[:, 2]) > .3) | (angular_speed > r.success_max_angular_velocity)
                    | ~contact | (totals['body'] > 0))
-        stable = jnp.where(touched & ~blocked & ready, task['stable'] + 1, 0)
+        stable = jnp.where(touched & ~blocked & (ready | self.success_at_end), task['stable'] + 1, 0)
 
         # Self collision of the reward spheres
         center = data.geom_xpos[:, self.sphere_ids]
@@ -605,6 +607,14 @@ class LandingMjxEnv:
         success = (touched & (time_steps >= self.confirmation_steps) & (elapsed_steps >= self.success_elapsed_steps)
                    & task['foot_contact'] & (stable >= self.stability_steps))
         timeout = step >= self.horizon - 1
+        if self.success_at_end:
+            q = data.qpos[:, 3:7]
+            up = 1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2)
+            success = (timeout & touched & task['foot_contact'] & (stable >= self.stability_steps)
+                       & (up > np.cos(np.pi / 4)) & (data.qpos[:, 2] > .2))
+            if self.end_roll_limit:
+                roll = jnp.arctan2(2 * (q[:, 0] * q[:, 1] + q[:, 2] * q[:, 3]), up)
+                success &= jnp.abs(roll) <= self.end_roll_limit
         candidates = jnp.stack([hard_limit, task['base_crash'], violations['disallowed_contact'], violations['calf_force'],
                                 violations['foot_force'], violations['body_acceleration'], violations['base_height'],
                                 timeout & ~success], -1)
