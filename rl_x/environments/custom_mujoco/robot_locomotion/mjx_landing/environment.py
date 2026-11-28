@@ -33,6 +33,9 @@ GROUP_EDGES = (.1, .5, .8)
 GROUP_LOW, GROUP_HIGH = (0., 0., 2., 3.5), (0., 2., 3.5, 5.)
 
 
+# Widths of the posture reward, rad. The landings of 9758915 end about 29 deg off level with 0.47 rad rms left-right
+# mismatch; at 0.2 rad both terms were flat zero there (1 reward unit per episode out of 55 possible).
+POSTURE_LEAN, POSTURE_MISMATCH = .5, .4
 HIP_ACTUATORS = (1, 4, 7, 10)  # RL, RR, FR, FL hip in the (spine, legs) actuator order
 
 
@@ -113,7 +116,8 @@ class LandingMjxEnv:
         self.randomization = {k: float(v) for k, v in env_config['mjx']['randomization'].items()}
         r = self.randomization
         self.randomized = bool(r['trunk_mass_kg'] or r['com_shift_m'] or r['pd_gain']
-                               or r['torque_min_nm'] != 16. or r['torque_max_nm'] != 16.)
+                               or r['torque_min_nm'] != 16. or r['torque_max_nm'] != 16.
+                               or r['friction_min'] != 1. or r['friction_max'] != 1.)
         self.posture_reward = float(env_config['mjx']['posture_reward'])
         self.speed_groups = speed_mixture(float(env_config['mjx']['max_speed']))
         self.braking_reference = env_config['mjx']['braking_reference']
@@ -202,7 +206,8 @@ class LandingMjxEnv:
         self.body_mass = f32(model.body_mass)
         self.actuator_gear = f32(model.actuator_gear[:, 0])
         self.nominal_model = {name: f32(getattr(model, name)) for name in (
-            'body_mass', 'body_subtreemass', 'body_inertia', 'body_ipos', 'actuator_gainprm', 'actuator_biasprm')}
+            'body_mass', 'body_subtreemass', 'body_inertia', 'body_ipos', 'actuator_gainprm', 'actuator_biasprm',
+            'pair_friction')}
         self.gravity = f32(model.opt.gravity)
         self.reward = cpu.reward_function
         self.braking = cpu.landing_braking
@@ -258,7 +263,8 @@ class LandingMjxEnv:
 
     def nominal_parameters(self, n):
         return dict(dr_mass=jnp.zeros(n), dr_com=jnp.zeros((n, 2)), dr_torque=jnp.full((n, self.actuator_gear.shape[0]), 16.),
-                    dr_kp=jnp.ones((n, self.actuator_gear.shape[0])), dr_kd=jnp.ones((n, self.actuator_gear.shape[0])))
+                    dr_kp=jnp.ones((n, self.actuator_gear.shape[0])), dr_kd=jnp.ones((n, self.actuator_gear.shape[0])),
+                    dr_friction=jnp.ones(n))
 
     def sample_parameters(self, key, n):
         """Per-episode physical parameters (mjx.randomization)."""
@@ -270,7 +276,9 @@ class LandingMjxEnv:
             dr_com=uniform(keys[1], (n, 2), -r['com_shift_m'], r['com_shift_m']),
             dr_torque=uniform(keys[2], (n, joints), r['torque_min_nm'], r['torque_max_nm']),
             dr_kp=uniform(keys[3], (n, joints), 1. - r['pd_gain'], 1. + r['pd_gain']),
-            dr_kd=uniform(keys[4], (n, joints), 1. - r['pd_gain'], 1. + r['pd_gain']))
+            dr_kd=uniform(keys[4], (n, joints), 1. - r['pd_gain'], 1. + r['pd_gain']),
+            # A separate key, so the draws above are the same as before friction was added.
+            dr_friction=uniform(jax.random.fold_in(key, 5), (n,), r['friction_min'], r['friction_max']))
 
     def _models(self, parameters):
         """The MJX model with one value per world of the randomized fields, and the matching vmap axes."""
@@ -289,7 +297,9 @@ class LandingMjxEnv:
             actuator_gainprm=tile(base['actuator_gainprm']).at[:, :, 0].multiply(parameters['dr_kp']),
             actuator_biasprm=tile(base['actuator_biasprm']).at[:, :, 1].multiply(parameters['dr_kp'])
                                                           .at[:, :, 2].multiply(parameters['dr_kd']),
-            actuator_forcerange=jnp.stack([-limit, limit], -1))
+            actuator_forcerange=jnp.stack([-limit, limit], -1),
+            # Contacts are explicit floor-robot pairs: their two tangential coefficients set the friction.
+            pair_friction=tile(base['pair_friction']).at[:, :, :2].set(parameters['dr_friction'][:, None, None]))
         axes = jax.tree_util.tree_map(lambda x: None, self.warp_model).replace(**{k: 0 for k in fields})
         return self.warp_model.replace(**fields), axes
 
@@ -610,7 +620,7 @@ class LandingMjxEnv:
         joints = data.qpos[:, self.qpos_index]
         mismatch = jnp.concatenate([joints[:, 1:4] + joints[:, 4:7], joints[:, 10:13] + joints[:, 7:10]], -1)
         posture = jnp.where(touched & (elapsed_steps * self.dt >= .3), self.posture_reward * .5 * (
-            jnp.exp(-(lean / .2) ** 2) + jnp.exp(-(mismatch ** 2).mean(-1) / .2 ** 2)), 0.)
+            jnp.exp(-(lean / POSTURE_LEAN) ** 2) + jnp.exp(-(mismatch ** 2).mean(-1) / POSTURE_MISMATCH ** 2)), 0.)
 
         terms = dict(alive=jnp.full_like(event, r.alive_coeff), braking_tracking=tracking, loaded_slip=-slip_cost,
                      collision=collision * 1., body_acceleration=totals['body_acceleration'], body_support=support,
@@ -700,7 +710,7 @@ class LandingMjxEnv:
             task, totals = self._substep_task(task, data, contacts, totals)
             return (data, imu, task, totals, overflow | contact_overflow(data), contacts['feet_contact']), None
 
-        parameters = {k: state.task[k] for k in ('dr_mass', 'dr_com', 'dr_torque', 'dr_kp', 'dr_kd')}
+        parameters = {k: state.task[k] for k in ('dr_mass', 'dr_com', 'dr_torque', 'dr_kp', 'dr_kd', 'dr_friction')}
         carry = (data, state.imu, state.task, totals, state.overflow, jnp.zeros((n, self.tables.nr_feet), bool))
         (data, imu, task, totals, overflow, feet_contact), _ = jax.lax.scan(substep, carry, None, self.nr_substeps)
         data = data.replace(qvel=jnp.clip(data.qvel, -self.max_qvel, self.max_qvel))

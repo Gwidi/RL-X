@@ -43,10 +43,12 @@ def get_config(environment_name):
         # Domain randomization, drawn per episode (per released state) and kept until the next release. All zero/16 =
         # the nominal model. trunk_mass_kg: uniform +-, added to the trunk (inertia scaled with it). com_shift_m: shift of
         # the robot's total centre of mass, uniform +- in x and y (moved through the trunk). torque_*_nm: drive limit,
-        # uniform per joint. pd_gain: kp and kd each scaled uniformly in 1 +- pd_gain per joint.
-        randomization=dict(trunk_mass_kg=0., com_shift_m=0., torque_min_nm=16., torque_max_nm=16., pd_gain=0.),
-        # Reward per step from 0.3 s after the first touchdown: coefficient * mean of exp(-(tilt / 0.2 rad)^2) and
-        # exp(-(left-right joint asymmetry / 0.2 rad)^2). 0 disables it.
+        # uniform per joint. pd_gain: kp and kd each scaled uniformly in 1 +- pd_gain per joint. friction_*: sliding
+        # friction between the floor and every robot geom, one value per episode (nominal 1).
+        randomization=dict(trunk_mass_kg=0., com_shift_m=0., torque_min_nm=16., torque_max_nm=16., pd_gain=0.,
+                           friction_min=1., friction_max=1.),
+        # Reward per step from 0.3 s after the first touchdown: coefficient * mean of exp(-(tilt / 0.5 rad)^2) and
+        # exp(-(rms left-right joint mismatch / 0.4 rad)^2). 0 disables it.
         posture_reward=0.,
     )
     return config
